@@ -1,0 +1,2 @@
+# Données du monde (édition enfant) et musique : Git LFS (le monde dépasse les 100 Mo qu'accepte GitHub)
+engine/data/** filter=lfs diff=lfs merge=lfs -text

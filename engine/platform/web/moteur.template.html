@@ -1,0 +1,180 @@
+<!doctype html>
+<html lang="fr"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Moteur Echoes</title>
+<style>
+:root{--bg:#08070d;--fg:#e8f6ff;--dim:#8a93a8;--line:#262236;--c1:#22e4ff;color-scheme:dark}
+html,body{margin:0;background:var(--bg);color:var(--fg);font:14px "Segoe UI",sans-serif}
+body{display:grid;place-items:center;min-height:100vh;padding:16px;box-sizing:border-box;gap:12px;align-content:center}
+.device{padding:22px;border-radius:50%;background:radial-gradient(circle at 30% 25%,#5b5d66,#2a2b31 45%,#151519 75%)}
+canvas{transition:filter .4s;display:block;width:min(466px,calc(100vw - 80px));aspect-ratio:1;border-radius:50%;background:#000;image-rendering:pixelated;touch-action:none}
+p{margin:0;color:var(--dim);font:12px ui-monospace,monospace;text-align:center;max-width:466px}
+.row{display:flex;gap:8px;flex-wrap:wrap;justify-content:center}
+button{font:12px ui-monospace,monospace;letter-spacing:.08em;background:transparent;color:var(--fg);border:1px solid var(--line);border-radius:3px;padding:6px 10px;cursor:pointer}
+button[aria-pressed="true"]{border-color:var(--c1);color:var(--c1)}
+button:focus-visible{outline:2px solid var(--c1);outline-offset:1px}
+</style></head><body>
+<div class="device"><canvas id="screen" width="466" height="466" aria-label="Écran du jeu"></canvas></div>
+<div class="row" role="group" aria-label="Rendu 3D">
+  <button type="button" id="mx2" aria-pressed="true">233 doublé</button>
+  <button type="button" id="mnat" aria-pressed="false">466 natif</button>
+  <button type="button" id="bmenu">Menu (BOOT)</button>
+  <button type="button" id="bcad" aria-pressed="true">Cadence ESP32</button>
+  <button type="button" id="bveille">Veille (V)</button>
+  <button type="button" id="bauto" aria-pressed="true">Veille auto 120 s</button>
+</div>
+<p id="stats">Chargement…</p>
+<p>Moteur C (WebAssembly), même code que sur l'ESP32 · toucher le sol : marcher · glisser sur le bord : caméra · pincer ou molette : zoom · double toucher Sera ou M : menu · Entrée : parler, valider · Échap : retour · ZQSD ou flèches, A/E</p>
+<p>Montre : heure, date et batterie du navigateur (arc du bas, cycle jour / nuit « RÉEL » du menu Système) · Veille ou V : écran éteint ; un clic ou une touche réveille la montre, verrouillée : glisser sur l'écran pour jouer · sans action pendant 120 s, la veille vient seule (l'écran baisse 10 s avant), comme sur la carte</p>
+<script id="wasm_x2" type="application/octet-stream">@@WASM_X2@@</script>
+<script id="wasm_natif" type="application/octet-stream">@@WASM_NATIF@@</script>
+<script id="pak" type="application/octet-stream">@@PAK@@</script>
+<script>
+(async () => {
+  // Base64 décodé par morceaux de 4 Mo dans un tableau de la bonne taille (Uint8Array.from(atob(…)) passait par une
+  // liste de 180 millions de nombres pour le paquet : mémoire épuisée) ; le texte de la balise est rendu ensuite
+  const b64 = id => {
+    const el = document.getElementById(id), t = el.textContent.trim();
+    const n = t.length / 4 * 3 - (t.endsWith('==') ? 2 : t.endsWith('=') ? 1 : 0), o = new Uint8Array(n);
+    for (let i = 0, j = 0; i < t.length; i += 1 << 22) {
+      const s = atob(t.slice(i, i + (1 << 22)));
+      for (let k = 0; k < s.length; k++) o[j++] = s.charCodeAt(k);
+    }
+    if (id === 'pak') el.textContent = '';
+    return o;
+  };
+  const pak = b64('pak');
+  const cv = document.getElementById('screen'), ctx = cv.getContext('2d'), img = ctx.createImageData(466, 466);
+  let X = null;
+  // Sauvegarde : deux emplacements dans le stockage local du navigateur
+  const env = {
+    js_save_write: (slot, ptr, len) => {
+      try { const a = new Uint8Array(X.memory.buffer, ptr, len); localStorage.setItem('echoes-sauve-' + slot, btoa(String.fromCharCode(...a))); return len; } catch (e) { return -1; }
+    },
+    js_save_read: (slot, ptr, cap) => {
+      try { const s = localStorage.getItem('echoes-sauve-' + slot); if (!s) return -1;
+        const a = Uint8Array.from(atob(s), c => c.charCodeAt(0)), n = Math.min(cap, a.length);
+        new Uint8Array(X.memory.buffer, ptr, n).set(a.subarray(0, n)); return n; } catch (e) { return -1; }
+    }
+  };
+  const wasi = new Proxy({}, { get: (_, name) => name === 'proc_exit' ? () => { throw new Error('exit'); } : () => 0 });
+  // Musiques : musique.bin à côté de la page (servie par HTTP ; ouverte en fichier local, le navigateur refuse : pas de
+  // musique), copiée dans chaque module chargé
+  let musique = null;
+  const attach = () => { if (!X || !musique || !X.web_music) return;
+    const p = X.web_alloc(musique.length); if (!p) return;
+    new Uint8Array(X.memory.buffer, p, musique.length).set(musique); X.web_music(p, musique.length); };
+  fetch('musique.bin').then(r => r.ok ? r.arrayBuffer() : null).then(b => { if (b) { musique = new Uint8Array(b); attach(); } }).catch(() => {});
+  async function load(id) {
+    const { instance } = await WebAssembly.instantiate(b64(id), { env, wasi_snapshot_preview1: wasi });
+    X = instance.exports;
+    if (X._initialize) X._initialize();
+    const ptr = X.web_alloc(pak.length);
+    new Uint8Array(X.memory.buffer, ptr, pak.length).set(pak);
+    if (X.web_init(ptr, pak.length) !== 0) document.getElementById('stats').textContent = 'Paquet refusé';
+    attach();
+  }
+  await load('wasm_x2');
+  const pick = (id, mod) => document.getElementById(id).onclick = async () => {
+    for (const b of ['mx2', 'mnat']) document.getElementById(b).setAttribute('aria-pressed', b === id);
+    await load(mod);
+  };
+  pick('mx2', 'wasm_x2'); pick('mnat', 'wasm_natif');
+
+  // Son : démarré au premier geste (les navigateurs l'exigent) ; la page tire les échantillons du moteur par blocs
+  let audio = null;
+  const startAudio = () => {
+    if (audio) { if (audio.state === 'suspended') audio.resume(); return; }
+    audio = new (window.AudioContext || window.webkitAudioContext)();
+    const node = audio.createScriptProcessor(2048, 0, 1);
+    node.onaudioprocess = e => {
+      const out = e.outputBuffer.getChannelData(0);
+      if (!X || !X.web_audio) { out.fill(0); return; }
+      const ptr = X.web_audio(out.length, audio.sampleRate), pcm = new Int16Array(X.memory.buffer, ptr, out.length);
+      for (let i = 0; i < out.length; i++) out[i] = pcm[i] / 32768;
+    };
+    node.connect(audio.destination);
+  };
+  addEventListener('pointerdown', startAudio); addEventListener('keydown', startAudio);
+  const keys = new Set();
+  const KB = { KeyW: 1, ArrowUp: 1, KeyS: 2, ArrowDown: 2, KeyA: 4, ArrowLeft: 4, KeyD: 8, ArrowRight: 8, KeyQ: 16, KeyE: 32, Enter: 64, Space: 64, Escape: 128, KeyM: 256, KeyR: 512, KeyF: 1024 };
+  addEventListener('keydown', e => { if (KB[e.code]) { keys.add(e.code); e.preventDefault(); } });
+  addEventListener('keyup', e => keys.delete(e.code));
+  // Montre simulée (firmware : veille.c, rtc.c) : veille (écran noir, jeu arrêté), réveil verrouillé
+  const VEILLE_S = 120, ATTENUER_S = 10, VERROU_S = 15;
+  let dort = false, ignore = new Set(), actif = performance.now(), auto = true, batt = -1, charge = 0;
+  if (navigator.getBattery) navigator.getBattery().then(b => { const m = () => { batt = Math.round(b.level * 100); charge = b.charging ? 1 : 0; };
+    m(); b.addEventListener('levelchange', m); b.addEventListener('chargingchange', m); }).catch(() => {});
+  const montre = () => { if (!X || !X.web_montre) return;
+    const d = new Date();
+    X.web_montre(d.getHours() * 3600 + d.getMinutes() * 60 + d.getSeconds(), d.getDate(), d.getMonth() + 1, d.getDay(), batt, charge); };
+  const endormir = () => { dort = true; ctx.fillStyle = '#000'; ctx.fillRect(0, 0, 466, 466); cv.style.filter = ''; };
+  const reveiller = id => { dort = false; actif = performance.now(); if (id !== undefined) ignore.add(id); if (X && X.web_verrouiller) X.web_verrouiller(); };
+  document.getElementById('bveille').onclick = endormir;
+  const bauto = document.getElementById('bauto');
+  bauto.onclick = () => { auto = !auto; bauto.setAttribute('aria-pressed', auto); actif = performance.now(); };
+  addEventListener('keydown', e => { actif = performance.now();
+    if (dort) { reveiller(); e.preventDefault(); return; }
+    if (e.code === 'KeyV') endormir(); });
+  let menuPulse = 0;
+  document.getElementById('bmenu').onclick = () => menuPulse = 2;
+  // Doigts posés (deux au plus : pinch pour zoomer), en pixels de l'écran natif
+  const fingers = new Map();
+  const pos = e => { const r = cv.getBoundingClientRect(); return [(e.clientX - r.left) / r.width * 466, (e.clientY - r.top) / r.height * 466]; };
+  cv.addEventListener('pointerdown', e => { actif = performance.now(); cv.setPointerCapture(e.pointerId); e.preventDefault();
+    if (dort) { reveiller(e.pointerId); return; }   /* le doigt du réveil n'est pas une entrée (veille.c) */
+    if (fingers.size < 2 && !ignore.has(e.pointerId)) fingers.set(e.pointerId, pos(e)); });
+  cv.addEventListener('pointermove', e => { if (fingers.has(e.pointerId)) { fingers.set(e.pointerId, pos(e)); actif = performance.now(); } });
+  const lift = e => { fingers.delete(e.pointerId); ignore.delete(e.pointerId); };
+  cv.addEventListener('pointerup', lift); cv.addEventListener('pointercancel', lift);
+  // Molette : zoom (comme le pinch)
+  cv.addEventListener('wheel', e => { e.preventDefault(); X.web_set_zoom(X.web_zoom() * (e.deltaY < 0 ? 1.08 : 1 / 1.08)); }, { passive: false });
+  cv.addEventListener('contextmenu', e => e.preventDefault());
+
+  let last = performance.now(), acc = 0, n = 0, ms = 0;
+  // Durée d'une image sur l'ESP32-S3, calée sur le banc de la carte (25/10) : 3D ≈ 100 cycles par pixel et 3 200 par
+  // triangle, préparation ≈ 2 500 cycles par triangle + 12,5 ms, interface ≈ 7 000 cycles par opération, deux cœurs (+ 5 %)
+  const espMs = () => {
+    const MHZ = 240e3, tris = X.web_stat(0), px = X.web_stat(1), ops = X.web_stat(5);
+    const t3d = (px * 100 + tris * 3200) / MHZ, tPrep = tris * 2500 / MHZ + 12.5, tUi = ops * 7000 / MHZ;
+    return 1.05 * Math.max(tPrep, (tPrep + t3d + tUi) / 2);
+  };
+  // Cadence ESP32 : le jeu n'avance et l'écran ne se redessine qu'au rythme estimé de la carte (saccades comprises).
+  // L'échéance avance d'une durée d'image à la fois : en moyenne, la cadence affichée est celle de la carte, plafonnée
+  // à FPS_MAX comme le firmware (menuconfig > Echoes of Ashes > Cadence maximale).
+  const FPS_MAX = 30;
+  let espOn = true, espNext = 0;
+  const bcad = document.getElementById('bcad');
+  bcad.onclick = () => { espOn = !espOn; bcad.setAttribute('aria-pressed', espOn); };
+  const loop = now => {
+    requestAnimationFrame(loop);
+    if (dort) { last = now; return; }
+    if (keys.size || fingers.size) actif = now;
+    const lim = X.web_verrouille() ? VERROU_S : VEILLE_S;   /* verrouillée, elle se rendort vite */
+    if (auto && now - actif > lim * 1000) { endormir(); return; }
+    cv.style.filter = auto && now - actif > (lim - ATTENUER_S) * 1000 ? 'brightness(.3)' : '';
+    montre();
+    if (espOn) {
+      if (now < espNext) return;
+      const f = Math.max(espMs(), 1000 / FPS_MAX);
+      espNext = Math.max(espNext + f, now - f);
+    }
+    const dt = Math.min(0.1, (now - last) / 1000); last = now;
+    let k = 0; keys.forEach(c => k |= KB[c]);
+    if (menuPulse > 0) { if (menuPulse === 2) k |= 256; menuPulse--; }
+    const t0 = performance.now();
+    const f = [...fingers.values()];
+    X.web_frame(dt, now / 1000, k, f.length > 0, f[0] ? f[0][0] : 0, f[0] ? f[0][1] : 0, f.length > 1, f[1] ? f[1][0] : 0, f[1] ? f[1][1] : 0);
+    ms += performance.now() - t0;
+    img.data.set(new Uint8Array(X.memory.buffer, X.web_fb(), 466 * 466 * 4));
+    ctx.putImageData(img, 0, 0);
+    n++;
+    if ((acc += dt) > 0.5) {
+      const tris = X.web_stat(0), px = X.web_stat(1), ops = X.web_stat(5);
+      document.getElementById('stats').textContent = `ESP32 estimé ≈ ${(1000 / espMs()).toFixed(1)} i/s${1000 / espMs() > FPS_MAX ? ` (plafonnée à ${FPS_MAX})` : ''} · affichées ${Math.round(n / acc)} i/s (calcul navigateur ${(ms / n).toFixed(1)} ms) · 3D ${X.web_internal()} px · ${tris} triangles · ${px.toLocaleString('fr-FR')} pixels 3D · ${ops} op. d'interface`;
+      acc = 0; n = 0; ms = 0;
+    }
+  };
+  requestAnimationFrame(loop);
+})();
+</script>
+</body></html>

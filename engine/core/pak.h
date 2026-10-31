@@ -1,0 +1,361 @@
+/*
+ * Format du paquet monde (monde.pak), exporté par l'émulateur (window.echoesExportPak)
+ *
+ * Petit-boutiste. En-tête : 'ECHO' (u32 0x4F484345), version u32 = 4. Puis des sections alignées sur
+ * 4 octets : étiquette de 4 caractères, longueur u32, contenu (complété à un multiple de 4). Tout ce qui précède CDAT
+ * reste en mémoire ; les chunks sont lus à la demande (eng_config_t.pak_read, sinon dans le paquet en mémoire).
+ *
+ *  HEAD  N u32 (côté de la grille), niveau de l'eau f32, GROUND_OFF u32, G0 u32, DECOR_SLOTS u32,
+ *        taille des textures u32, positions (x, z) f32 : départ, marchand, arène (équipe en combat), ennemi en
+ *        combat, épave (la Sentinelle attaque à moins de 3,1 cases de (x - 0,8 ; z + 0,1)),
+ *        couleur du brouillard u8×3 + 1, direction du soleil f32×3, échelle du monde par rapport aux personnages
+ *        f32 (facultative, 1 si absente), BIG_OFF u32 (textures des grands décors dans TEX, facultatif),
+ *        zoom de départ de la caméra f32 (facultatif, 1,5 si absent ; 1 : distance d'origine, 5 au plus),
+ *        zoom mini f32 (facultatif, 0,8 si absent), échelle globale des sprites f32 (facultative, 1 : personnages,
+ *        véhicules et décors à leur taille ; ne change ni le sol, ni les bâtiments, ni la caméra)
+ *  PAL   nombre de couleurs u32, 256 × (r, g, b, pleine lumière) u8, 8 index de l'eau u8
+ *  EAUC  sortes d'eau (facultative ; sans elle, l'eau est opaque) : nombre u32 (64 au plus), puis 8 octets chacune :
+ *        couleur du corps de l'eau u8, 0 u8 × 3, profondeur où il devient opaque f32. Sorte 0 : les rivières (leur
+ *        opacité, fixe), puis une par terrain d'eau. Octet « eau » des cases (CDAT) : 1 + la sorte. Toute eau est
+ *        transparente : le fond à son relief (texture de la case ; tuile 17 sans texture et lit des rivières), puis la
+ *        surface (tuile 18 : reflets ; texel 0, le corps de l'eau tramé selon la profondeur, comme le brouillard)
+ *  TEX   mémoire de textures 8 bits : tuile de décor n (16×16) à n × 256, texture 32×32 k à
+ *        GROUND_OFF + k × 1024 (sol, routes, bâtiments, sol réduit). Numéro de tuile ≥ G0 : texture 32×32 G0 + k
+ *  SPRT  largeur, hauteur de cellule u16, largeur de planche u16, lignes u16, planche 8 bits,
+ *        nombre de tables de couleurs u32, tables de 256 octets (Sera, marchand, Varn, Bors, Lyse, KO)
+ *  DECO  nombre u32, puis pour chaque grand décor, stocké à sa taille rognée (sprite à gauche, pied en bas) : décalage
+ *        depuis BIG_OFF u32, largeur, hauteur du sprite u16, largeur stockée 2^sh u8, hauteur arrondie 2^shv u8 (masque
+ *        des coordonnées), 0 u16. Lignes de 2^sh octets, hauteur lignes. Le quadrilatère suit le sprite.
+ *  SPRS  planches propres à un personnage (facultative) : nombre u32, puis pour chacune : personnage u8 (0 = joueur,
+ *        1 = personnage de PERS, 2 = autre animation de la dernière planche 0, 1 ou 3, 3 = tenue, voir TENU), directions u8 (8 : S, SE, E, NE,
+ *        N, NW, W, SW), images u8, animation u8 (ANIM_* : 0 marche, 1 attente, 2 course, 3 attaque, 4 touché, 5 KO,
+ *        6 technique, 7 défense, 8 victoire, 9 danse : métier danseuse dans les intérieurs, 10 départ : starter des circuits), cellule fw, fh u16 (la même pour toutes les animations d'un personnage),
+ *        portrait x, y, côté u16, taille à l'écran en % u16 (0 : 100), puis la planche : directions × fh lignes de
+ *        images × fw index de palette (0 transparent)
+ *  Paquet léger (ESP32 : la flash ; tools/paquet_sd.js, écrit par maj_monde.js) : les sections ci-dessous, sauf CDAT,
+ *  INTR, CRTD et les pixels lourds ; monde.pak entier va sur la carte SD (/sd/echoes/monde.pak), lu par pak_read :
+ *  SPRX  à la place de SPRS : les mêmes entrées de 16 octets, chacune suivie du décalage u32 de ses pixels dans monde.pak
+ *        (lus par direction, à la demande : sheet_block de world.c)
+ *  TEXS  textures du sol dans monde.pak : décalage u32, nombre u32 (1 Ko chacune, lues à la demande : ground_need) ; TEX
+ *        ne garde alors que les tuiles du décor et les grands décors (HEAD : BIG_OFF = GROUND_OFF, taille de TEX)
+ *  SDPK  taille u32 de monde.pak dont le paquet léger est tiré (le moteur la compare à eng_config_t.pak_size)
+ *  Cartes (facultatives ; la carte 0 est celle de HEAD, CHNK, ZONE et MAP) : elles partagent palette, textures,
+ *  personnages et scénario ; exemplaires, trafic, portes, guidage et événements de zone ne sont que sur la carte 0.
+ *  CART  cartes secondaires : nombre u32, puis 80 octets chacune : nom (UTF-8, 24 octets, fini par 0), côté N u32, ciel
+ *        u8 (0 celui du monde, 1 souterrain : fond et brouillard de la carte, ni pluie ni heure, 2 espace : étoiles, 3 autre planète : ciel et brouillard de sa couleur, lumière de l'heure),
+ *        drapeaux u8 (1 : vol permanent, la carte du système solaire : Sera toujours à bord du vaisseau de l'équipe, le
+ *        premier exemplaire vaisseau de son bloc de PNJS), drapeau de visite + 1 u16 (0 : aucun ; levé à l'arrivée, le
+ *        saut y mène ensuite), niveau de l'eau f32, brouillard (r, g, b) u8, altitude du vol permanent u8 (1/10 de case ;
+ *        0 : celle du vaisseau), départ x, z f32, arène des combats x, z f32, puis dans
+ *        monde.pak (section CRTD) : index des chunks (format de CHNK, décalage des données absolu) décalage u32 et taille
+ *        u32, zone des rencontres (format de ZONE) décalage u32 et taille u32, carte du menu (format de MAP) décalage u32
+ *        et taille u32
+ *  PASS  passages : nombre u32, puis 28 octets chacun : carte u8, carte d'arrivée u8, sorte u8 (0 passage, 1 puits,
+ *        2 égout, 3 ascenseur, 4 faille, 5 astroport), 0 u8, zone x, z, rayon f32, arrivée x, z f32, condition u16
+ *        (drapeau du scénario, 65535 aucune), 0 u16 ; Sera qui y entre à pied passe sur l'autre carte, rien ne repart
+ *        avant qu'elle soit sortie de toute zone de passage
+ *  CRTD  (après CDAT) données des cartes secondaires, lues au changement de carte (world_carte de world.c)
+ *  ASTR  astres de la carte du système solaire (facultative ; vol permanent) : nombre u32, puis 48 octets chacun : nom
+ *        UTF-8 sur 24 octets complétés de 0, carte u8 (la sienne), carte où l'on se pose u8 (255 : aucune), drapeau de
+ *        visite u16 (65535 : toujours ; le saut du menu SYSTÈME › SAUT n'y mène qu'une fois levé), centre x, z et rayon de
+ *        la sphère f32 (0 : repère seul ; le vaisseau n'entre pas à moins de VOL_MARGE de sa surface), point d'orbite x, z
+ *        f32 (arrivée depuis ce monde, saut) ; flèches et noms sur le bord de l'écran (draw_astres de hud.c)
+ *  PERS  personnages de la bibliothèque de l'atelier (facultative) : nombre u32, puis pour chacun : planche (index
+ *        dans SPRS, 255 : aucune) u8, drapeaux u8 (PERS_FLANE, PERS_CONV, PERS_REMAP, PERS_VEHICULE ; bits 4 à 6 : type
+ *        de véhicule VEH_* ; hors véhicule, bits 4 et 5 : genre du nom tiré par exemplaire, PERS_GENRE : 0 le nom du
+ *        personnage, 1 féminin, 2 masculin, 3 neutre ; bit 6, PERS_ADULTE : planche de base 18+, voir EDIT),
+ *        nombre de répliques u8, taille
+ *        à l'écran en % u8 (0 : celle de la planche), table de couleurs 256 octets (si PERS_REMAP : variante de
+ *        couleur, qui partage la planche de son modèle), nom puis répliques en UTF-8 terminées par 0 ; « NOM\tTEXTE » : réplique d'un autre interlocuteur (le joueur) ;
+ *        premier octet 1 : réplique 18+ (voir EDIT ; aussi dans REPL)
+ *  TENU  tenues (facultative) : nombre u32, puis 28 octets chacune : porteur u8 (255 : le joueur, sinon index dans PERS),
+ *        planche (entrée de SPRS) u8, mise d'office u8 (0 portée, 1 nage, 2 course, 3 tant que le drapeau est levé ;
+ *        4 TENUE_SAGE : planche de remplacement de son porteur 18+, jamais portée, voir EDIT),
+ *        drapeaux u8 (1 étanche : portée, on nage dans les eaux noires ; 2 tenue 18+), drapeau du scénario u16 (65535 aucun), 0 u16, nom
+ *        UTF-8 sur 20 octets complétés de 0 (celui des objets de type tenue et de l'instruction « tenue »)
+ *  PNJS  exemplaires (facultative) : nombre u32, puis place x, z f32, personnage u8 (index dans PERS), direction u8
+ *        (huitièmes de tour), drapeaux u8 (1 : starter des circuits, son animation de départ pendant le compte à rebours
+ *        et l'arrivée ; 2 : meneur d'une patrouille, il se promène ; 4 : suiveur), écart de rang u8 jusqu'à son meneur
+ *        (suiveur : placé avant lui ; 0 sinon) ; bits 4 à 7 des drapeaux : la carte de l'exemplaire (0 la planète), les
+ *        exemplaires rangés par carte, la planète d'abord ; la graine (rang dans PNJS) continue d'une carte à l'autre
+ *  PVAR  palettes des personnages (facultative ; atelier : variantes « palette », Personnages.variantesAuto) : nombre u32,
+ *        puis personnage (index de PERS) u16, rang u16 (1, 2… à la suite pour un même personnage), table de 256 couleurs ;
+ *        chaque exemplaire en prend une ou ses couleurs : rue et intérieurs d'après sa graine (pvar_choix : (g ×
+ *        0x9E3779B1) >> 16 mod (n + 1)), trafic et ennemi d'un combat au hasard, véhicule volé : celle du trafic
+ *  NOMT  noms des PNJ (facultative ; atelier : js/noms.js) : nombres u16 ×4 (prénoms féminins, masculins, neutres, noms
+ *        de famille), décalage u16 de chaque chaîne depuis le début des chaînes, puis les chaînes UTF-8 terminées par 0.
+ *        Exemplaire d'un personnage à genre, graine g (rang dans PNJS ; intérieur : 2048 + (bâtiment visité × 4 +
+ *        étage) × 8 + place) : r = g mod nP, q = g div nP, prénom (r × 1009 + 7) mod nP, nom (q × 613 + r × 211 + 3)
+ *        mod nS (pnj_nom de hud.c, nomPnj de l'émulateur)
+ *  TRAF  trafic (facultative) : véhicules autour de Sera u8 (0 : aucun), 0 u8, 0 u16 ; véhicules : PERS_TRAFIC
+ *  ROUT  axes des routes (facultative) : nombre u32, puis pour chacun : points u16, largeur en dixièmes de case u8,
+ *        0 u8, points (x, z) f32. Le trafic roule dessus, sur la voie de droite ; sans ROUT, de case de route en case
+ *  AUDI  sons (facultative) : nombre u32, volume général en % u8, 0 u8 ×3, puis pour chaque son (ordre SON_* de
+ *        audio.h) : échantillons u32, fréquence u16, boucle u8, 0 u8, échantillons mono i16 complétés à 4 octets
+ *  VALT  altitude maxi des vaisseaux (facultative) : nombre u32, puis une f32 par personnage (cases ; 0 : 4 cases)
+ *  PIST  piste de course (facultative, course.c) : points u32, demi-largeur f32 (cases), tours u8, 0 u8 ×3, point de la
+ *        ligne de départ u32, puis les points de l'axe (x, z) f32, boucle fermée sans répéter le premier ; on la
+ *        parcourt dans le sens des points. Glissières, damier et portique du départ sont dans la géométrie des chunks
+ *  SONM  son du moteur de chaque personnage (facultative) : nombre u32, puis un u8 par personnage (SON_*, 255 : celui
+ *        de son type de véhicule)
+ *  PIVO  ancrage des planches (facultative) : nombre u32 (celui des entrées de SPRS), puis pour chacune 8 × (x, y) i16
+ *        en demi-pixels de cellule, une paire par direction (S, SE, E, NE, N, NO, O, SO) : le point de l'image posé sur la
+ *        position au sol (centre d'un véhicule vu sous cet angle). x = -32768 : pas d'ancrage (bas de la cellule)
+ *  OMBR  ombre de chaque personnage (facultative) : nombre u32 (celui de PERS), puis pour chacun et enfin pour le joueur
+ *        8 octets : décalage horizontal i8 (% de la largeur de cellule, vers la droite), vertical i8 (% de la hauteur,
+ *        vers le haut), largeur u8 et hauteur u8 (% de l'ombre d'origine), aucune ombre u8, 0 u8 ×3
+ *  ROUL  véhicules qui roulent (facultative) : nombre u32 (celui de PERS), puis un u8 par personnage : 1 roule (image
+ *        posée sur le sol, son bas sur la chaussée), 0 plane (un peu au-dessus du sol, en ondulant). Sans ROUL : tous les
+ *        véhicules roulent, sauf le vaisseau
+ *  VEHI  conduite des véhicules (facultative) : nombre u32 (celui de PERS), puis pour chaque personnage : vitesse maxi
+ *        f32 (cases par seconde, sur route pour la voiture et le camion : 55 % hors route ; 45 % dans le trafic),
+ *        accélération f32 (cases/s² ; le frein vaut le double). 0 : valeurs du type de véhicule
+ *  VEH2  conduite et course (facultative, remplace VEHI) : nombre u32, puis 16 octets par personnage : vitesse maxi f32,
+ *        accélération f32 (comme VEHI), adhérence f32 (en course : part de l'adhérence de la piste, 1 normale ; elle
+ *        règle aussi le dérapage qui fait partir en tête-à-queue), drapeaux u8 (1 : utilisable en course, au menu de
+ *        course comme véhicule du joueur ou adversaire), service u8 (trafic : 0 civil, 1 police, 2 secours, 3 pompiers, 4 armée,
+ *        5 voirie, 6 transport), 0 u8 ×2. Sans VEH2 : adhérence 1, tous en course
+ *  PNOM  noms des pistes (facultative) : nombre u32 (celui de PIS2), puis 24 octets par piste, nom du tracé en UTF-8
+ *        complété de 0 (menu de course : les pistes dont la ligne de départ est à moins de 8 cases sont les tracés d'un
+ *        même circuit)
+ *  METE  météo (facultative) : pluie, part du temps en % u8 (0 : jamais d'elle-même), intensité en % u8, 0 u16
+ *  RENC  rencontres (facultative) : distance moyenne entre deux rencontres u16 (unités du monde × échelle, comme la
+ *        marche de l'émulateur ; 0 : aucune), 0 u16. Distance tirée selon une loi exponentielle de cette moyenne.
+ *  ENNE  ennemis de la bibliothèque (facultative) : nombre u32, puis pour chacun : personnage (index dans PERS, avec
+ *        une planche) u8, niveau u8, poids du tirage u8, drapeaux u8 (1 : vaincu, il laisse un CŒUR DE MACHINE), PV u32,
+ *        ATQ u16, VIT u16, terrains u32 (bit k : terrain k de ZONE). Sprite de face (ligne S de sa planche), deux fois sa
+ *        taille en combat ; PV et ATQ réduits pour une équipe de moins de 4 (× (membres + 1) / 5).
+ *  ENSO  sorts des ennemis (facultative) : nombre u32 (celui de ENNE), puis pour chaque ennemi de ENNE, dans son ordre
+ *        (12 octets) : ses sorts d'attaque (masque de 64 bits sur le catalogue de JOBS, u32 bas, u32 haut), part de ses
+ *        tours où il en lance (%) u8, 0 u8 ×3 ; dégâts ATQ × puissance, un sort de niveau III frappe toute l'équipe (× 0,6)
+ *  SCEN  scénario (facultative ; le même contenu peut être sur la carte SD, echoes/histoire.scn, qui l'emporte), fait pour
+ *        être lu par morceaux (script.c ne garde que la table des événements, les noms des quêtes et les objets) :
+ *        'SCN5', nombres de drapeaux, de chaînes, d'événements u32, décalage de l'index des chaînes u32, de la table
+ *        des événements u32, longueur du plus long code u32, nombre de quêtes u32, décalage de leur table u32, nombre
+ *        d'objets u32, décalage de leur table u32, décalage du plan de musique u32, sa taille u32 (0 : aucun), décalage de
+ *        la table des sujets u32 (depuis le 31/10/2026 : en-tête de 56 octets ; un scénario plus ancien a un en-tête de 52
+ *        octets, reconnu à la première chaîne qui commence avant 56, et pas de table) ; chaînes UTF-8
+ *        terminées par 0 (la première : le nom du joueur) ; index : décalage u32 de chaque chaîne ; événements (28
+ *        octets) : déclencheur u8 (0 lancement, 1 zone, 2 parler, 3 entrée dans un bâtiment de la carte dont le centre est à moins
+ *        de r de x, z), personnage u8 (index PERS, 255 aucun), drapeaux u8
+ *        (1 une seule fois, 2 condition inversée, 4 événement 18+), étape u8, condition u16 (drapeau, 65535 aucune), longueur du code
+ *        u16, centre x, z f32, rayon f32, décalage du code u32, quête u16 (65535 aucune), carte u8 (d'une zone : 0 la planète), 0 u8 ; sujets
+ *        (2 octets par événement, juste après leur table) : intitulé u16 (chaîne, 65535 aucun) d'un « parler » dans le choix
+ *        des sujets (script_talk de script.c) ; quêtes (8 octets) :
+ *        nom u16 (chaîne), type u8 (0 principale, 1 secondaire), nombre d'étapes u8, décalage des étapes u32 ; étapes
+ *        (8 octets) : objectif u16 (chaîne), cible x, z u16 (1/8 de case, 65535 aucune), niveau u16 (niveau des combats
+ *        de l'étape et plafond des rencontres, 0 aucun : script_niveau de script.c ; bits 12 à 15 : carte de la cible) ; objets du sac (16
+ *        octets, js/objets.js) : nom u16, description u16 (chaînes), type u8 (0 soin, 1 quête, 2 à revendre, 3
+ *        divers, 4 tenue : PV = chaîne du nom de la tenue, 5 équipement : bonus dans JOBS), drapeaux u8 (1 butin des machines, 2 soin de toute l'équipe, 4 objet 18+ : tenue 18+), nombre au départ u8, icône u8 (k : icône
+ *        k de OBJI, 0 aucune), PV u16, PM u16 (65535 : tout), prix u32 ; plan de musique (music.c ; pistes : chaînes,
+ *        noms de musique.bin, 65535 aucune) : par défaut, combats, victoire, défaite, courses u16, nombre de zones u16,
+ *        d'ennemis u16, de pistes de cartes u16, zones (8 octets : x, z, rayon u16 en 1/8 de case, piste u16 ; sur la
+ *        planète seulement), ennemis (4 octets : personnage u8, 0 u8, piste u16), pistes de cartes (4 octets : carte u8
+ *        de CART, 0 u8, piste u16 : partout sur cette carte) ; puis les codes
+ *        (bytecode de js/scenario.js de l'Atelier). Décalages depuis le début de la section.
+ *  PVIS  présence des personnages (facultative) : nombre u32, puis pour chacun (ordre de PERS) drapeau du scénario u16
+ *        (65535 : toujours là), inversé u8 (1 : présent tant que le drapeau est baissé), 0 u8
+ *  CIBL  cibles de chasse (facultative ; js/scenario.js : l'ennemi d'un événement de zone d'une quête, « combat NOM » hors
+ *        des blocs si et pas acteur du script) : nombre u32 (64 lus au plus), puis pour chacune personnage u8 (index
+ *        PERS), carte u8, quête u16, étape u8, 0 u8, x u16, z u16 (1/8 de case : centre de la zone) ; dessinée tant que
+ *        la quête est à cette étape (aussi dans le paquet léger de l'ESP32)
+ *  LUMI  lueur des feux (facultative ; décors sources de feu, tirés par l'émulateur de la table LUMIERES de js/decor.js,
+ *        toutes cartes) : nombre u32, puis 12 octets chacune : x u16, z u16 (1/8 de case), y i16 (1/64 : la flamme),
+ *        carte u8, rayon u8 (1/16 de case), couleur r, g, b u8, intensité u8 (1/255) ; la nuit, les 4 plus proches de
+ *        Sera éclaircissent l'image (render.c : lum_band ; aussi dans le paquet léger de l'ESP32)
+ *  ZONE  terrain des rencontres (facultative) : côté M u32 (0 : aucun), puis M × M index de terrain u8, un par bloc de
+ *        2 × 2 cases (celui de la case du coin), ligne par ligne (255 : inconnu, aucune rencontre) ; lue à l'échelle du
+ *        côté N de la carte (bloc de N / M cases : 64 × 64 sur le système solaire, une seule zone, « espace »)
+ *  MAP   côté M u32, M × M couleurs (r, g, b) u8 : carte du menu (une case, ou la moyenne de plusieurs)
+ *  FONT, ICON : voir ui.c
+ *  OBJI  icônes des objets du sac (facultative) : nombre u32, couleurs n u32, palette (r, g, b) u8 × n (index 1 à n ;
+ *        0 transparent) complétée à 4 octets, puis 16 × 16 index u8 par icône, ligne par ligne
+ *  JOBS  jobs et équipement (facultative ; js/equipement.js de l'Atelier) : nombre de types d'équipement nt u8 (32 au
+ *        plus), de jobs nj u8 (16 au plus), de membres u8 (4), version u8 ; types (version 0 : 20 octets, 1 : 24) :
+ *        emplacement u8 (0 arme, 1 armure, 2 accessoire), effet en combat d'une arme u8 (FX_* de internal.h ; 0 en
+ *        version 0), 0 u8 ×2, nom (UTF-8, 16 octets, fini par 0), puis en version 1 sa couleur (r, g, b) u8, 0 u8 ; jobs (52 octets) : nom (16 octets), PV,
+ *        PM, ATQ en % i8, VIT i8 (points), affinité u8 × 32 (une par type : 0 ne peut pas le porter, 1 à 4 C, B, A, S :
+ *        bonus de l'objet × 0,7, 0,85, 1, 1,2) ; membres (8 octets, ordre de PARTY) : job u8 (255 aucun), 0 u8, jobs
+ *        connus u16 (bit j), objets portés au départ u8 ×3 (arme, armure, accessoire : index des objets du sac, 255
+ *        aucun ; hors du sac), 0 u8 ; puis nombre d'objets d'équipement u32 et pour chacun (12 octets) : objet u8
+ *        (index), type u8, image u8 (k : image k de OBJG, 0 aucune), VIT i8, ATQ, DÉF, PV, PM i16. Statistiques d'un
+ *        membre : celles du niveau × (100 + % du job) / 100 (VIT + points), plus les bonus × affinité ; dégâts reçus
+ *        × 200 / (200 + DÉF). Version 2 : puis nombre de sorts ns u8 (64 au plus), 0 u8 ×3, et pour chacun (24 octets) :
+ *        nom (16 octets), effet u8 (FX_SORT : 10 + élément × 3 + niveau - 1), soin u8 (0 attaque, 1 un allié, 2 toute
+ *        l'équipe), PM u16, puissance × 100 u16 (MAG × puissance : dégâts ou PV rendus), 0 u16 ; puis pour chaque job,
+ *        puis chaque objet d'équipement (dans l'ordre des objets ci-dessus : donnés à qui le porte), 12 octets : ses
+ *        sorts (masque de 64 bits, bit k : sort k ; u32 bas, u32 haut) et son MAG (job : % i8, 0 u8 ×3 ; objet : i16,
+ *        0 u16). MAG d'un membre : l'ATQ du niveau × (100 + MAG % du job) / 100, plus le MAG des objets × affinité
+ *  OBJG  images 32 × 32 des équipements (facultative) : nombre u32, puis pour chacune (1 124 octets) : couleurs n u8
+ *        (32 au plus), 0 u8 ×3, palette (r, g, b) u8 × 32 (index 1 à n ; 0 transparent), 32 × 32 index u8
+ *  CMEM  tailles des chunks développés (facultative, avant CHNK) : nombre de cartes u32 (la carte 0, puis les cartes
+ *        secondaires dans l'ordre de CART), puis pour chacune NC u32 et NC × NC u16 (ligne par ligne, unités de 16
+ *        octets) ; la fenêtre de chunks fait alors la pire somme de CWIN × CWIN chunks voisins (world.c : fen_pire,
+ *        fen_alloc), au lieu de CWIN × CWIN fois le plus gros
+ *  CHNK  CS u32 (16), chunks par côté NC u32, plus grandes tailles d'un chunk : brute, compressée, en mémoire u32,
+ *        début des données de CDAT dans le fichier u32, puis pour chaque chunk (ligne par ligne) : décalage dans
+ *        CDAT u32, taille compressée u32, taille brute u32
+ *  CDAT  chunks compressés en LZ4 (format bloc). Coordonnées relatives au coin du chunk (CS × cx, CS × cz) :
+ *        en-tête : morceaux de route, garde-corps, faces de blocs, faces de bâtiments, bâtiments, rectangles de
+ *        collision, plantes u16×7, 0 u16 ; hauteurs aux sommets i16 (1/512) (CS+1)², lumière u8 (1/16) (CS+1)² ;
+ *        tuile u16 CS² ; drapeaux (1 eau, 2 rivière, 4 route, 8 eau libre, 16 rue, 32 eau claire), eau (1 + sorte d'EAUC), case cachée sous un bâtiment u8 CS² ;
+ *        morceaux de route par case u8 CS² ; hauteur de chaussée des cases de route i16 (1/512, -32768 : aucune) ;
+ *        niveau de l'eau par case i16 (1/512, -32768 : sans plan d'eau ; lac ou mer, berge : eau voisine) ;
+ *        texture réduite des blocs de 2 × 2 cases u16 (CS/2)² (0xFFFF : case par case) ;
+ *        polygones (routes case par case, garde-corps, blocs, bâtiments) : tuile u16, drapeaux u8 (1 transparent,
+ *        2 face arrière éliminée), n u8, normale f32×3 si drapeau 2, sommets x, y, z i16 (1/256), u, v i16
+ *        (1/4 de texel), lumière u8 (1/16), 0 u8 (premier sommet d'une face de bâtiment accessoire : rang de son volume + 1, 61 au plus ; 62 : affiche collée au
+ *        polygone précédent, son mur, dessinée dans le même seau ; 255 : objet posé sans plan,
+ *        conteneur, citerne, avancé lui aussi ; morceau de route : 1, tablier de verre d'un circuit, tramé (ROUTE_VERRE) ; 0 : aucun ; render.c
+        avance ce qui s'accroche au volume principal, plaques, auvents, toits, dans l'ordre de construction) ; bâtiments : centre x, z i16 (1/256), rayon u16 (1/256),
+ *        premier polygone u16 (parmi ceux des bâtiments), nombre u16 ; collisions : x0, z0, x1, z1 i16 (1/256) ;
+ *        décors (herbes, arbres, rochers) triés par case : case u8, x, z dans la case u8 (1/256), drapeaux u8
+ *        (1 retourné, 2 se balance), taille u16 (1/256), tuile u16 (≥ TILE_BIG : grand décor), phase u8 (1/256 de tour),
+ *        lumière u8 (1/16), y i16 (1/512)
+ *  MIPS  textures réduites des bâtiments (facultative) : première tuile qui en a u32, nombre n u32, puis pour chacune ses
+ *        tuiles de niveau 1 (16 × 16, couleur majoritaire de chaque bloc de 2 × 2) et 2 (8 × 8), répétées en 32 × 32 dans
+ *        TEX, u16 ×2 ; render.c les prend pour une face vue de loin ou de biais (u, v divisés par 2 ou 4)
+ *  GUID  lieux du menu GUIDAGE (facultative) : nombre u32, puis 40 octets chacun : point visé x, z f32 (bâtiment : devant
+ *        sa porte principale), rayon d'arrivée f32 (le guidage s'arrête en deçà), sorte u8 (0 ville, 1 bâtiment spécial),
+ *        0 u8 ×3, nom UTF-8 sur 24 octets complétés de 0 (bâtiment : celui de son type, qui fait sa catégorie)
+ *  SPIX  planches des personnages et des tenues sur deux octets (facultative ; PERS et TENU n'ont qu'un octet, faux
+ *        au-delà de 254 entrées de SPRS) : nombres de personnages et de tenues u32 ×2, puis entrée de SPRS u16 de chacun
+ *        (65535 : aucune), complétées à 4 octets ; elles l'emportent sur PERS et TENU
+ *  TISS  tissu des tenues (facultative) : nombre u32, puis pour chaque planche masquée : entrée de SPRS u16, 0 u16,
+ *        1 bit par pixel de la planche (ligne après ligne ; bit k de l'octet o : pixel 8 × o + k), complété à 4 octets
+ *  TENV  variantes de couleur des tenues (facultative) : nombre u32, puis 260 octets chacune : tenue (index de TENU)
+ *        u16, 0 u16, table de 256 couleurs appliquée aux seuls pixels du tissu de sa planche (TISS) ; la tenue d'une
+ *        variante partage la planche de la tenue d'origine (js/tissu.js de l'Atelier)
+ *  PTIV  variantes de couleur des personnages (facultative) : nombre u32, puis 260 octets chacune : personnage (index de
+ *        PERS) u16, 0 u16, table de 256 couleurs appliquée aux pixels du tissu de sa planche (TISS) : danseuses d'une
+ *        tenue de scène recolorée ; tables comptées avec celles de TENV
+ *  OUVR  ouverture (facultative ; core/accueil.c) : version u8 (1), nombre de cartons u8 (24 au plus), nombre d'héroïnes
+ *        au choix u8 (15 au plus, Sera en plus), 0 u8 ; fond de l'écran titre x, z f32 (cases), heure f32 (part de
+ *        journée, < 0 : celle du départ) ; héroïnes (index PERS) u8, complétées à 4 octets ; par carton x, z f32 (x < 0 :
+ *        sur le noir), heure f32 ; puis chaînes UTF-8 terminées par 0 : titre, sous-titre, musique de l'écran titre (nom
+ *        de musique.bin), question du choix de l'héroïne, texte de chaque carton
+ *  IMAG  images du jeu (facultative ; Stable Diffusion, tools/cutin du dépôt : cartons de l'introduction, cut-ins des
+ *        techniques ; world.c img_ix, une à la fois dans un tampon commun) : nombre u16, 0 u16 ; 12 octets par image
+ *        (largeur u16, hauteur u16, couleurs n u8, genre u8 (pose d'un cut-in, CG_* de internal.h : 0 neutre, 1 lame,
+ *        2 tir, 3 laser, 4 corps à corps, 5 magie, 6 à 11 foudre, feu, glace, sacré, ténèbres, soin, 12 fouet, 13 canon,
+ *        14 arc ; cutin_tirer prend l'image du genre de l'action), 0 u16, décalage des données depuis le début de la section
+ *        u32) ; données : n couleurs r, g, b (index 1 à n), puis largeur × hauteur index (0 : noir)
+ *  IMGX  paquet léger de l'ESP32 (engine/tools/paquet_sd.js) : la table de IMAG seule, décalages absolus dans monde.pak
+ *        (pixels lus sur la carte SD)
+ *  CUTI  cut-ins des techniques (facultative ; battle.c cutin_tirer, hud.c draw_cutin) : nombre u16, 0 u16 ; 8 octets par
+ *        jeu : personnage u8 (index PERS, 255 : Sera), tenue u8 (index TENU, 255 : la sienne ; sans jeu pour la tenue
+ *        portée, celui de la tenue de base), images u8, drapeaux u8 (1 plein écran : coup de grâce, sort de niveau III ;
+ *        2 paires face / dos : images par deux, la face puis le dos ; 4 et 8 : dégâts de l'héroïne touchée, sous la moitié,
+ *        puis le quart de ses PV ; 16 transformation, 32 attaque ultime (plein écran) ; 64 jeu 18+, 128 version sage
+ *        d'un jeu 18+, montrée seulement verrouillé, voir EDIT ; 0 : bandeaux),
+ *        première image u16 (IMAG), 0 u16
+ *  OUVI  image de chaque carton de OUVR (facultative) : nombre u16, puis un u16 par carton (index IMAG, 65535 : aucune)
+ *  SCNI  illustration de chaque scène du scénario (facultative ; instruction « image », OP 39 : rang de la scène) :
+ *        nombre u16, puis un u16 par scène (index IMAG, 65535 : aucune ; bit 15 : scène 18+, voir EDIT)
+ *  PORT  bâtiments qu'on visite (facultative ; ceux qui ont un intérieur) : nombres de bâtiments et de portes u32 ×2,
+ *        puis 16 octets par bâtiment : centre x, z f32, accès u8 (0 libre, 1 horaires : ouvert le jour, 2 fermé, 3 scellé ;
+ *        bit 7 : éclairé même fermé, bit 6 : toujours éteint, le cinéma),
+ *        serrure u8 (0 mécanique : crocheter, 1 électronique : pirater), niveau u8, risque d'alarme en % u8, autorité u8
+ *        (0 aucune, 1 l'Ordre, 2 le clan : la milice), commerce u8 (rang dans COMM + 1, 0 : aucun), intérieur u16 (entrée
+ *        de INTR) ; puis 20 octets par porte : point devant elle x, z f32, normale vers la rue x, z f32, bâtiment u16, porte
+ *        u8 (index dans son plan, 0 : la principale), largeur de l'ouverture u8 (1/10 de case ; 0 : 1,2) ; puis le nom de
+ *        chaque bâtiment, 24 octets UTF-8 complétés de 0 (celui de son type : au-dessus de la bulle de la porte)
+ *  TELE  téléport (facultative ; menu SYSTÈME › TÉLÉPORTER, hud.c) : nombre u32, puis 36 octets par lieu : nom UTF-8 sur
+ *        24 octets complétés de 0, sorte u8 (0 monde : départ d'une carte, 1 ville, 2 lieu : circuit, astroport, puits,
+ *        lieux nommés des autres cartes), carte u8, 0 u16, point x, z f32 (case praticable de sa carte, posée par l'émulateur)
+ *  PCAR  carte de chaque bâtiment de PORT (facultative ; absente : tous sur la planète) : nombre u32 (celui de PORT), puis
+ *        un u8 chacun (0 la planète, k : la k-ième de CART) ; ses portes ne s'ouvrent que sur cette carte. PORT range ceux
+ *        de la planète d'abord, puis ceux de chaque autre carte (base des Veilleurs, archives)
+ *  COMM  commerces des intérieurs (facultative ; atelier : js/commerces.js) : nombre u32, puis chacun : métiers qui le
+ *        tiennent u16 (bit k : métier k de Personnages.METIERS : commerçant, barman, médecin, mécanicien, prêtre, garde,
+ *        employé, client, habitant, danseuse, commissaire), prix des soins de l'équipe u16, d'un verre u16 (crédits, 0 : aucun), types
+ *        d'objets rachetés à moitié prix u8 (bit k : type k), objets vendus n u8, rangs dans la table des objets u8 × n
+ *  REPL  répliques génériques (facultative ; atelier : js/repliques.js) : nombre de listes u32 (une par métier, dans
+ *        l'ordre de COMM, puis ville, village, campement), puis chacune : lignes u16, lignes (longueur u8, UTF-8) ; un
+ *        personnage sans répliques en dit une au hasard : celle de son métier dans un intérieur, sinon celle de la ville
+ *  INTR  intérieurs (facultative, après CDAT : lus à l'entrée ; aussi écrits dans interieurs.bin pour la carte SD, qui
+ *        l'emporte, par engine/tools/maj_monde.js) : 'INT2', nombre u32, plus grandes tailles brute et compressée u32,
+ *        puis par intérieur (un par niveau : ordre des bâtiments de PORT, chacun son rez-de-chaussée puis ses étages, à
+ *        la suite ; PORT donne le rang du rez-de-chaussée) : décalage depuis le début de la section u32, taille compressée
+ *        u32, taille brute u32 ; puis les intérieurs compressés en LZ4 (format bloc). Un intérieur, coordonnées de son plan
+ *        (le moteur les décale de IO) : largeur, profondeur, pas de la grille, hauteur, échelle humaine f32 ×5 ; côtés de
+ *        la grille gw, gh, polygones, sols (les premiers polygones), objets, nœuds, sorties, personnages, étage (0 : rez-de-
+ *        chaussée, sans sortie au-dessus), escaliers u16 ×10 ('INT1' : sans les deux derniers) ; polygones
+ *        (comme ceux des chunks, normale toujours présente ; drapeau 4 : s'estompe devant Sera ; drapeau 1 et tuile ≥
+ *        TILE_BIG : carte transparente d'un article, objet d'étalage ou affiche ; drapeau 8 : surface de l'eau d'un bassin,
+ *        tuile T_SURF, sorte d'eau (EAUC) dans les 4 bits du haut, l de chaque sommet : opacité du corps × 16) ; objets (16 octets :
+ *        rectangle au sol x0, z0, x1, z1 i16 1/256, premier polygone u16, nombre u16, 1 meuble low poly (triangles triés)
+ *        u16, 0 u16) ; nœuds de l'arbre des pièces, le premier à la racine (12 octets : sorte u8 (0 feuille, 1 coupe en x, 2
+ *        en z), 0 u8, coupe i16 1/256, nœuds lo, hi u16, premier objet u16, nombre u16 : ceux de la feuille, ou ceux posés
+ *        sur la coupe) ; sorties (12 octets : x0, z0, x1, z1 i16 1/256, côté u8 (0 z0, 1 x1, 2 z1, 3 x0), porte u8, 0 u16) ;
+ *        personnages à métier (8 octets : place x, z i16 1/256, personnage u8 (PERS), regard u8 (1/256 de tour), drapeaux u8
+ *        (1 : danseuse, son animation de danse ; 2 : nageur, dans un bassin, sa tenue de nage), métier + 1 u8 (0 : inconnu
+ *        ou voiture garée, nageur ; listes de COMM et REPL) ;
+ *        8 au plus, des exemplaires de plus le temps de la visite) ; escaliers (16 octets : zone x0, z0, x1, z1 i16 1/256,
+ *        vers i8 (+1 : on monte à l'intérieur suivant, -1 : on descend au précédent), regard à l'arrivée u8 (1/256 de
+ *        tour), arrivée x, z i16 1/256 sur ce niveau-là, 0 u16 ; 4 au plus) ;
+ *        grille de marche gw × gh u8 (pas res, décalée de 2 cases : 0 mur ou meuble, 1 libre, 2 seuil d'une sortie, 3 zone
+ *        d'un escalier qui monte, 4 trémie d'un escalier qui descend : y entrer change de niveau, 5 eau d'un bassin : à la
+ *        nage, surface à INT_EAU_Y × échelle humaine)
+ *  PSAG  couleurs des planches de remplacement (facultative ; variante de couleur d'un personnage 18+) : nombre u32, puis
+ *        personnage (index PERS) u16, 0 u16, table de 256 couleurs
+ *  NSUR  noms sûrs (facultative ; édition unique) : nombre u32, puis 28 octets chacun : sorte u8 (0 bâtiment de PORT,
+ *        1 lieu de GUID), 0 u8, rang u16, nom UTF-8 sur 24 octets complétés de 0 (le club : « SALLE DES FÊTES »)
+ *  EDIT  édition du monde (facultative : absente, 18+) : édition u8 (0 : 18+, 1 : enfant, js/edition.js de l'Atelier :
+ *        ni tenue osée, ni club, ni danseuse ; 2 : unique, le contenu 18+ marqué et caché tant que le code CODE18
+ *        n'a pas été donné, menu SYSTÈME › CODE : personnages PERS_ADULTE dans leur planche TENUE_SAGE (couleurs
+ *        PSAG), masqués sans elle ; tenues, objets, événements, jeux de cut-ins, scènes, répliques 18+ cachés ; noms
+ *        NSUR ; jeux de cut-ins 128 seulement verrouillé ; déverrouillage gardé dans l'emplacement 6 de la sauvegarde,
+ *        world.c edition_appliquer), 0 u8 × 3 ; le moteur de l'édition enfant (ECHOES_ENFANT) ne lance que les paquets
+ *        de l'édition enfant
+ *  END   (vide)
+ */
+#ifndef PAK_H
+#define PAK_H
+
+#include <stdint.h>
+
+#define PAK_MAGIC 0x4F484345u
+#define PAK_VERSION 5            /* 5 : grands décors à 45000 (4 : à 30000, trop bas pour les textures de plusieurs cartes) */
+#define TILE_BIG 45000           /* tuile ≥ TILE_BIG : grand décor TILE_BIG + k, décrit par l'entrée k de la table DECO ; textures du sol de G0 à TILE_BIG - 1 */
+
+#define F_WATER 1
+#define F_RIVER 2
+#define F_ROAD 4
+#define F_OPEN 8
+#define F_STREET 16              /* chaussée d'une ville ou d'un village (plan urbain) : le trafic y roule */
+#define F_CLEAR 32               /* eau claire (hors des terrains « eau noire ») : Sera y nage */
+
+typedef struct {
+    float x, y, z, u, v, l;
+} pak_vert_t;
+
+/* Polygone tel qu'il est rangé dans le paquet (taille variable : nv sommets à la suite) */
+typedef struct {
+    uint16_t tile;
+    uint8_t flags, nv;
+    float n[3];
+    pak_vert_t v[];
+} pak_poly_t;
+
+#define POLY_ALPHA 1
+#define POLY_CULL 2
+/* En mémoire : rang du volume + 1 d'une face de bâtiment accessoire (0 : aucun, triée par sa profondeur) dans les bits 2 à 7 */
+#define POLY_RANK_SH 2
+#define POLY_RANK_MAX 63
+#define POLY_COLLE 62                 /* rang 62 : affiche collée au polygone précédent (son mur), dans le même seau, après lui */
+#define POLY_RANK(pp) ((pp)->flags >> POLY_RANK_SH)
+
+typedef struct {
+    uint32_t cell;               /* case dans le chunk */
+    float x, y, z, size, phase, l;
+    uint16_t tile;
+    uint8_t flip, flags;         /* flags : 2 = se balance, 4 = solide (un véhicule lancé le casse), 8 = rocher */
+} pak_plant_t;
+
+typedef struct {
+    float cx, cz, r;
+    uint32_t first, count;
+} pak_building_t;
+
+#endif

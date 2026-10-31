@@ -1,0 +1,11 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">Echoes of Ashes</string>
+    <string name="app_name_natif">Echoes 466</string>
+    <string name="app_name_reglages">Echoes réglages</string>
+    <!-- Plein écran noir ; pas de « glisser pour fermer » de Wear OS : le glissement sur le bord tourne la caméra -->
+    <style name="Echoes" parent="@android:style/Theme.DeviceDefault.NoActionBar.Fullscreen">
+        <item name="android:windowBackground">@android:color/black</item>
+        <item name="android:windowSwipeToDismiss">false</item>
+    </style>
+</resources>

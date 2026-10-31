@@ -1,0 +1,69 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Echoes of Ashes pour montre Wear OS : NativeActivity (pas de code Java, sauf la classe vide Natif de la deuxième icône et l'écran Reglages de la troisième), moteur dans libechoes.so -->
+<manifest xmlns:android="http://schemas.android.com/apk/res/android"
+    package="fr.maetzindustries.echoes"
+    android:versionCode="1"
+    android:versionName="0.1">
+
+    <uses-feature android:name="android.hardware.type.watch" />
+
+    <!-- Mise à jour du monde par le serveur de l'Atelier (maj_android.c, Reglages.java ; HTTP en clair sur le réseau local) -->
+    <uses-permission android:name="android.permission.INTERNET" />
+
+    <!-- enableOnBackInvokedCallback="false" : le bouton retour arrive en touche (ENG_KEY_BACK), même en ciblant Android 16 -->
+    <application
+        android:label="@string/app_name"
+        android:icon="@mipmap/ic_launcher"
+        android:theme="@style/Echoes"
+        android:extractNativeLibs="false"
+        android:usesCleartextTraffic="true"
+        android:appCategory="game"
+        android:enableOnBackInvokedCallback="false">
+
+        <meta-data android:name="com.google.android.wearable.standalone" android:value="true" />
+
+        <activity
+            android:name="android.app.NativeActivity"
+            android:exported="true"
+            android:launchMode="singleTask"
+            android:configChanges="orientation|screenSize|screenLayout|smallestScreenSize|keyboard|keyboardHidden|navigation|uiMode|density">
+            <meta-data android:name="android.app.lib_name" android:value="echoes" />
+            <intent-filter>
+                <action android:name="android.intent.action.MAIN" />
+                <category android:name="android.intent.category.LAUNCHER" />
+            </intent-filter>
+        </activity>
+        <!-- Deuxième icône « Echoes 466 » : la même activité (classe Natif, java/) avec la 3D native 466 × 466
+             (libechoes_natif.so, sans pixels doublés), dans son propre processus et sa propre tâche : les deux modes
+             tournent chacun de leur côté (le cœur ne se lance qu'une fois par processus) -->
+        <activity
+            android:name="fr.maetzindustries.echoes.Natif"
+            android:label="@string/app_name_natif"
+            android:process=":natif"
+            android:taskAffinity=":natif"
+            android:exported="true"
+            android:launchMode="singleTask"
+            android:configChanges="orientation|screenSize|screenLayout|smallestScreenSize|keyboard|keyboardHidden|navigation|uiMode|density">
+            <meta-data android:name="android.app.lib_name" android:value="echoes_natif" />
+            <intent-filter>
+                <action android:name="android.intent.action.MAIN" />
+                <category android:name="android.intent.category.LAUNCHER" />
+            </intent-filter>
+        </activity>
+        <!-- Troisième icône « Echoes réglages » (classe Reglages, java/) : adresse du serveur de l'Atelier, régénération du
+             monde par le serveur, relance du jeu ; vues Android ordinaires, dans son propre processus et sa propre tâche -->
+        <activity
+            android:name="fr.maetzindustries.echoes.Reglages"
+            android:label="@string/app_name_reglages"
+            android:theme="@android:style/Theme.DeviceDefault.NoActionBar"
+            android:process=":reglages"
+            android:taskAffinity=":reglages"
+            android:exported="true"
+            android:launchMode="singleTask">
+            <intent-filter>
+                <action android:name="android.intent.action.MAIN" />
+                <category android:name="android.intent.category.LAUNCHER" />
+            </intent-filter>
+        </activity>
+    </application>
+</manifest>

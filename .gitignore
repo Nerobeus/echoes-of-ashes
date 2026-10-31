@@ -1,0 +1,35 @@
+# Dépôt public github.com/Nerobeus/echoes-of-ashes : liste blanche. Tout ce qui n'est pas rouvert ici reste local :
+# outils de génération (tools/, prompts d'images), assets bruts, secrets, consoles (gameboy/, GPL-2) et PC DOS (pcdos/),
+# app compagnon, notes internes (CLAUDE.md, engine/README.md), copie de l'émulateur, paquet 18+ (engine/data/*.pak).
+# Seule l'édition enfant (sûre) est publiée.
+/*
+!/.gitignore
+!/.gitattributes
+!/README.md
+!/LICENSE
+!/THIRD_PARTY.md
+!/licences/
+!/engine/
+!/montre/
+!/commun/
+
+/engine/*
+!/engine/core/
+!/engine/platform/
+!/engine/tools/
+!/engine/maquettes/
+!/engine/data/
+!/engine/*.cmd
+/engine/data/*
+!/engine/data/enfant/
+!/engine/data/musique.bin
+
+/montre/managed_components/
+
+# Constructions et fichiers produits
+build/
+build_*/
+sdkconfig.old
+__pycache__/
+*.pyc
+node_modules/

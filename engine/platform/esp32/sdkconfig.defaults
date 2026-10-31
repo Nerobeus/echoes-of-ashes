@@ -1,0 +1,37 @@
+CONFIG_IDF_TARGET="esp32s3"
+
+# Flash 16 Mo (comme le projet tiny386 qui tourne sur la carte), table de partitions avec le paquet monde
+CONFIG_ESPTOOLPY_FLASHSIZE_16MB=y
+CONFIG_ESPTOOLPY_FLASHMODE_QIO=y
+CONFIG_ESPTOOLPY_FLASHFREQ_80M=y
+CONFIG_PARTITION_TABLE_CUSTOM=y
+CONFIG_PARTITION_TABLE_CUSTOM_FILENAME="partitions.csv"
+
+# PSRAM octale 8 Mo à 80 MHz : paquet, polygones, listes de primitives
+CONFIG_SPIRAM=y
+CONFIG_SPIRAM_MODE_OCT=y
+CONFIG_SPIRAM_SPEED_80M=y
+CONFIG_SPIRAM_USE_CAPS_ALLOC=y
+CONFIG_SPIRAM_ALLOW_BSS_SEG_EXTERNAL_MEMORY=y
+
+# Performances : 240 MHz, optimisation vitesse, cache de données 64 Ko (textures lues en PSRAM)
+CONFIG_ESP_DEFAULT_CPU_FREQ_MHZ_240=y
+CONFIG_COMPILER_OPTIMIZATION_PERF=y
+CONFIG_ESP32S3_DATA_CACHE_64KB=y
+CONFIG_ESP32S3_DATA_CACHE_LINE_64B=y
+CONFIG_ESP32S3_INSTRUCTION_CACHE_32KB=y
+CONFIG_FREERTOS_HZ=1000
+
+# La tâche de rendu occupe le cœur 1 en continu
+CONFIG_ESP_TASK_WDT_CHECK_IDLE_TASK_CPU1=n
+CONFIG_ESP_TASK_WDT_CHECK_IDLE_TASK_CPU0=n
+
+# Noms longs sur la carte SD (interieurs.bin, dossier echoes_enfant, fichiers .nouveau de la copie par USB : main/sdx.c)
+CONFIG_FATFS_LFN_HEAP=y
+CONFIG_FATFS_MAX_LFN=255
+
+# Manette Bluetooth (Poké Ball Plus, main/manette.c ; RÉGLAGES › MANETTE) : NimBLE aussi en central et observateur, liaisons
+# gardées en NVS (le mode Transfert garde le rôle périphérique de l'appairage par le téléphone)
+CONFIG_BT_NIMBLE_ROLE_CENTRAL=y
+CONFIG_BT_NIMBLE_ROLE_OBSERVER=y
+CONFIG_BT_NIMBLE_NVS_PERSIST=y

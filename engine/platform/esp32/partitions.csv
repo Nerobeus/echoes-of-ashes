@@ -1,0 +1,18 @@
+# Name,   Type, SubType, Offset,   Size, Flags
+# Table commune aux quatre applications de la montre (la même dans engine/platform/esp32/partitions.csv,
+# pcdos/esp/partitions.csv et gameboy/partitions.csv) : montre/ (l'accueil, lancé au démarrage), Echoes of Ashes, le
+# PC DOS (tiny386) et les consoles (gameboy/ : Game Boy, NES, Master System, Game Gear) ; on passe de l'une à l'autre
+# par esp_ota_set_boot_partition puis un redémarrage (apps.c). Tout tient sous 16 Mo (la flash de la 1,75" C en fait
+# 32, mais l'accès au-delà de 16 Mo est expérimental dans l'ESP-IDF 5.2). Le chargeur de démarrage, la table et otadata
+# sont flashés par le projet montre. Le 31/10/2026, les consoles ont pris 1,75 Mo : montre 2 → 1,25 Mo (0,86 utilisé),
+# Echoes 3 → 2,5 Mo (1,68), PC DOS 2 → 1,5 Mo (1,24) ; monde et les BIOS n'ont pas bougé.
+nvs,      data, nvs,     0x9000,   24K,
+otadata,  data, ota,     0xf000,   8K,
+phy_init, data, phy,     0x11000,  4K,
+montre,   app,  ota_0,   0x20000,  1280K,
+echoes,   app,  ota_1,   0x160000, 2560K,
+pcdos,    app,  ota_2,   0x3E0000, 1536K,
+gameboy,  app,  ota_3,   0x560000, 2816K,
+monde,    data, 0x40,    0x820000, 7M,
+bios.bin, data, undefined, 0xf20000, 128K,
+vgabios.bin, data, undefined, 0xf40000, 64K,

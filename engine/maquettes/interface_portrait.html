@@ -1,0 +1,227 @@
+<!doctype html>
+<html lang="fr">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Interface portrait Echoes</title>
+<link href="https://fonts.googleapis.com/css2?family=Oxanium:wght@400;600&family=Share+Tech+Mono&display=swap" rel="stylesheet">
+<style>
+/* Maquette de l'interface plein écran (téléphone, portrait) : écrans dessinés dans le repère de l'image du moteur,
+   540 × 1204 (la moitié de l'écran du XCover 7), réduits pour tenir côte à côte. Couleurs du thème NÉON du jeu. */
+:root { --ink: #05040a; --c1: #22e4ff; --c2: #ff2d9b; --dim: #9aa6b8; --vert: #7dff9a; --rouge: #ff3b4e; --page: #0c0b12; --texte: #e8ecf3; }
+* { box-sizing: border-box; }
+body { margin: 0; background: var(--page); color: var(--texte); font-family: Oxanium, sans-serif; padding: 24px 16px 48px; }
+h1 { font-weight: 600; font-size: 26px; margin: 0 0 6px; }
+p.lead { color: var(--dim); max-width: 980px; margin: 0 0 24px; line-height: 1.5; }
+.grille { display: flex; flex-wrap: wrap; gap: 28px; }
+.ecran { width: 297px; }                      /* 540 × 0,55 */
+.ecran h2 { font-size: 16px; font-weight: 600; margin: 0 0 8px; color: var(--c1); letter-spacing: .04em; }
+.cadre { width: 297px; height: 662px; overflow: hidden; border-radius: 22px; border: 2px solid #2a2836; position: relative; }
+.tel { width: 540px; height: 1204px; transform: scale(.55); transform-origin: 0 0; position: absolute; left: 0; top: 0;
+       background: linear-gradient(180deg, #120b26 0%, #2a1240 22%, #3b1a46 30%, #1b1830 31%, #23213a 60%, #2c2a44 100%); font-family: Oxanium, sans-serif; }
+.tel .ville { position: absolute; left: 0; right: 0; top: 150px; height: 230px;
+       background: repeating-linear-gradient(90deg, #0d0a1c 0 46px, #160f2b 46px 80px, #0a0816 80px 130px); clip-path: polygon(0 40%, 8% 40%, 8% 10%, 22% 10%, 22% 50%, 35% 50%, 35% 0, 50% 0, 50% 45%, 64% 45%, 64% 20%, 80% 20%, 80% 55%, 100% 55%, 100% 100%, 0 100%); filter: blur(2.5px); opacity: .9; }
+.tel .sol { position: absolute; left: 0; right: 0; top: 380px; bottom: 0;
+       background: repeating-linear-gradient(90deg, rgba(255,255,255,.04) 0 2px, transparent 2px 60px), repeating-linear-gradient(0deg, rgba(255,255,255,.04) 0 2px, transparent 2px 60px), linear-gradient(180deg, #1d1b30, #34314f); }
+.sera { position: absolute; width: 40px; height: 76px; left: 250px; top: 610px; background: linear-gradient(#ff4fb0, #8a2a66); border-radius: 18px 18px 6px 6px; }
+.pnj { position: absolute; width: 38px; height: 72px; left: 360px; top: 520px; background: linear-gradient(#7fb0ff, #2d4a82); border-radius: 18px 18px 6px 6px; }
+.mono { font-family: "Share Tech Mono", monospace; }
+.voile { position: absolute; inset: 0; background: rgba(5,4,10,.82); }
+.panneau { position: absolute; background: rgba(8,6,18,.92); border: 2px solid var(--c1); clip-path: polygon(14px 0, 100% 0, 100% calc(100% - 14px), calc(100% - 14px) 100%, 0 100%, 0 14px); }
+.bouton { position: absolute; display: flex; align-items: center; justify-content: center; font-weight: 600; font-size: 24px; color: #fff;
+          background: rgba(10,8,24,.85); border: 2px solid var(--c1); clip-path: polygon(12px 0, 100% 0, 100% calc(100% - 12px), calc(100% - 12px) 100%, 0 100%, 0 12px); }
+.bouton.actif { border-color: var(--c2); background: rgba(70,10,50,.9); }
+.jauge { height: 12px; background: rgba(255,255,255,.08); position: relative; }
+.jauge i { position: absolute; left: 0; top: 0; bottom: 0; }
+.etiquette { color: var(--dim); font-size: 18px; }
+.notes { font-size: 13px; color: var(--dim); line-height: 1.45; margin: 10px 0 0; padding-left: 16px; }
+.notes li { margin-bottom: 4px; }
+.notes b { color: var(--texte); font-weight: 600; }
+table.gestes { border-collapse: collapse; margin-top: 36px; max-width: 980px; width: 100%; font-size: 14px; }
+table.gestes th, table.gestes td { text-align: left; padding: 8px 10px; border-bottom: 1px solid #262433; vertical-align: top; }
+table.gestes th { color: var(--c1); font-weight: 600; }
+table.gestes td:first-child { white-space: nowrap; }
+@media (max-width: 680px) { .grille { justify-content: center; } }
+</style>
+</head>
+<body>
+<h1>Interface portrait : proposition</h1>
+<p class="lead">Six écrans du plein écran Android, dans le repère de l'image du moteur (540 × 1204 pixels, agrandie ×2 sur l'écran du téléphone). Les polices et les icônes sont celles du paquet, aux mêmes tailles : la largeur utile (540 px) est proche de celle de la montre (466 px). Le bas de l'écran, sous le pouce, porte les commandes ; le haut, ce qu'on lit.</p>
+
+<div class="grille">
+
+<!-- 1. Exploration -->
+<section class="ecran">
+<h2>1 · Exploration</h2>
+<div class="cadre"><div class="tel">
+  <div class="ville"></div><div class="sol"></div><div class="pnj"></div><div class="sera"></div>
+  <!-- barre du haut -->
+  <div style="position:absolute;left:0;right:0;top:0;height:112px;background:linear-gradient(180deg,rgba(5,4,10,.85),rgba(5,4,10,0));"></div>
+  <div style="position:absolute;left:24px;top:22px;font-weight:600;font-size:26px;">SECTEUR 6</div>
+  <div class="mono" style="position:absolute;left:24px;top:56px;font-size:18px;color:#7f93a8;">255.5 · 255.5 · 07:42</div>
+  <div class="mono" style="position:absolute;right:112px;top:30px;width:170px;height:34px;border-bottom:2px solid rgba(34,228,255,.4);font-size:18px;color:var(--c2);display:flex;justify-content:space-between;align-items:center;"><span style="opacity:.5">O</span><span style="font-size:24px;font-weight:600;font-family:Oxanium">N</span><span style="opacity:.5">E</span></div>
+  <div class="bouton" style="right:20px;top:18px;width:76px;height:76px;font-size:34px;">≡</div>
+  <!-- quête -->
+  <div style="position:absolute;left:24px;top:120px;padding:8px 14px;background:rgba(8,6,18,.7);border-left:4px solid var(--c2);font-size:20px;"><span style="color:var(--c2)">◆</span> Retrouver Varn <span class="mono" style="color:var(--dim)">· 120 m ▸</span></div>
+  <!-- bulle -->
+  <div style="position:absolute;left:330px;top:450px;text-align:center;width:100px;"><div style="font-size:18px;color:var(--dim)">KESS</div><div style="margin:4px auto 0;width:76px;height:76px;border-radius:50%;border:3px solid var(--c1);background:rgba(8,6,18,.75);display:flex;align-items:center;justify-content:center;font-size:30px;">💬</div></div>
+  <!-- état de Sera -->
+  <div style="position:absolute;left:24px;bottom:150px;width:250px;">
+    <div style="display:flex;align-items:center;gap:12px;"><div style="width:64px;height:64px;border-radius:50%;border:2px solid var(--c2);background:linear-gradient(#ff4fb0,#5a1a44)"></div><div><div style="font-weight:600;font-size:22px;">SERA <span class="mono" style="font-size:16px;color:var(--dim)">NIV. 12</span></div></div></div>
+    <div class="jauge" style="margin-top:10px;"><i style="width:78%;background:var(--c2)"></i></div>
+    <div class="jauge" style="margin-top:6px;height:8px;"><i style="width:55%;background:var(--c1)"></i></div>
+  </div>
+  <!-- bouton d'action -->
+  <div class="bouton actif" style="right:24px;bottom:150px;width:150px;height:96px;font-size:26px;">PARLER</div>
+  <!-- bande de rotation -->
+  <div style="position:absolute;left:0;right:0;bottom:0;height:110px;background:linear-gradient(0deg,rgba(5,4,10,.8),rgba(5,4,10,0));"></div>
+  <div style="position:absolute;left:30px;right:30px;bottom:44px;height:26px;background:repeating-linear-gradient(90deg,rgba(34,228,255,.55) 0 2px,transparent 2px 24px);"></div>
+  <div style="position:absolute;left:236px;bottom:36px;width:68px;height:42px;border:2px solid var(--c1);border-radius:6px;"></div>
+</div></div>
+<ul class="notes">
+  <li><b>Haut</b> : lieu, coordonnées, heure ; boussole en bande ; bouton menu.</li>
+  <li>Sous la barre : <b>quête suivie</b> et sa distance (le chevron de guidage reste sur Sera).</li>
+  <li><b>Bas</b> : PV et PM de Sera, bouton d'action selon la cible (PARLER, ENTRER, CONDUIRE…), et la <b>bande de rotation</b> de la caméra (remplace le bord de la montre).</li>
+</ul>
+</section>
+
+<!-- 2. Dialogue -->
+<section class="ecran">
+<h2>2 · Dialogue</h2>
+<div class="cadre"><div class="tel">
+  <div class="ville"></div><div class="sol"></div><div class="pnj"></div><div class="sera"></div>
+  <div style="position:absolute;left:24px;top:22px;font-weight:600;font-size:26px;opacity:.6">SECTEUR 6</div>
+  <!-- portraits -->
+  <div style="position:absolute;left:24px;bottom:430px;width:128px;height:128px;border-radius:50%;border:3px solid var(--c2);background:linear-gradient(#ff4fb0,#5a1a44);opacity:.55"></div>
+  <div style="position:absolute;right:24px;bottom:430px;width:128px;height:128px;border-radius:50%;border:3px solid var(--c1);background:linear-gradient(#7fb0ff,#1d3460)"></div>
+  <!-- panneau -->
+  <div style="position:absolute;left:0;right:0;bottom:0;height:420px;background:rgba(8,6,18,.96);border-top:2px solid var(--c2);"></div>
+  <div style="position:absolute;right:24px;bottom:372px;padding:6px 16px;background:var(--c1);color:var(--ink);font-weight:600;font-size:22px;">KESS</div>
+  <div style="position:absolute;left:32px;right:32px;bottom:120px;font-size:26px;line-height:1.45;">Les ferrailleurs du secteur 6 ne parlent pas aux inconnus. Mais toi, tu as le regard de quelqu'un qui a déjà vu une Lanterne s'éteindre.</div>
+  <div style="position:absolute;right:32px;bottom:60px;color:var(--c1);font-size:26px;">▼</div>
+  <div class="mono" style="position:absolute;left:32px;bottom:60px;color:var(--dim);font-size:16px;">TOUCHER : SUITE · MAINTENIR : PASSER</div>
+</div></div>
+<ul class="notes">
+  <li>Panneau sur le tiers bas, <b>toute la largeur</b> : 4 à 5 lignes d'environ 34 caractères, au lieu de 3 × 28.</li>
+  <li>Portraits de 128 px au-dessus : celui qui parle est plein, l'autre atténué.</li>
+  <li>Choix : boutons empilés au-dessus du panneau.</li>
+</ul>
+</section>
+
+<!-- 3. Menu -->
+<section class="ecran">
+<h2>3 · Menu</h2>
+<div class="cadre"><div class="tel">
+  <div class="ville"></div><div class="sol"></div><div class="voile"></div>
+  <div style="position:absolute;left:24px;top:24px;font-weight:600;font-size:30px;">MENU</div>
+  <div class="mono" style="position:absolute;right:24px;top:32px;font-size:18px;color:var(--dim)">1 240 ¢ · 03:12</div>
+  <div style="position:absolute;left:24px;right:24px;top:84px;">
+    <!-- équipe -->
+    <div style="display:flex;flex-direction:column;gap:12px;">
+      <div class="panneau" style="position:relative;height:96px;display:flex;align-items:center;gap:14px;padding:0 16px;border-color:var(--c2)"><div style="width:64px;height:64px;border-radius:50%;background:linear-gradient(#ff4fb0,#5a1a44)"></div><div style="flex:1"><div style="font-size:22px;font-weight:600">SERA <span class="mono" style="font-size:16px;color:var(--dim)">NIV. 12 · TIREUR</span></div><div class="jauge" style="margin-top:8px"><i style="width:78%;background:var(--c2)"></i></div><div class="jauge" style="margin-top:5px;height:7px"><i style="width:55%;background:var(--c1)"></i></div></div></div>
+      <div class="panneau" style="position:relative;height:96px;display:flex;align-items:center;gap:14px;padding:0 16px;"><div style="width:64px;height:64px;border-radius:50%;background:linear-gradient(#ffb020,#6a4410)"></div><div style="flex:1"><div style="font-size:22px;font-weight:600">VARN <span class="mono" style="font-size:16px;color:var(--dim)">NIV. 12 · LAME</span></div><div class="jauge" style="margin-top:8px"><i style="width:92%;background:var(--c2)"></i></div><div class="jauge" style="margin-top:5px;height:7px"><i style="width:30%;background:var(--c1)"></i></div></div></div>
+      <div class="panneau" style="position:relative;height:96px;display:flex;align-items:center;gap:14px;padding:0 16px;"><div style="width:64px;height:64px;border-radius:50%;background:linear-gradient(#8dff5a,#2d5a14)"></div><div style="flex:1"><div style="font-size:22px;font-weight:600">LYSE <span class="mono" style="font-size:16px;color:var(--dim)">NIV. 12 · MAGICIENNE</span></div><div class="jauge" style="margin-top:8px"><i style="width:64%;background:var(--c2)"></i></div><div class="jauge" style="margin-top:5px;height:7px"><i style="width:88%;background:var(--c1)"></i></div></div></div>
+    </div>
+  </div>
+  <!-- entrées -->
+  <div style="position:absolute;left:24px;right:24px;bottom:40px;display:grid;grid-template-columns:1fr 1fr;gap:14px;">
+    <div class="bouton" style="position:relative;height:96px;">OBJETS</div><div class="bouton" style="position:relative;height:96px;">TECHNIQ.</div>
+    <div class="bouton" style="position:relative;height:96px;">ÉQUIP.</div><div class="bouton" style="position:relative;height:96px;">STATUT</div>
+    <div class="bouton" style="position:relative;height:96px;">CARTE</div><div class="bouton actif" style="position:relative;height:96px;">QUÊTES</div>
+    <div class="bouton" style="position:relative;height:96px;">GUIDAGE</div><div class="bouton" style="position:relative;height:96px;">SYSTÈME</div>
+  </div>
+</div></div>
+<ul class="notes">
+  <li>En haut, <b>l'équipe</b> (PV, PM, niveau, job), crédits et temps de jeu.</li>
+  <li>En bas, les <b>8 entrées</b> en grille de 2 × 4, sous le pouce (cibles de 96 px).</li>
+  <li>Ouvert par le bouton ≡, un double toucher sur Sera, ou le geste retour.</li>
+</ul>
+</section>
+
+<!-- 4. Sous-menu -->
+<section class="ecran">
+<h2>4 · Sous-menu (Objets)</h2>
+<div class="cadre"><div class="tel" style="background:#07060e">
+  <div style="position:absolute;left:24px;top:24px;font-weight:600;font-size:30px;"><span style="color:var(--c1)">‹</span> OBJETS</div>
+  <div style="position:absolute;left:24px;right:24px;top:88px;display:flex;gap:8px;font-size:18px;">
+    <div style="padding:8px 12px;border-bottom:3px solid var(--c2)">SOINS</div><div style="padding:8px 12px;color:var(--dim)">PIÈCES</div><div style="padding:8px 12px;color:var(--dim)">TENUES</div><div style="padding:8px 12px;color:var(--dim)">ÉQUIP.</div>
+  </div>
+  <div style="position:absolute;left:24px;right:24px;top:150px;display:flex;flex-direction:column;gap:8px;">
+    <div class="panneau" style="position:relative;height:72px;display:flex;align-items:center;gap:14px;padding:0 16px;border-color:var(--c2)"><div style="width:32px;height:32px;background:#ff4fb0"></div><div style="flex:1;font-size:22px">POTION</div><div class="mono" style="font-size:20px;color:var(--dim)">× 6</div></div>
+    <div class="panneau" style="position:relative;height:72px;display:flex;align-items:center;gap:14px;padding:0 16px;"><div style="width:32px;height:32px;background:#ff7fc8"></div><div style="flex:1;font-size:22px">SUPER POTION</div><div class="mono" style="font-size:20px;color:var(--dim)">× 2</div></div>
+    <div class="panneau" style="position:relative;height:72px;display:flex;align-items:center;gap:14px;padding:0 16px;"><div style="width:32px;height:32px;background:#22e4ff"></div><div style="flex:1;font-size:22px">ÉTHER</div><div class="mono" style="font-size:20px;color:var(--dim)">× 3</div></div>
+    <div class="panneau" style="position:relative;height:72px;display:flex;align-items:center;gap:14px;padding:0 16px;"><div style="width:32px;height:32px;background:#7dff9a"></div><div style="flex:1;font-size:22px">ANTIDOTE</div><div class="mono" style="font-size:20px;color:var(--dim)">× 1</div></div>
+  </div>
+  <!-- détail -->
+  <div style="position:absolute;left:0;right:0;bottom:0;height:300px;background:rgba(14,10,30,.98);border-top:2px solid var(--c1);"></div>
+  <div style="position:absolute;left:32px;right:32px;bottom:196px;font-weight:600;font-size:24px;">POTION</div>
+  <div style="position:absolute;left:32px;right:32px;bottom:140px;font-size:20px;color:var(--dim);line-height:1.4">Rend 120 PV à un membre de l'équipe.</div>
+  <div class="bouton actif" style="left:32px;right:32px;bottom:36px;height:88px;">UTILISER SUR…</div>
+</div></div>
+<ul class="notes">
+  <li>Même cadre pour Objets, Techniques, Équipement, Statut, Quêtes, Guidage, Système : <b>titre et retour</b> en haut, onglets, liste, <b>détail et action</b> en bas.</li>
+  <li>La liste défile au doigt ; la carte prend tout l'écran.</li>
+</ul>
+</section>
+
+<!-- 5. Combat -->
+<section class="ecran">
+<h2>5 · Combat</h2>
+<div class="cadre"><div class="tel" style="background:linear-gradient(180deg,#160b22 0%,#2b1236 35%,#1a1828 36%,#2c2a44 100%)">
+  <div style="position:absolute;left:150px;top:250px;width:240px;height:240px;background:radial-gradient(circle,#ff3b4e 0 30%,#5a1220 31% 60%,transparent 61%);opacity:.9"></div>
+  <div style="position:absolute;left:24px;right:24px;top:28px;"><div style="display:flex;justify-content:space-between;font-weight:600;font-size:24px;"><span>RÔDEUR</span><span class="mono" style="font-size:18px;color:var(--dim)">NIV. 13</span></div><div class="jauge" style="margin-top:8px;height:10px"><i style="width:62%;background:var(--rouge)"></i></div></div>
+  <div style="position:absolute;left:225px;top:200px;color:var(--c2);font-size:40px;">▼</div>
+  <!-- équipe -->
+  <div style="position:absolute;left:24px;right:24px;bottom:340px;display:flex;flex-direction:column;gap:8px;">
+    <div style="display:flex;align-items:center;gap:12px;font-size:20px;"><span style="width:84px;font-weight:600;color:var(--c2)">SERA ▸</span><div class="jauge" style="flex:1"><i style="width:78%;background:var(--c2)"></i></div><span class="mono" style="width:110px;text-align:right;color:var(--dim)">2 830</span></div>
+    <div style="display:flex;align-items:center;gap:12px;font-size:20px;"><span style="width:84px;font-weight:600">VARN</span><div class="jauge" style="flex:1"><i style="width:92%;background:var(--c2)"></i></div><span class="mono" style="width:110px;text-align:right;color:var(--dim)">3 310</span></div>
+    <div style="display:flex;align-items:center;gap:12px;font-size:20px;"><span style="width:84px;font-weight:600">LYSE</span><div class="jauge" style="flex:1"><i style="width:64%;background:var(--c2)"></i></div><span class="mono" style="width:110px;text-align:right;color:var(--dim)">1 940</span></div>
+  </div>
+  <!-- commandes -->
+  <div style="position:absolute;left:24px;right:24px;bottom:40px;display:grid;grid-template-columns:1fr 1fr;gap:14px;">
+    <div class="bouton actif" style="position:relative;height:96px;">ATTAQUE</div><div class="bouton" style="position:relative;height:96px;">TECHNIQ.</div>
+    <div class="bouton" style="position:relative;height:96px;">OBJETS</div><div class="bouton" style="position:relative;height:96px;">DÉFENSE</div>
+  </div>
+  <div class="mono" style="position:absolute;right:28px;bottom:268px;font-size:18px;color:var(--dim)">FUITE ▸</div>
+</div></div>
+<ul class="notes">
+  <li>Ennemi et sa jauge <b>en haut</b>, la scène au milieu, l'équipe et ses PV au-dessus des <b>commandes en 2 × 2</b>.</li>
+  <li>Cible : toucher l'ennemi (▼), puis la commande ; FUITE en petit pour éviter les erreurs.</li>
+</ul>
+</section>
+
+<!-- 6. Titre -->
+<section class="ecran">
+<h2>6 · Écran titre</h2>
+<div class="cadre"><div class="tel">
+  <div class="ville"></div><div class="sol"></div><div class="voile" style="background:rgba(5,4,10,.55)"></div>
+  <div style="position:absolute;left:0;right:0;top:300px;text-align:center;font-weight:600;font-size:48px;letter-spacing:.02em;">ECHOES OF ASHES</div>
+  <div style="position:absolute;left:96px;right:96px;top:372px;height:3px;background:var(--c2)"></div>
+  <div class="mono" style="position:absolute;left:0;right:0;top:392px;text-align:center;font-size:20px;color:var(--c1)">Ce que les morts laissent aux vivants</div>
+  <div style="position:absolute;left:70px;right:70px;bottom:150px;display:flex;flex-direction:column;gap:16px;">
+    <div class="bouton" style="position:relative;height:84px;">CONTINUER</div>
+    <div class="bouton actif" style="position:relative;height:84px;">NOUVELLE PARTIE</div>
+    <div class="bouton" style="position:relative;height:84px;">CHARGER</div>
+    <div class="bouton" style="position:relative;height:84px;">RÉGLAGES</div>
+  </div>
+  <div class="mono" style="position:absolute;left:0;right:0;bottom:90px;text-align:center;font-size:18px;color:var(--dim)">Partie 1 · Secteur 6 · niv. 12 · 03:12</div>
+</div></div>
+<ul class="notes">
+  <li>Titre au tiers haut, la caméra tourne derrière ; <b>les entrées en bas</b>, sous le pouce.</li>
+  <li>Introduction (cartons) : le texte au centre ; « Qui es-tu ? » : l'héroïne en grand, flèches et CHOISIR en bas.</li>
+</ul>
+</section>
+
+</div>
+
+<table class="gestes">
+  <tr><th>Geste</th><th>Montre (aujourd'hui)</th><th>Téléphone (proposé)</th></tr>
+  <tr><td>Toucher le sol</td><td>Sera s'y rend</td><td>Pareil</td></tr>
+  <tr><td>Tourner la caméra</td><td>Glisser le long du bord</td><td>Glisser dans la bande du bas, ou à deux doigts n'importe où</td></tr>
+  <tr><td>Zoom</td><td>Pincer, lunette</td><td>Pincer</td></tr>
+  <tr><td>Parler, entrer, conduire</td><td>Toucher la bulle au-dessus de la cible</td><td>Toucher la bulle, ou le bouton d'action en bas à droite</td></tr>
+  <tr><td>Ouvrir le menu</td><td>Double toucher sur Sera, bouton BOOT</td><td>Bouton ≡ en haut à droite, double toucher sur Sera, geste retour</td></tr>
+  <tr><td>Retour</td><td>Geste ou bouton retour</td><td>Pareil, et la flèche ‹ des sous-menus</td></tr>
+</table>
+</body>
+</html>

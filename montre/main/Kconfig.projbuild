@@ -1,0 +1,173 @@
+menu "Echoes of Ashes"
+
+    choice ECHOES_CARTE
+        prompt "Carte"
+        default ECHOES_CARTE_175C
+        help
+            Broches de l'écran, du tactile et du son (main/board.h), et ce que la carte porte en plus.
+        config ECHOES_CARTE_175C
+            bool "Waveshare ESP32-S3-Touch-AMOLED-1.75C (la montre de l'utilisateur)"
+            help
+                BSP Waveshare esp32_s3_touch_amoled_1_75c : écran QSPI SCLK 38, reset 1, tactile CST9217 (INT 11,
+                RST 2), son MCLK 16, BCLK 9, WS 45, DOUT 8, DIN 10, amplificateur 46 ; flash de 32 Mo ; pas de
+                lecteur de carte SD (broches SD à -1 tant qu'aucun lecteur n'est soudé).
+        config ECHOES_CARTE_175
+            bool "Waveshare ESP32-S3-Touch-AMOLED-1.75 (montre cible)"
+            help
+                Brochage de HARDWARE_REFERENCE.md du dépôt Waveshare de la carte : écran QSPI SCLK 38, reset 39,
+                tactile CST9217 (0x5A, INT 11, RST 40), horloge PCF85063, extenseur TCA9554 (bouton PWR sur P4),
+                son MCLK 42, BCLK 9, WS 45, DOUT 8, amplificateur 46.
+        config ECHOES_CARTE_206
+            bool "Waveshare 2,06\" (carte de test, broches du projet tiny386)"
+            help
+                Écran QSPI SCLK 11, reset 8, alimentation de l'écran 13, tactile FT3168 (INT 38, RST 9).
+    endchoice
+
+    config ECHOES_NATIVE_466
+        bool "Rendu 3D natif 466 x 466 (sans doublement des pixels)"
+        default n
+        help
+            Par défaut la 3D est calculée en 233 x 233 puis doublée, comme prévu par le document de conception.
+            En natif, elle est calculée en 466 x 466 : image plus fine, mais quatre fois plus de pixels à dessiner.
+            L'interface est toujours en 466 x 466.
+
+    config ECHOES_FPS_MAX
+        int "Cadence maximale (images/s, 0 = sans limite)"
+        default 30
+        range 0 60
+        help
+            Une image n'est présentée qu'une période après la précédente : cadence régulière, et le temps
+            gagné laisse les cœurs au repos. Le banc d'essai mesure sans limite.
+
+    config ECHOES_ENFANT
+        bool "Édition enfant (seuls les paquets de l'édition enfant se lancent)"
+        default n
+        help
+            Compile le moteur avec ECHOES_ENFANT : il refuse un paquet qui n'est pas de l'édition enfant (section
+            EDIT, Atelier : onglet Jouer, édition « Enfant »), flashe engine/data/enfant/monde_esp32.pak et lit la
+            carte SD dans /sd/echoes_enfant. Plutôt que de cocher ici : idf_enfant.cmd build (dossier build_enfant,
+            sdkconfig à part), qui laisse l'édition 18+ telle quelle.
+
+    config ECHOES_BANC
+        bool "Banc d'essai au démarrage (quatre positions, mesures en console)"
+        default n
+        help
+            Au démarrage, Sera visite quatre endroits du monde (départ, ville, centre, sud-est) ; pour
+            chacun, la console donne une ligne BANC avec les temps et les compteurs, puis le jeu reprend.
+
+    config ECHOES_LCD_MHZ
+        int "Horloge QSPI de l'écran (MHz)"
+        default 80
+        range 20 80
+
+    config ECHOES_SD_CLK
+        int "Carte SD : broche CLK (-1 : pas de lecteur)"
+        default -1 if ECHOES_CARTE_175C
+        default 2
+    config ECHOES_SD_CMD
+        int "Carte SD : broche CMD"
+        default -1 if ECHOES_CARTE_175C
+        default 1
+    config ECHOES_SD_D0
+        int "Carte SD : broche D0"
+        default -1 if ECHOES_CARTE_175C
+        default 3
+    config ECHOES_SD_D1
+        int "Carte SD : broche D1 (-1 : bus d'un bit)"
+        default -1
+        help
+            Avec D1, D2 et D3, la carte est lue sur 4 bits (quatre fois plus vite). 1,75" C, lecteur soudé sur le
+            connecteur du dos : CLK 39, CMD 40, D0 18, D1 17, D2 42, D3 41 (10 kΩ vers 3V3 sur CMD et D0 à D3).
+    config ECHOES_SD_D2
+        int "Carte SD : broche D2"
+        default -1
+    config ECHOES_SD_D3
+        int "Carte SD : broche D3"
+        default -1
+    config ECHOES_WIFI_SSID
+        string "Mode Transfert : réseau Wi-Fi (sinon celui que donne envoi_sd.py --wifi)"
+        default ""
+    config ECHOES_WIFI_MDP
+        string "Mode Transfert : mot de passe du Wi-Fi"
+        default ""
+    config ECHOES_BLE_CODE
+        string "Mode Transfert : code à taper dans l'app ESP BLE Provisioning (preuve de possession)"
+        default "echoes"
+    config ECHOES_FUSEAU
+        string "Mode Transfert : fuseau horaire de l'heure NTP (règle POSIX TZ)"
+        default "CET-1CEST,M3.5.0,M10.5.0/3"
+    config ECHOES_SERVEUR_PORT
+        int "Mode Transfert : port du serveur de l'Atelier (recherche UDP « ECHOES? »)"
+        default 8080
+    config ECHOES_SD_RAPIDE
+        bool "Carte SD : 40 MHz (haute vitesse) au lieu de 20"
+        default n
+        help
+            Fils courts (5 cm au plus) ; si la carte n'est plus vue ou que les lectures échouent, revenir à 20 MHz.
+
+    config ECHOES_BOOT_GPIO
+        int "Bouton BOOT (ouvre le menu)"
+        default 0
+
+    config ECHOES_AUDIO
+        bool "Son (codec ES8311 et I2S)"
+        default y
+        help
+            Sons du jeu sur le haut-parleur. Broches par défaut selon la carte : 1,75" MCLK 42, BCLK 9, WS 45,
+            DOUT 8 ; 2,06" (projet tiny386) MCLK 16, BCLK 41, WS 45, DOUT 40 ; amplificateur sur 46 pour les deux.
+
+    config ECHOES_VOLUME
+        int "Son : volume au démarrage (%)"
+        range 0 100
+        default 100
+        depends on ECHOES_AUDIO
+        help
+            Volume général au démarrage, à la place de celui du paquet (onglet Sons de l'Atelier) ; le menu Système
+            le change ensuite. Utile sans écran pour le régler.
+
+    config ECHOES_I2S_MCLK
+        int "Son : broche MCLK"
+        default 42 if ECHOES_CARTE_175
+        default 16
+        depends on ECHOES_AUDIO
+    config ECHOES_I2S_BCLK
+        int "Son : broche BCLK"
+        default 9 if ECHOES_CARTE_175 || ECHOES_CARTE_175C
+        default 41
+        depends on ECHOES_AUDIO
+    config ECHOES_I2S_WS
+        int "Son : broche WS (LRCK)"
+        default 45
+        depends on ECHOES_AUDIO
+    config ECHOES_I2S_DOUT
+        int "Son : broche DOUT"
+        default 8 if ECHOES_CARTE_175 || ECHOES_CARTE_175C
+        default 40
+        depends on ECHOES_AUDIO
+    config ECHOES_PA_GPIO
+        int "Son : activation de l'amplificateur"
+        default 46
+        depends on ECHOES_AUDIO
+
+    config ECHOES_VEILLE_S
+        int "Veille : après tant de secondes sans toucher l'écran ni les boutons (0 = jamais)"
+        default 120
+        range 0 3600
+        help
+            La partie est sauvegardée (si le moment s'y prête : pas en combat, en course ni en scène), l'écran
+            s'éteint, le son se coupe. Sur batterie, veille légère (RAM et PSRAM gardées, la partie reprend où elle
+            en était) ; branchée en USB, l'écran seulement s'éteint (la copie par l'USB reste possible). Réveil : le
+            bouton BOOT, l'écran touché, ou PWR (1,75"). Aussi : appui long sur BOOT, appui court sur PWR.
+    config ECHOES_VEILLE_ATTENUER_S
+        int "Veille : l'écran baisse tant de secondes avant"
+        default 10
+        range 0 60
+    config ECHOES_BATTERIE_MIN
+        int "Batterie : sauvegarde et extinction en dessous de (%)"
+        default 3
+        range 0 30
+        help
+            Sur batterie (sans USB), mesurée par l'AXP2101 (tension de 3,3 à 4,15 V, comme le projet tiny386) :
+            sous ce seuil, la partie est sauvegardée et l'AXP2101 coupe l'alimentation. 0 : jamais.
+
+endmenu
