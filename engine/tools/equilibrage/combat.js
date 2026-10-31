@@ -116,4 +116,8 @@ function winRate(team, L, nom, potions, n = 400, style = 'bon', equip = null) {
   return { p: w / n, t: w ? t / w : 0, pot: w ? pot / w : 0 };
 }
 // Plus petit niveau où la victoire passe un seuil
-function levelFor(team, nom, potions, seuil, st
+function levelFor(team, nom, potions, seuil, style = 'bon', equip = null) {
+  for (let L = 1; L <= 99; L++) if (winRate(team, L, nom, potions, 300, style, equip).p >= seuil) return L;
+  return '>99';
+}
+module.exports = { W, BASE, member, battle, winRate, levelFor, ENNEMIS, exp_next, exp_of, credits_of, rand };

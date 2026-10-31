@@ -7,6 +7,23 @@ Android (Wear OS watch and phone).
 This repository holds the engine, the watch firmware and the **safe edition** of the game world. Code comments and
 most notes are in French.
 
+## Screenshots
+
+Captured at the watch's native resolution (466 × 466), interface included.
+
+<p align="center">
+  <img src="screenshots/city.png" width="210" alt="A street of Lucerne, the shop entrance">
+  <img src="screenshots/shop.png" width="210" alt="Inside a shop">
+  <img src="screenshots/battle-commands.png" width="210" alt="Battle: the command fan">
+  <img src="screenshots/battle-target.png" width="210" alt="Battle: targeting the Sentinel">
+</p>
+<p align="center">
+  <img src="screenshots/race-start.png" width="210" alt="Race start, lights on">
+  <img src="screenshots/race.png" width="210" alt="Racing on the neon circuit">
+  <img src="screenshots/menu-items.png" width="210" alt="Items menu">
+  <img src="screenshots/watch-lock.png" width="210" alt="The watch's lock screen">
+</p>
+
 ## Contents
 
 | Folder | What |
