@@ -7,6 +7,17 @@ Android (Wear OS watch and phone).
 This repository holds the engine, the watch firmware and the **safe edition** of the game world. Code comments and
 most notes are in French.
 
+## Play
+
+Standalone builds of the safe edition are in the [release of 1 November 2026](https://github.com/Nerobeus/echoes-of-ashes/releases/tag/android-2026-11-01).
+Nothing to install and no server: everything is inside the file.
+
+- **PC**: [`le-choeur-des-cendres-pc-2026-11-01.html`](https://github.com/Nerobeus/echoes-of-ashes/releases/download/android-2026-11-01/le-choeur-des-cendres-pc-2026-11-01.html)
+  (137 MB), a single web page to open in a recent Chrome, Edge, Firefox or Safari. Mouse and keyboard (ZQSD or WASD,
+  arrows, Enter, Escape, M for the menu, H for the help); vehicles are driven with an on-screen joystick or the keyboard.
+- **Android phone**: [`le-choeur-des-cendres-android-2026-11-01.apk`](https://github.com/Nerobeus/echoes-of-ashes/releases/download/android-2026-11-01/le-choeur-des-cendres-android-2026-11-01.apk)
+  (241 MB, Android 9 or later).
+
 ## Screenshots
 
 Rendered by the current engine (1 November 2026) at the watch's native resolution (466 × 466), interface included.
