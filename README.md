@@ -17,6 +17,10 @@ Nothing to install and no server: everything is inside the file.
   arrows, Enter, Escape, M for the menu, H for the help); vehicles are driven with an on-screen joystick or the keyboard.
 - **Android phone**: [`le-choeur-des-cendres-android-2026-11-01.apk`](https://github.com/Nerobeus/echoes-of-ashes/releases/download/android-2026-11-01/le-choeur-des-cendres-android-2026-11-01.apk)
   (241 MB, Android 9 or later).
+- **Wear OS watch**: [`le-choeur-des-cendres-wearos-2026-11-01.apk`](https://github.com/Nerobeus/echoes-of-ashes/releases/download/android-2026-11-01/le-choeur-des-cendres-wearos-2026-11-01.apk)
+  (240 MB, Wear OS 3 or later).
+
+How to install the APKs on a phone or a watch: [Installing on Android](https://github.com/Nerobeus/echoes-of-ashes/wiki/Installing-on-Android).
 
 ## Screenshots
 
