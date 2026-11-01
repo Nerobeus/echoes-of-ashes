@@ -1,6 +1,6 @@
-# Echoes of Ashes
+# Le Chœur des Cendres
 
-A PS1-style RPG (textured 3D terrain, 2D sprite characters) running on a round smartwatch: the Waveshare
+*Formerly Echoes of Ashes.* A PS1-style RPG (textured 3D terrain, 2D sprite characters) running on a round smartwatch: the Waveshare
 ESP32-S3-Touch-AMOLED-1.75C (466 × 466 AMOLED). The same C99 engine also builds for the web (WebAssembly) and for
 Android (Wear OS watch and phone).
 
@@ -9,19 +9,31 @@ most notes are in French.
 
 ## Screenshots
 
-Captured at the watch's native resolution (466 × 466), interface included.
+Rendered by the current engine (1 November 2026) at the watch's native resolution (466 × 466), interface included.
 
+<p align="center"><img src="screenshots/article/00_banniere.png" width="860" alt="Title screen, Lucerne at night, a race, a battle"></p>
 <p align="center">
-  <img src="screenshots/city.png" width="210" alt="A street of Lucerne, the shop entrance">
-  <img src="screenshots/shop.png" width="210" alt="Inside a shop">
-  <img src="screenshots/battle-commands.png" width="210" alt="Battle: the command fan">
-  <img src="screenshots/battle-target.png" width="210" alt="Battle: targeting the Sentinel">
+  <img src="screenshots/article/01_ecran_titre.png" width="210" alt="Title screen">
+  <img src="screenshots/article/03_choix_heroine.png" width="210" alt="Choosing the heroine">
+  <img src="screenshots/article/04_lucerne_jour.png" width="210" alt="A street of Lucerne">
+  <img src="screenshots/article/05_lucerne_nuit.png" width="210" alt="Lucerne at night">
 </p>
 <p align="center">
-  <img src="screenshots/race-start.png" width="210" alt="Race start, lights on">
-  <img src="screenshots/race.png" width="210" alt="Racing on the neon circuit">
-  <img src="screenshots/menu-items.png" width="210" alt="Items menu">
-  <img src="screenshots/watch-lock.png" width="210" alt="The watch's lock screen">
+  <img src="screenshots/article/06_phares.png" width="210" alt="Driving at night, headlights on">
+  <img src="screenshots/article/07_boutique.png" width="210" alt="Inside a shop">
+  <img src="screenshots/article/08_camp_des_friches.png" width="210" alt="A camp in the Wastes">
+  <img src="screenshots/article/09_neige.png" width="210" alt="Snow on the peaks">
+</p>
+<p align="center">
+  <img src="screenshots/article/10_pluie_de_cendre.png" width="210" alt="Ash rain in the city">
+  <img src="screenshots/article/11_combat_entree.png" width="210" alt="Battle intro">
+  <img src="screenshots/article/12_combat_commandes.png" width="210" alt="Battle: the command fan">
+  <img src="screenshots/article/13_course_depart.png" width="210" alt="Race start">
+</p>
+<p align="center">
+  <img src="screenshots/article/14_course_boost.png" width="210" alt="Racing on the neon circuit, boost">
+  <img src="screenshots/article/15_menu.png" width="210" alt="The ring menu">
+  <img src="screenshots/article/02_introduction.png" width="210" alt="Prologue card">
 </p>
 
 ## Contents
