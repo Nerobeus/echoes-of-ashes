@@ -9,16 +9,16 @@ most notes are in French.
 
 ## Play
 
-Standalone builds of the safe edition are in the [release of 1 November 2026](https://github.com/Nerobeus/echoes-of-ashes/releases/tag/android-2026-11-01).
+Standalone builds of the safe edition are in the [release of 8 November 2026](https://github.com/Nerobeus/echoes-of-ashes/releases/tag/android-2026-11-08).
 Nothing to install and no server: everything is inside the file.
 
-- **PC**: [`le-choeur-des-cendres-pc-2026-11-01.html`](https://github.com/Nerobeus/echoes-of-ashes/releases/download/android-2026-11-01/le-choeur-des-cendres-pc-2026-11-01.html)
-  (137 MB), a single web page to open in a recent Chrome, Edge, Firefox or Safari. Mouse and keyboard (ZQSD or WASD,
+- **PC**: [`le-choeur-des-cendres-pc-2026-11-08.html`](https://github.com/Nerobeus/echoes-of-ashes/releases/download/android-2026-11-08/le-choeur-des-cendres-pc-2026-11-08.html)
+  (152 MB), a single web page to open in a recent Chrome, Edge, Firefox or Safari. Mouse and keyboard (ZQSD or WASD,
   arrows, Enter, Escape, M for the menu, H for the help); vehicles are driven with an on-screen joystick or the keyboard.
-- **Android phone**: [`le-choeur-des-cendres-android-2026-11-01.apk`](https://github.com/Nerobeus/echoes-of-ashes/releases/download/android-2026-11-01/le-choeur-des-cendres-android-2026-11-01.apk)
-  (241 MB, Android 9 or later).
-- **Wear OS watch**: [`le-choeur-des-cendres-wearos-2026-11-01.apk`](https://github.com/Nerobeus/echoes-of-ashes/releases/download/android-2026-11-01/le-choeur-des-cendres-wearos-2026-11-01.apk)
-  (240 MB, Wear OS 3 or later).
+- **Android phone**: [`le-choeur-des-cendres-android-2026-11-08.apk`](https://github.com/Nerobeus/echoes-of-ashes/releases/download/android-2026-11-08/le-choeur-des-cendres-android-2026-11-08.apk)
+  (261 MB, Android 9 or later).
+- **Wear OS watch**: [`le-choeur-des-cendres-wearos-2026-11-08.apk`](https://github.com/Nerobeus/echoes-of-ashes/releases/download/android-2026-11-08/le-choeur-des-cendres-wearos-2026-11-08.apk)
+  (259 MB, Wear OS 3 or later).
 
 How to install the APKs on a phone or a watch: [Installing on Android](https://github.com/Nerobeus/echoes-of-ashes/wiki/Installing-on-Android).
 
@@ -71,7 +71,7 @@ this repository; `engine/data` only holds its output.
 
 ## Getting the data
 
-The world files are stored with Git LFS (the world is 169 MB):
+The world files are stored with Git LFS (the world is 224 MB):
 
 ```
 git lfs install
@@ -83,11 +83,12 @@ git clone https://github.com/Nerobeus/echoes-of-ashes.git
 All builds use the safe edition through their `--enfant` / `_enfant` variants:
 
 - **Web**: `node engine/tools/build_web.js --enfant` (C compiled with Zig: `python -m ziglang cc`) gives
-  `engine/build/moteur_enfant.html`.
+  `engine/build/moteur_enfant.html`; `--pc --enfant` gives the standalone PC page, `engine/build/choeur_pc_enfant.html`.
 - **Watch**: ESP-IDF 5.2.3, `engine/platform/esp32/idf_enfant.cmd build`; the world goes on the SD card
   (`/sd/echoes_enfant/`), the light package (`monde_esp32.pak`) in flash. The watch uses a partition table shared with
   other apps (`montre/partitions.csv`) and is flashed with `montre/flasher.py`.
-- **Android**: `node engine/tools/build_android.js --enfant` (Android NDK, no Gradle).
+- **Android**: `node engine/tools/build_android.js --telephone --enfant --autonome` for the phone, `--montre` instead of
+  `--telephone` for a Wear OS watch (Android NDK, no Gradle; `--autonome`: world and music inside the APK).
 
 ## Licence
 
