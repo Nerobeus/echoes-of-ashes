@@ -19,7 +19,7 @@
 #include "internal.h"
 #include "audio.h"
 
-#define PISTES_MAX 8
+#define PISTES_MAX 24   /* 8 avant le mode course (01/11/2026), 16 avant les catégories (03/11/2026) : les onze circuits de la carrière, en plus des tracés du grand circuit */
 #define COURSE_V 1.0f      /* vitesse en course : celle du véhicule × COURSE_V (la vitesse maxi de l'atelier telle quelle) */
 #define COURSE_R 0.42f     /* rayon d'un concurrent (cases) */
 #define COURSE_FEUX 0.8f   /* un feu de plus toutes les COURSE_FEUX s, départ au quatrième temps */
@@ -45,46 +45,86 @@ typedef struct { const char *nom; float grip, v, spin; int pous; } surface_t;
 static const surface_t SURF[5] = { { "ASPHALTE", 5, 1, 0.7f, 0 }, { "LASER", 5.5f, 1.08f, 0.7f, 0 }, { "GLACE", 1.5f, 1, 1.2f, 0 },
                                    { "GRAVIER", 3.2f, 0.86f, 0.85f, 1 }, { "TERRE", 3, 0.9f, 0.85f, 1 } };
 static const surface_t *surf(void) { return &SURF[PISTE.surface >= 0 && PISTE.surface < 5 ? PISTE.surface : 0]; }
+/* Surface sous un concurrent : celle du point de son segment (circuits dessinés de la carrière : SF), sinon celle de la piste */
+static const surface_t *surf_de(int seg) {
+    const int s = PISTE.SF && PISTE.n ? PISTE.SF[(seg % PISTE.n + PISTE.n) % PISTE.n] : -1;
+    return s >= 0 && s < 5 ? &SURF[s] : surf();
+}
 const char *course_surface_nom(void) { return surf()->nom; }
 
-static piste_t PISTES[PISTES_MAX];
+static piste_t PISTES[PISTES_MAX] ENG_FROID;   /* (en PSRAM sur l'ESP32 : la SRAM est comptée ; la piste active est copiée dans PISTE) */
 static int npistes, actif = -1;   /* actif : index de PISTE dans PISTES */
 piste_t PISTE;
-course_t CR;
+course_t CR ENG_FROID;   /* en PSRAM (08/11/2026 : la SRAM interne va aux tampons d'envoi à l'écran) */
 
 static inline float rdf(const uint8_t *p) { float f; memcpy(&f, p, 4); return f; }
 static inline uint32_t rd32(const uint8_t *p) { return (uint32_t)p[0] | p[1] << 8 | p[2] << 16 | (uint32_t)p[3] << 24; }
 
 /* PIS2 : nombre u32, puis pour chaque piste : points u32, demi-largeur f32 (chaussée), tours u8, bandes de gravier en
-   1/10 de case u8, surface u8, 0, point de départ u32, points (x, y, z) f32, un u8 par point (1 : sur un pont), complétés à
+   1/10 de case u8, surface u8, carte u8 (0 la planète ; les cartes de course de la carrière), point de départ u32, points
+   (x, y, z) f32, un u8 par point (bit 0 : sur un pont ; bits 4 à 6 : sa surface + 1, 0 : celle de la piste), complétés à
    4 octets, puis les plaques : nombre u32, 4 octets chacune (point u16, écart i8 en 1/10 de case, sorte u8). Axe,
-   hauteurs et abscisses copiés en mémoire (E.cfg.alloc) */
+   hauteurs, abscisses, ponts et surfaces copiés en mémoire (E.cfg.alloc, au démarrage) */
+/* Axes en mémoire (01/11/2026, mode course : six pistes de plus sur les cartes de course) : seules les pistes de la carte
+   où est Sera ont leur axe, leurs abscisses, ponts et surfaces dans un tampon commun, réservé au démarrage à la taille de
+   la carte qui en demande le plus (la planète et son grand circuit) ; course_carte les y recopie depuis le paquet quand
+   la carte change (world_carte). Les autres gardent leur en-tête (n, carte, départ, emprise, plaques, nom), X… à NULL */
+static const uint8_t *axe_src[PISTES_MAX];
+static uint8_t *axe_buf;
+static int axe_carte = -1, axe_sf[PISTES_MAX];
+static uint32_t axe_taille(int k) { const uint32_t n = (uint32_t)PISTES[k].n; return ((uint32_t)sizeof(float) * (4 * n + 1) + n + (axe_sf[k] ? n : 0) + 3) & ~3u; }
+void course_carte(int c) {
+    if (c == axe_carte || !axe_buf) return;
+    uint32_t o = 0;
+    for (int k = 0; k < npistes; k++) {
+        piste_t *P = &PISTES[k];
+        if (P->carte != c) { P->X = P->Y = P->Z = P->S = NULL; P->PB = P->SF = NULL; continue; }
+        const uint8_t *q = axe_src[k];
+        const int n = P->n;
+        float *X = (float *)(axe_buf + o), *Y = X + n, *Z = X + 2 * n, *S = X + 3 * n;
+        uint8_t *PB = (uint8_t *)(X + 4 * n + 1), *SF = axe_sf[k] ? PB + n : NULL;
+        for (int i = 0; i < n; i++) {
+            X[i] = rdf(q + 16 + i * 12); Y[i] = rdf(q + 20 + i * 12); Z[i] = rdf(q + 24 + i * 12);
+            const uint8_t b = q[16 + n * 12 + i];
+            PB[i] = b & 15;
+            if (SF) SF[i] = (uint8_t)((b >> 4 & 7) ? (b >> 4 & 7) - 1 : P->surface);
+        }
+        S[0] = 0;
+        for (int i = 1; i <= n; i++) S[i] = S[i - 1] + hypotf(X[i % n] - X[i - 1], Z[i % n] - Z[i - 1]);
+        P->X = X; P->Y = Y; P->Z = Z; P->S = S; P->PB = PB; P->SF = SF; P->L = S[n];
+        o += axe_taille(k);
+    }
+    axe_carte = c;
+    if (actif >= 0 && PISTES[actif].carte == c) PISTE = PISTES[actif];
+    else { actif = -1; memset(&PISTE, 0, sizeof PISTE); }   /* la piste active était sur une autre carte */
+}
 void course_load(const uint8_t *p, uint32_t size) {
     memset(&PISTE, 0, sizeof PISTE); memset(&CR, 0, sizeof CR); memset(PISTES, 0, sizeof PISTES); npistes = 0; actif = -1;
+    axe_buf = NULL; axe_carte = -1;
     if (!p || size < 4) return;
     const uint32_t count = rd32(p);
-    uint32_t o = 4;
+    uint32_t o = 4, besoin[MAX_CARTES] = { 0 };
     for (uint32_t k = 0; k < count && npistes < PISTES_MAX && o + 16 <= size; k++) {
         const uint32_t n = rd32(p + o);
         uint32_t len = 16 + n * 12 + ((n + 3) & ~3u);
         if (n < 4 || o + len > size) break;
         piste_t *P = &PISTES[npistes];
-        float *mem = E.cfg.alloc ? E.cfg.alloc(sizeof(float) * (4 * n + 1) + n, 0) : NULL;
-        if (!mem) break;
-        float *X = mem, *Y = mem + n, *Z = mem + 2 * n, *S = mem + 3 * n;
-        uint8_t *PB = (uint8_t *)(mem + 4 * n + 1);
-        P->hw = rdf(p + o + 4); P->tours = p[o + 8] ? p[o + 8] : 3; P->bande = p[o + 9] / 10.0f; P->surface = p[o + 10]; P->dep = (int)(rd32(p + o + 12) % n);
+        P->hw = rdf(p + o + 4); P->tours = p[o + 8] ? p[o + 8] : 3; P->bande = p[o + 9] / 10.0f; P->surface = p[o + 10];
+        P->carte = p[o + 11] < MAX_CARTES ? p[o + 11] : 0; P->dep = (int)(rd32(p + o + 12) % n); P->n = (int)n;
         if (!(P->hw > 0.5f && P->hw < 20)) P->hw = 2;
         P->x0 = P->z0 = 1e9f; P->x1 = P->z1 = -1e9f;
+        int sf = 0;
+        float L = 0;
         for (uint32_t i = 0; i < n; i++) {
-            X[i] = rdf(p + o + 16 + i * 12); Y[i] = rdf(p + o + 20 + i * 12); Z[i] = rdf(p + o + 24 + i * 12);
-            PB[i] = p[o + 16 + n * 12 + i];
-            P->x0 = fminf(P->x0, X[i]); P->x1 = fmaxf(P->x1, X[i]);
-            P->z0 = fminf(P->z0, Z[i]); P->z1 = fmaxf(P->z1, Z[i]);
+            const float x = rdf(p + o + 16 + i * 12), z = rdf(p + o + 24 + i * 12), xs = rdf(p + o + 16 + ((i + 1) % n) * 12), zs = rdf(p + o + 24 + ((i + 1) % n) * 12);
+            P->x0 = fminf(P->x0, x); P->x1 = fmaxf(P->x1, x); P->z0 = fminf(P->z0, z); P->z1 = fmaxf(P->z1, z);
+            L += hypotf(xs - x, zs - z);
+            sf |= p[o + 16 + n * 12 + i] >> 4 & 7;
         }
-        S[0] = 0;
-        for (uint32_t i = 1; i <= n; i++) S[i] = S[i - 1] + hypotf(X[i % n] - X[i - 1], Z[i % n] - Z[i - 1]);
-        P->X = X; P->Y = Y; P->Z = Z; P->S = S; P->PB = PB; P->L = S[n]; P->n = (int)n;
+        P->L = L;
+        P->xd = rdf(p + o + 16 + (uint32_t)P->dep * 12); P->zd = rdf(p + o + 24 + (uint32_t)P->dep * 12);   /* ligne de départ */
+        axe_src[npistes] = p + o; axe_sf[npistes] = sf != 0;
+        besoin[P->carte] += axe_taille(npistes);
         if (o + len + 4 <= size) {   /* plaques */
             const uint32_t m = rd32(p + o + len);
             if (o + len + 4 + m * 4 <= size) { P->plaques = p + o + len + 4; P->nplaques = (int)m; len += 4 + m * 4; }
@@ -92,8 +132,12 @@ void course_load(const uint8_t *p, uint32_t size) {
         npistes++;
         o += len;
     }
-    if (npistes) PISTE = PISTES[0];
-    actif = npistes ? 0 : -1;
+    uint32_t cap = 0;
+    for (int c = 0; c < MAX_CARTES; c++) if (besoin[c] > cap) cap = besoin[c];
+    if (!npistes || !E.cfg.alloc || !(axe_buf = E.cfg.alloc(cap, 0))) { npistes = 0; return; }
+    actif = 0;
+    for (int k = 0; k < npistes; k++) if (PISTES[k].carte == 0) { actif = k; break; }
+    course_carte(0);
 }
 
 /* PNOM : noms des tracés (menu de course) : nombre u32, puis 24 octets par piste (UTF-8 complété de 0) */
@@ -109,24 +153,26 @@ int course_npistes(void) { return npistes; }
 const piste_t *course_piste(int k) { return k >= 0 && k < npistes ? &PISTES[k] : NULL; }
 int course_piste_active(void) { return actif; }
 void course_trace(int k) { if (k >= 0 && k < npistes && !CR.on) { PISTE = PISTES[k]; actif = k; } }
-/* Tracés d'un même circuit (js/circuit.js : boucle et raccourcis, sens inverse) : les pistes dont la ligne de départ
-   est à moins de 8 cases de celle de la piste active */
+/* Tracés d'un même circuit (js/circuit.js : boucle et raccourcis, sens inverse) : les pistes de la même carte dont la
+   ligne de départ est à moins de 8 cases de celle de la piste active */
 int course_traces(int *out) {
     int n = 0;
     if (actif < 0) return 0;
     for (int k = 0; k < npistes; k++) {
         const piste_t *P = &PISTES[k];
-        if (hypotf(P->X[P->dep] - PISTE.X[PISTE.dep], P->Z[P->dep] - PISTE.Z[PISTE.dep]) < 8) out[n++] = k;
+        if (P->carte == PISTE.carte && hypotf(P->X[P->dep] - PISTE.X[PISTE.dep], P->Z[P->dep] - PISTE.Z[PISTE.dep]) < 8) out[n++] = k;
     }
     return n;
 }
 
-/* La piste la plus proche de (x, z) (distance à sa ligne de départ) devient la piste active */
+/* La piste la plus proche de (x, z) (distance à sa ligne de départ), sur la carte où est Sera, devient la piste active ;
+   0 : aucune sur cette carte */
 int course_choisir(float x, float z) {
     int best = -1;
     float bd = 1e30f;
     for (int k = 0; k < npistes; k++) {
         const piste_t *P = &PISTES[k];
+        if (P->carte != E.w.carte) continue;
         const float d = hypotf(P->X[P->dep] - x, P->Z[P->dep] - z);
         if (d < bd) { bd = d; best = k; }
     }
@@ -186,7 +232,7 @@ float course_alt_joueur(void) {
 /* Drapeau : en véhicule, arrêté à moins de 3 cases de la ligne */
 int course_ok(void) {
     if (!npistes || CR.on || E.ride < 0 || E.ride_phase || BT.on || E.ui_block || fabsf(E.ride_v) > 0.3f) return 0;
-    course_choisir(E.sera.x, E.sera.z);
+    if (!course_choisir(E.sera.x, E.sera.z)) return 0;   /* aucune piste sur cette carte */
     float x, z;
     piste_pt(0, 0, &x, &z, NULL);
     return hypotf(E.sera.x - x, E.sera.z - z) < PISTE.hw + 3;
@@ -196,7 +242,172 @@ int course_ok(void) {
    course), chacun avec son adhérence (VEH2) et la vitesse du véhicule du joueur fois son niveau. Le véhicule du joueur : celui qu'il conduit s'il est du personnage voulu, sinon un
    exemplaire amené sur la grille (l'autre reste où il est) ; altitude imposée, la même pour tous.
    Niveau (0 facile, 1 normal, 2 difficile) : vitesse des adversaires, part de celle du joueur, du premier au dernier. */
+/* Classe de la course suivante (carrière, carriere.c ; courseClasse de l'émulateur) : prise une fois par course_start.
+   Tous à la vitesse de leur véhicule × v ; les adversaires à v_rivaux (cases/s) × v × leur niveau, avec leur accélération */
+static float classe_v, classe_riv;
+static int joueur_ia;   /* essais (rendu_test : tour de référence de la carrière) : le joueur piloté par pilote() */
+void course_joueur_ia(int on) { joueur_ia = on; }
+void course_classe(float v, float v_rivaux) { classe_v = v; classe_riv = v_rivaux; }
+static int sorte_suiv;   /* épreuve de la course suivante (carrière) : prise une fois */
+void course_sorte(int s) { sorte_suiv = s >= 0 && s < CS_N ? s : CS_COURSE; }
+
+/* ---------- Fantôme du contre-la-montre (01/11/2026, étape 2 ; courseFantome de l'émulateur, à garder identiques) ----------
+   Le parcours du joueur est relevé toutes les FANT_DT s de course (position interpolée à cet instant entre deux images) :
+   x, z (1/32 de case), hauteur de la piste ((y + 64) × 64), progression ((prog + 8) × 8), cap du sprite (256 pas), image et marche ;
+   10 octets par relevé, FANT_MAX relevés (200 s). Fichier (save_write, emplacement CARR_FANT0 + circuit × CARR_CLASSES +
+   classe, environ 10 Ko pour deux minutes) : 'EFT1', relevés u16, personnage u16, palette, classe, circuit, 0, temps
+   (1/100 s) u32, les relevés, CRC-32. Le relevé en cours et le fantôme rejoué sont dans le tampon commun (img_emprunter,
+   TC_FANTOME), le temps de la course : rien de réservé pendant le jeu */
+#define FANT_DT 0.125f
+#define FANT_MAX 1600
+#define FANT_OCT (16 + FANT_MAX * 10 + 4)
+#define FANT_MAGIC 0x31544645u   /* 'EFT1' */
+static struct {
+    uint8_t *rec, *play;          /* relevé en cours, fantôme rejoué (dans le tampon commun) */
+    int pris, gen, rec_n, play_n, ok;
+    float pt, px, py, pz, pprog, pvis;   /* image précédente du joueur (interpolation des relevés) */
+    fantome_t vue;
+} FT;
+uint32_t course_fantome_taille(void) { return 2 * FANT_OCT; }
+void course_fantome_perdu(void) { FT.pris = 0; FT.rec = FT.play = NULL; FT.ok = 0; FT.vue.on = 0; }
+static void fant_rendre(void) { if (FT.pris) img_rendre(TC_FANTOME); course_fantome_perdu(); }
+static int fant_prendre(void) {
+    uint8_t *b = img_emprunter(TC_FANTOME, 2 * FANT_OCT);
+    if (!b) return 0;
+    FT.rec = b; FT.play = b + FANT_OCT; FT.pris = 1; FT.gen++; FT.rec_n = FT.play_n = 0; FT.ok = 0; FT.vue.on = 0; FT.pt = -1;
+    return 1;
+}
+static inline void wr16(uint8_t *p, uint32_t v) { p[0] = (uint8_t)v; p[1] = (uint8_t)(v >> 8); }
+static inline void wr32(uint8_t *p, uint32_t v) { wr16(p, v & 0xFFFF); wr16(p + 2, v >> 16); }
+static inline uint16_t rd16c(const uint8_t *p) { return (uint16_t)(p[0] | p[1] << 8); }
+static uint32_t fant_crc(const uint8_t *p, int n) {
+    uint32_t c = 0xFFFFFFFFu;
+    for (int i = 0; i < n; i++) { c ^= p[i]; for (int k = 0; k < 8; k++) c = (c >> 1) ^ (0xEDB88320u & -(c & 1)); }
+    return ~c;
+}
+static int q16(float v, float k, float o) { const long q = lroundf((v + o) * k); return q < 0 ? 0 : q > 65535 ? 65535 : (int)q; }
+/* Relevé k à l'instant k × FANT_DT, entre l'image précédente (FT.p*) et celle-ci */
+static void fant_relever(const racer_t *j) {
+    if (!FT.pris || CR.sorte != CS_CLM || j->fin >= 0 || CR.phase != CP_COURSE) { FT.pt = -1; return; }
+    if (FT.pt < 0) { FT.pt = CR.t; FT.px = j->x; FT.py = j->y; FT.pz = j->z; FT.pprog = j->prog; FT.pvis = j->vis; }
+    while (FT.rec_n < FANT_MAX && FT.rec_n * FANT_DT <= CR.t) {
+        const float tk = FT.rec_n * FANT_DT, f = CR.t > FT.pt ? (tk - FT.pt) / (CR.t - FT.pt) : 1;
+        const float fc = f < 0 ? 0 : f > 1 ? 1 : f, dv = atan2f(sinf(j->vis - FT.pvis), cosf(j->vis - FT.pvis));
+        uint8_t *s = FT.rec + 16 + FT.rec_n * 10;
+        wr16(s, (uint32_t)q16(FT.px + (j->x - FT.px) * fc, 32, 0)); wr16(s + 2, (uint32_t)q16(FT.pz + (j->z - FT.pz) * fc, 32, 0));
+        wr16(s + 4, (uint32_t)q16(FT.py + (j->y - FT.py) * fc, 64, 64));
+        wr16(s + 6, (uint32_t)q16(FT.pprog + (j->prog - FT.pprog) * fc, 8, 8));
+        const float a = FT.pvis + dv * fc;
+        s[8] = (uint8_t)((int)lroundf(a * 256 / (2 * PI_F)) & 255); s[9] = (uint8_t)((j->walking ? 128 : 0) | (j->frame & 127));
+        FT.rec_n++;
+    }
+    FT.pt = CR.t; FT.px = j->x; FT.py = j->y; FT.pz = j->z; FT.pprog = j->prog; FT.pvis = j->vis;
+}
+/* Position du fantôme à l'instant t de la course (rien après son dernier relevé) */
+static void fant_rejouer(float t) {
+    FT.vue.on = 0;
+    if (!FT.ok || FT.play_n < 2 || t < 0) return;
+    const float u = t / FANT_DT;
+    const int i = (int)floorf(u);
+    if (i + 1 >= FT.play_n) return;
+    const float f = u - i;
+    const uint8_t *a = FT.play + 16 + i * 10, *b = a + 10;
+    FT.vue.x = (rd16c(a) + (rd16c(b) - rd16c(a)) * f) / 32.0f; FT.vue.z = (rd16c(a + 2) + (rd16c(b + 2) - rd16c(a + 2)) * f) / 32.0f;
+    FT.vue.y = (rd16c(a + 4) + (rd16c(b + 4) - rd16c(a + 4)) * f) / 64.0f - 64;
+    const int da = (int8_t)(uint8_t)(b[8] - a[8]);
+    FT.vue.vis = (a[8] + da * f) * (2 * PI_F / 256);
+    FT.vue.walking = (uint8_t)(a[9] >> 7); FT.vue.frame = (uint8_t)(a[9] & 127);
+    FT.vue.on = 1;
+}
+const fantome_t *course_fantome(void) { return FT.vue.on && CR.on ? &FT.vue : NULL; }
+int course_fantome_ok(void) { return FT.ok; }
+float course_fantome_temps(void) { return FT.ok ? (FT.play[12] | FT.play[13] << 8 | FT.play[14] << 16 | (uint32_t)FT.play[15] << 24) / 100.0f : 0; }
+int course_fantome_lire(int slot) {
+    FT.ok = 0; FT.play_n = 0;
+    if (!FT.pris || !E.cfg.save_read) return 0;
+    const int n = E.cfg.save_read(slot, FT.play, FANT_OCT);
+    if (n < 20 || (FT.play[0] | FT.play[1] << 8 | FT.play[2] << 16 | (uint32_t)FT.play[3] << 24) != FANT_MAGIC) return 0;
+    const int m = rd16c(FT.play + 4);
+    if (m < 2 || m > FANT_MAX || n < 16 + m * 10 + 4) return 0;
+    const uint8_t *c = FT.play + 16 + m * 10;
+    if ((c[0] | c[1] << 8 | c[2] << 16 | (uint32_t)c[3] << 24) != fant_crc(FT.play, 16 + m * 10)) return 0;
+    FT.play_n = m; FT.ok = 1; FT.vue.perso = rd16c(FT.play + 6); FT.vue.var = FT.play[8];
+    if (FT.vue.perso >= E.w.npersos) { FT.ok = 0; return 0; }
+    return 1;
+}
+int course_fantome_ecrire(int slot, int perso, int var, int classe, int circuit) {
+    const racer_t *j = &CR.r[CR.n - 1];
+    if (!FT.pris || FT.rec_n < 2 || !(j->fin > 0) || !E.cfg.save_write) return 0;
+    uint8_t *h = FT.rec;
+    wr32(h, FANT_MAGIC); wr16(h + 4, (uint32_t)FT.rec_n); wr16(h + 6, (uint32_t)perso); h[8] = (uint8_t)var; h[9] = (uint8_t)classe; h[10] = (uint8_t)circuit; h[11] = 0;
+    wr32(h + 12, (uint32_t)lroundf(j->fin * 100));
+    const int n = 16 + FT.rec_n * 10;
+    wr32(h + n, fant_crc(h, n));
+    return E.cfg.save_write(slot, h, n + 4) == n + 4;
+}
+/* Écart avec le fantôme à la progression du joueur (s ; > 0 : en retard) ; 0 sans fantôme */
+static int fant_ecart(const racer_t *j, float *d) {
+    if (!FT.ok || FT.play_n < 2) return 0;
+    const float p = (j->prog + 8) * 8;
+    int lo = 0, hi = FT.play_n - 1;
+    if (rd16c(FT.play + 16 + hi * 10 + 6) < p) return 0;   /* le fantôme n'est pas allé si loin */
+    while (hi - lo > 1) { const int m = (lo + hi) >> 1; if (rd16c(FT.play + 16 + m * 10 + 6) < p) lo = m; else hi = m; }
+    const float a = rd16c(FT.play + 16 + lo * 10 + 6), b = rd16c(FT.play + 16 + hi * 10 + 6);
+    const float tg = (lo + (b > a ? (p - a) / (b - a) : 0)) * FANT_DT;
+    *d = CR.t - tg;
+    return 1;
+}
+/* Texte du haut de l'interface selon l'épreuve (draw_course de hud.c) */
+int course_bandeau(int k, char *t, int n, int *coul) {
+    if (!CR.on || CR.n < 1) return 0;
+    const racer_t *j = &CR.r[CR.n - 1];
+    *coul = 0;
+    if (CR.sorte == CS_TOUR) {
+        if (k == 0) { snprintf(t, n, "ESSAI %d", j->tour + 1 < 1 ? 1 : j->tour + 1 > CR.tours ? CR.tours : j->tour + 1); return 1; }
+        if (k == 1) {
+            if (j->meilleur > 0) { const int c = (int)(j->meilleur * 100); snprintf(t, n, "%d:%02d.%02d", c / 6000, c / 100 % 60, c % 100); }
+            else snprintf(t, n, "PREMIER ESSAI");
+            return 1;
+        }
+        if (k == 2 && j->t_tour >= 0) { const int c = (int)((CR.t - j->t_tour) * 100); snprintf(t, n, "%d:%02d.%02d", c / 6000, c / 100 % 60, c % 100); return 1; }
+        return 0;
+    }
+    if (CR.sorte == CS_CLM && k == 1) {
+        float d;
+        if (!FT.ok) { snprintf(t, n, "SEULE EN PISTE"); return 1; }
+        if (CR.phase == CP_GRILLE || !fant_ecart(j, &d)) { snprintf(t, n, "FANTÔME"); return 1; }
+        const int c = (int)lroundf(fabsf(d) * 100);
+        snprintf(t, n, "%s%d.%02d", d > 0 ? "+" : "-", c / 100, c % 100); *coul = d > 0 ? 2 : 1;
+        return 1;
+    }
+    if (CR.sorte == CS_ELIM && k == 1) {
+        int o[COURSE_N], act = 0;
+        const int pl = course_rank(o);
+        for (int i = 0; i < CR.n; i++) act += !CR.r[i].elim;
+        if (j->elim) snprintf(t, n, "ÉLIMINÉE"); else snprintf(t, n, "%d%s / %d", pl, pl == 1 ? "er" : "e", act);
+        *coul = j->elim ? 2 : 0;
+        return 1;
+    }
+    return 0;
+}
+/* Élimination : à chaque tour (sauf le dernier), quand tous les concurrents encore en course sauf un ont passé la ligne,
+   celui-là sort (le joueur aussi : sa course s'arrête là) */
+static void elimination(void) {
+    for (;;) {
+        const int k = CR.nelim + 1;
+        if (k >= CR.tours) return;
+        int act = 0, passe = 0, last = -1;
+        for (int i = 0; i < CR.n; i++) { const racer_t *r = &CR.r[i]; if (r->elim) continue; act++; if (r->tour >= k) passe++; else last = i; }
+        if (act < 2 || passe != act - 1 || last < 0) return;
+        racer_t *r = &CR.r[last];
+        r->elim = ++CR.nelim; r->vx = r->vz = r->v = 0; r->boost = 0;
+        if (r->joueur) { hud_toast("ÉLIMINÉE"); son_jouer(SON_ANNULER, 0.6f, 0.8f); if (CR.phase == CP_COURSE) { CR.phase = CP_ARRIVEE; CR.t_fin = CR.clock; } }
+        else { char t[48]; snprintf(t, sizeof t, "%s ÉLIMINÉ", E.w.persos[r->perso].nom); hud_toast(t); son_jouer(SON_MENU, 0.5f, 0.8f); }
+    }
+}
 int course_start(int perso, int tours, const int *rivaux, int nia, int niv, int armes) {
+    const float cl_v = classe_v, cl_riv = classe_riv;
+    classe_v = classe_riv = 0;
     if (!PISTE.n || CR.on || BT.on || perso < 0 || perso >= E.w.npersos || !(E.w.persos[perso].flags & PERS_VEHICULE)) return 0;
     const int avant = E.ride;
     int pret = -1;   /* exemplaire amené pour la course : il repart à la fin (course_rendre) */
@@ -218,6 +429,8 @@ int course_start(int perso, int tours, const int *rivaux, int nia, int niv, int 
     memset(&CR, 0, sizeof CR);
     CR.n = nia + 1; CR.tours = tours < 1 ? 1 : tours > 9 ? 9 : tours; CR.armes = armes != 0;
     CR.pret = pret; CR.avant = pret >= 0 ? avant : -1;
+    CR.sorte = sorte_suiv; sorte_suiv = CS_COURSE;
+    if (CR.sorte == CS_CLM) fant_prendre(); else if (FT.pris) fant_rendre();   /* contre-la-montre : le tampon du fantôme */
     for (int k = 0; k < CR.n; k++) {
         racer_t *r = &CR.r[k];
         const int joueur = k == CR.n - 1;
@@ -228,7 +441,11 @@ int course_start(int perso, int tours, const int *rivaux, int nia, int niv, int 
         const int rv = joueur || !rivaux ? perso : rivaux[k];
         r->joueur = joueur; r->perso = rv >= 0 && rv < E.w.npersos ? rv : perso; r->grip = E.w.veh_grip[r->perso];
         r->dir = dir; r->seg = q.seg; r->s = q.s; r->y = q.y; r->prog = q.s - PISTE.L; r->tour = -1; r->fin = -1;
-        r->vmax = v0 * COURSE_V * lv; r->acc = a0 * COURSE_V * lv; r->rb = 1;
+        float vk = v0, ak = a0;
+        if (cl_v > 0 && !joueur) { float vr; veh_params(r->perso, &vr, &ak); vk = cl_riv; }
+        const float kv = cl_v > 0 ? cl_v : 1;
+        r->vmax = vk * COURSE_V * kv * lv; r->acc = ak * COURSE_V * kv * lv; r->rb = 1;
+        r->t_tour = -1; r->meilleur = -1;   /* passage de la ligne, meilleur tour (s) */
         r->off = joueur ? 0 : ((k % 3) - 1) * 0.35f;
         r->vis = r->cam = dir; r->plaque = -1;
     }
@@ -244,26 +461,37 @@ static int last_place = 255;
 int course_place(void) { return last_place; }
 void course_cancel(void) { last_place = 255; }
 /* Abandon (menu de pause) : la course s'arrête là, place 255 pour le scénario (« si course abandon ») */
-void course_abandon(void) { course_end(); last_place = 255; }
+static int abandon;
+void course_abandon(void) { abandon = 1; course_end(); abandon = 0; last_place = 255; }
 /* Fin : un vaisseau reprend ensuite son altitude de croisière (décollage vertical) */
 void course_end(void) {
     const racer_t *j = &CR.r[CR.n - 1];
-    last_place = CR.chrono > 0 && (j->fin < 0 || j->fin > CR.chrono) ? 9 : course_rank(NULL);   /* temps à battre raté : 9 */
+    int ordre[COURSE_N] = { 0 };
+    last_place = CR.chrono > 0 && (j->fin < 0 || j->fin > CR.chrono) ? 9 : course_rank(ordre);   /* temps à battre raté : 9 */
+    /* Résultat pour la carrière (courseFinHook de l'émulateur) : place, temps, meilleur tour, ordre d'arrivée (rangs dans
+       la grille, le joueur en dernier), abandon */
+    course_res_t res = { abandon ? 255 : last_place, j->fin, j->meilleur, { 0 }, abandon, CR.n };
+    for (int k = 0; k < CR.n; k++) res.ordre[k] = ordre[k];
     CR.on = 0; E.ride_v = 0; essai_pilote = 0; course_allege = 1;
     if (essai_cycle >= 0) { E.cycle = essai_cycle; essai_cycle = -1; }
     if (CR.pret >= 0 && E.ride == CR.pret) course_rendre(CR.pret, CR.avant);
     else if (ride_type() == VEH_VAISSEAU) { E.ride_alt = 0; E.ride_phase = 1; }
     CR.pret = CR.avant = -1;
+    const int gen = FT.gen;
+    carriere_course_finie(&res);   /* mode course : la page des résultats (carriere.c ; elle écrit le fantôme) */
+    if (FT.gen == gen) fant_rendre();   /* (sauf si une course est repartie : recommencer) */
 }
 
-/* Classement : arrivés dans l'ordre d'arrivée, puis les autres par progression ; renvoie la place du joueur (1..) */
+/* Classement : arrivés dans l'ordre d'arrivée, puis les autres par progression, puis les éliminés (le dernier sorti
+   devant) ; renvoie la place du joueur (1..) */
 int course_rank(int *order) {
     int o[COURSE_N], place = 0;
     for (int k = 0; k < CR.n; k++) o[k] = k;
     for (int a = 1; a < CR.n; a++)
         for (int b = a; b > 0; b--) {
             const racer_t *x = &CR.r[o[b - 1]], *y = &CR.r[o[b]];
-            const int swap = x->fin >= 0 || y->fin >= 0 ? (x->fin < 0 ? 1e9f : x->fin) > (y->fin < 0 ? 1e9f : y->fin) : x->prog < y->prog;
+            const int swap = x->elim || y->elim ? (x->elim ? 1000 - x->elim : 0) > (y->elim ? 1000 - y->elim : 0)
+                           : x->fin >= 0 || y->fin >= 0 ? (x->fin < 0 ? 1e9f : x->fin) > (y->fin < 0 ? 1e9f : y->fin) : x->prog < y->prog;
             if (!swap) break;
             const int t = o[b]; o[b] = o[b - 1]; o[b - 1] = t;
         }
@@ -278,7 +506,7 @@ static void pilote(const racer_t *r, float *th, float *st) {
     float off = r->off * PISTE.hw;
     for (int k = 0; k < CR.n; k++) {
         const racer_t *o = &CR.r[k];
-        if (o == r) continue;
+        if (o == r || o->elim) continue;
         const float dx = o->x - r->x, dz = o->z - r->z, f = dx * hx + dz * hz, l = dx * hz - dz * hx;
         if (f > 0 && f < 2 && fabsf(l) < 0.9f) off += l > 0 ? -0.8f : 0.8f;
     }
@@ -317,6 +545,7 @@ static float wrap(float a) { return atan2f(sinf(a), cosf(a)); }
 #define COURSE_COUP 2.0f
 #define COURSE_COUP_TAQ 3.0f
 #define COURSE_VIRAGE 1.0f
+#define COURSE_VIRAGE_RAPIDE 0.45f   /* joueur : part de la force du virage perdue à la vitesse maxi (en proportion de la vitesse) */
 #define COURSE_TAQ 0.35f
 static void tourne(racer_t *r, float w) { r->w = w; if (fabsf(w) > SPIN_W && r->spin <= 0) r->spin = 0.9f; }
 static void coup(racer_t *r, float nx, float nz, float j) {
@@ -328,14 +557,17 @@ static void coup(racer_t *r, float nx, float nz, float j) {
 
 static void physique(racer_t *r, float th, float st, float dt) {
     r->gravier = fabsf(r->lat) > PISTE.hw + 0.05f;
-    const surface_t *sf = surf();
+    const surface_t *sf = surf_de(r->seg);
     const float ab = fmaxf(0, fabsf(st) - 0.8f) / 0.2f, vmax = r->vmax * r->rb * sf->v * (r->boost > 0 ? COURSE_BOOST : 1), acc = r->acc * (r->gravier ? 0.5f : 1);
     float hx = sinf(r->dir), hz = cosf(r->dir);
     const float vf0 = r->vx * hx + r->vz * hz, sp = fminf(1, fabsf(vf0) / (0.3f * vmax));
     if (r->spin > 0) { r->spin -= dt; r->w *= expf(-1.8f * dt); th = 0; }
     else {
         const int vo = E.volant % 5;
-        const float wt = st * (1 + COURSE_VIRAGE * sp) * (1 + 0.4f * ab) * (vf0 < -0.1f ? -1 : 1) * (r->joueur ? COURSE_VOLANT[vo] : 1);
+        /* joueur : force du virage réduite en proportion de la vitesse (COURSE_VIRAGE_RAPIDE à la vitesse maxi ; 01/11/2026,
+           demande de l'utilisateur : à pleine vitesse on tournait aussi fort qu'au ralenti) ; les adversaires gardent la leur */
+        const float rapide = r->joueur ? 1 - COURSE_VIRAGE_RAPIDE * fminf(1, fabsf(vf0) / fmaxf(vmax, 0.01f)) : 1;
+        const float wt = st * (1 + COURSE_VIRAGE * sp) * rapide * (1 + 0.4f * ab) * (vf0 < -0.1f ? -1 : 1) * (r->joueur ? COURSE_VOLANT[vo] : 1);
         r->w += (wt - r->w) * fminf(1, (r->joueur ? COURSE_VOLANT_VIF[vo] : 12) * dt);
     }
     r->dir = wrap(r->dir + r->w * dt);
@@ -418,9 +650,17 @@ static void mur(racer_t *r, float dt) {
     const int tour = (int)floorf(r->prog / L);
     if (tour > r->tour) {
         r->tour = tour;
+        /* Temps au tour : d'un passage de la ligne au suivant (le premier, juste après le départ, ouvre le premier tour) */
+        float lt = -1; int rec = 0;
+        if (r->t_tour >= 0 && r->fin < 0) { lt = CR.t - r->t_tour; if (r->meilleur < 0 || lt < r->meilleur) { r->meilleur = lt; rec = 1; } }
+        r->t_tour = CR.t;
         if (tour >= CR.tours && r->fin < 0) {
             r->fin = CR.t;
             if (r->joueur) { CR.phase = CP_ARRIVEE; CR.t_fin = CR.clock; son_jouer(SON_SOIN, 0.6f, 1); }
+        } else if (r->joueur && tour >= 1 && CR.sorte == CS_TOUR && lt > 0) {   /* tour rapide : le temps de l'essai */
+            char t[32]; const int c = (int)(lt * 100);
+            snprintf(t, sizeof t, "%s%d:%02d.%02d", rec ? "RECORD " : "", c / 6000, c / 100 % 60, c % 100);
+            hud_toast(t); son_jouer(SON_MENU, 0.6f, rec ? 1.6f : 1.3f);
         } else if (r->joueur && tour >= 1) {
             char t[24];
             if (tour == CR.tours - 1) snprintf(t, sizeof t, "DERNIER TOUR");
@@ -438,7 +678,7 @@ static void chocs(void) {
         for (int b = a + 1; b < CR.n; b++) {
             racer_t *A = &CR.r[a], *B = &CR.r[b];
             const float dx = B->x - A->x, dz = B->z - A->z, d = hypotf(dx, dz);
-            if (d >= m || d < 1e-4f) continue;
+            if (d >= m || d < 1e-4f || A->elim || B->elim) continue;
             const float nx = dx / d, nz = dz / d, o = (m - d) / 2, rel = (B->vx - A->vx) * nx + (B->vz - A->vz) * nz;
             A->x -= nx * o; A->z -= nz * o; B->x += nx * o; B->z += nz * o;
             if (rel < 0) {
@@ -458,7 +698,8 @@ static void chocs(void) {
 static void effets(float dt) {
     for (int k = 0; k < CR.n; k++) {
         racer_t *r = &CR.r[k];
-        const int pous = (r->gravier || surf()->pous) && r->spd > 1.5f;   /* gravier, piste de terre : poussière */
+        if (r->elim) continue;
+        const int pous = (r->gravier || surf_de(r->seg)->pous) && r->spd > 1.5f;   /* gravier, piste de terre : poussière */
         if (!pous && !(r->spd > 2 && (fabsf(r->slip) > 0.22f || r->spin > 0))) { r->fumee = 0; continue; }
         r->fumee -= dt;
         if (r->fumee > 0) continue;
@@ -510,7 +751,7 @@ static void tir(int k) {
     const float hx = sinf(r->dir), hz = cosf(r->dir);
     if (a == COURSE_ARME_MISSILE) {
         int cible = -1, s = -1; float bg = 40;
-        for (int o = 0; o < CR.n; o++) { const float g = CR.r[o].prog - r->prog; if (o != k && g > 0 && g < bg) { bg = g; cible = o; } }
+        for (int o = 0; o < CR.n; o++) { const float g = CR.r[o].prog - r->prog; if (o != k && !CR.r[o].elim && g > 0 && g < bg) { bg = g; cible = o; } }
         for (int m = 0; m < 8 && s < 0; m++) if (!CR.mis[m].on) s = m;
         if (s < 0) return;
         const float v = fmaxf(18, r->spd + 8);
@@ -554,7 +795,7 @@ static void armes(float dt) {
         M->x += M->vx * dt; M->z += M->vz * dt;
         if (frnd() < dt * 30) effet(0, M->x, M->y, M->z, 0, 0.2f, 0, 0.35f);
         for (int k = 0; k < CR.n; k++)
-            if ((k != M->owner || M->t > 0.4f) && hypotf(CR.r[k].x - M->x, CR.r[k].z - M->z) < 0.6f) { touche(&CR.r[k], M->x, M->z); M->t = 99; break; }
+            if ((k != M->owner || M->t > 0.4f) && !CR.r[k].elim && hypotf(CR.r[k].x - M->x, CR.r[k].z - M->z) < 0.6f) { touche(&CR.r[k], M->x, M->z); M->t = 99; break; }
         if (M->t >= 3.5f) M->on = 0;
     }
     for (int m = 0; m < 12; m++) {
@@ -563,14 +804,14 @@ static void armes(float dt) {
         if (CR.mines[m].t >= 25) { CR.mines[m].on = 0; continue; }
         if (CR.mines[m].t < 0.6f) continue;
         for (int k = 0; k < CR.n; k++)
-            if ((k != CR.mines[m].owner || CR.mines[m].t > 1.5f) && hypotf(CR.r[k].x - CR.mines[m].x, CR.r[k].z - CR.mines[m].z) < 0.6f) {
+            if ((k != CR.mines[m].owner || CR.mines[m].t > 1.5f) && !CR.r[k].elim && hypotf(CR.r[k].x - CR.mines[m].x, CR.r[k].z - CR.mines[m].z) < 0.6f) {
                 touche(&CR.r[k], CR.mines[m].x, CR.mines[m].z); CR.mines[m].on = 0; break;
             }
     }
     for (int k = 0; k < CR.n; k++) {
         racer_t *r = &CR.r[k];
         if (r->bouclier > 0) r->bouclier -= dt;
-        if (r->joueur || !r->arme || CR.phase != CP_COURSE) continue;
+        if (r->joueur || !r->arme || CR.phase != CP_COURSE || r->elim) continue;
         r->arme_t -= dt;
         if (r->arme_t > 0) continue;
         r->arme_t = 0.5f;
@@ -603,7 +844,7 @@ int eng_essai_course(int piste, int allege) {
     if (CR.on) course_abandon();
     accueil_fin(); script_abort(); hud_battle_start();
     if (E.ride >= 0) ride_lacher();
-    if (E.w.carte) world_carte(0, pp->X[pp->dep], pp->Z[pp->dep]);
+    if (E.w.carte) world_carte(0, pp->xd, pp->zd);
     /* Joueur : le premier véhicule de course (un BOLIDE s'il y en a) ; rivaux : d'autres planches */
     int moi = -1, riv[COURSE_N - 1], nr = 0;
     for (int p = 0; p < E.w.npersos; p++) {
@@ -617,7 +858,7 @@ int eng_essai_course(int piste, int allege) {
         for (int k = 0; k < nr; k++) vu |= E.w.persos[riv[k]].sheet == E.w.persos[p].sheet;
         if (!vu) riv[nr++] = p;
     }
-    E.sera.x = pp->X[pp->dep]; E.sera.z = pp->Z[pp->dep]; E.has_dest = 0; E.sera_y_ok = 0;
+    E.sera.x = pp->xd; E.sera.z = pp->zd; E.has_dest = 0; E.sera_y_ok = 0;
     course_choisir(E.sera.x, E.sera.z);
     world_stream(E.sera.x, E.sera.z, 1);
     if (!course_start(moi, 2, riv, nr, 1, 1)) return 0;
@@ -633,6 +874,7 @@ void course_update(float th, float st, float dt) {
     racer_t *j = &CR.r[CR.n - 1];
     if (essai_pilote) essai_commande(j, &th, &st);
     CR.clock += dt;
+    carriere_temps(dt);   /* temps de jeu de la carrière (mode course) */
     if (CR.phase == CP_GRILLE) {
         const int n = (int)(CR.clock / COURSE_FEUX);
         if (n > CR.feux && n <= 3) son_jouer(SON_BIP, 0.6f, 1);
@@ -641,16 +883,18 @@ void course_update(float th, float st, float dt) {
     } else if (CR.phase != CP_RESULTATS) CR.t += dt;
     if (CR.phase == CP_ARRIVEE) {
         int all = 1;
-        for (int k = 0; k < CR.n; k++) all &= CR.r[k].fin >= 0;
+        for (int k = 0; k < CR.n; k++) all &= CR.r[k].fin >= 0 || CR.r[k].elim;
         if (all || CR.clock - CR.t_fin > 6) CR.phase = CP_RESULTATS;
     }
     const int go = CR.phase == CP_COURSE || CR.phase == CP_ARRIVEE;
     for (int k = 0; k < CR.n; k++) {
         racer_t *r = &CR.r[k];
+        if (r->elim) continue;   /* élimination : sorti */
         float t = 0, s = 0;
         /* Joueur : direction adoucie (|st| puissance COURSE_EXPO : les petits gestes tournent peu ; force du virage :
            COURSE_VOLANT dans physique) */
-        if (go && r->joueur && r->fin < 0) { t = th; s = copysignf(powf(fabsf(st), COURSE_EXPO), st); }
+        if (go && r->joueur && r->fin < 0 && joueur_ia) pilote(r, &t, &s);   /* essais : le joueur piloté comme un adversaire */
+        else if (go && r->joueur && r->fin < 0) { t = th; s = copysignf(powf(fabsf(st), COURSE_EXPO), st); }
         else if (go) { pilote(r, &t, &s); if (r->fin >= 0) t *= 0.5f; }
         /* Élastique : un adversaire loin devant le joueur ralentit, loin derrière il accélère un peu */
         const float e = (j->prog - r->prog) / 30;   /* devant : jusqu'à 10 % plus lent ; derrière : 4 % plus rapide */
@@ -658,7 +902,10 @@ void course_update(float th, float st, float dt) {
         physique(r, t, s, dt);
     }
     chocs();
-    for (int k = 0; k < CR.n; k++) { mur(&CR.r[k], dt); if (go) plaques(&CR.r[k]); }
+    for (int k = 0; k < CR.n; k++) if (!CR.r[k].elim) { mur(&CR.r[k], dt); if (go) plaques(&CR.r[k]); }
+    if (CR.sorte == CS_ELIM && go) elimination();
+    fant_relever(j);   /* contre-la-montre : le parcours du joueur, puis le fantôme */
+    fant_rejouer(CR.phase == CP_GRILLE ? 0 : CR.t);
     if (go) armes(dt);
     effets(dt);
     actor_t *sr = &E.sera;   /* Sera : sprite du véhicule (dérapage) ; caméra : la route suivie */

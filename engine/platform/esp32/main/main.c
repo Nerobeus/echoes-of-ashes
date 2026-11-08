@@ -36,6 +36,7 @@
 #include "eng.h"
 
 #define SON_RETENU_US 1600000   /* fondu de l'écran titre (T_TITRE de accueil.c) */
+#define ECRAN_CALME_IPS 10      /* écran titre que personne ne touche (eng_ecran_calme) : il prenait 12 i/s à plein (01/11/2026) */
 static int64_t son_t0;          /* première image présentée (0 : pas encore ; -1 : son rendu) */
 
 static const char *TAG = "echoes";
@@ -47,9 +48,18 @@ _Static_assert(ENG_NATIVE_BAND == LCD_BAND, "bandes du moteur = bandes envoyées
    ouverts après eng_init, marge. Les piles des tâches jeu et rendu sont réservées d'avance (statiques) : une pile de
    8 Ko qui ne trouvait plus de bloc libre laissait l'écran figé, sans message. */
 #define SRAM_RESERVE (12 * 1024)
-/* Avec la manette, le Bluetooth prend 37 Ko de SRAM : réserve de plus, que le moteur ne prend pas (avec 11 Ko libres,
-   la carte SD n'avait plus de tampon DMA, lectures en échec et rendu cassé) */
+/* Avec la manette, réserve de plus, que le moteur ne prend pas (avec 11 Ko libres, la carte SD n'avait plus de tampon
+   DMA, lectures en échec et rendu cassé). Le Bluetooth est déjà démarré quand le moteur réserve ses tampons ; mesure du
+   08/11/2026, balle connectée pendant eng_init puis 50 s de jeu : la SRAM libre n'est jamais descendue plus de 5 Ko sous
+   celle du jeu (46 Ko, au plus bas 41). Essai à 16 Ko le même jour : profondeur et bande du cœur 0 en SRAM, 30 Ko libres
+   en jeu, mais rien de mesurable (Lucerne 25,2 -> 24,9 i/s, campagne 26,5 -> 27,1, bandes du cœur 0 -2 % : une bande
+   tient dans le cache de données) ; on garde la marge */
 #define SRAM_RESERVE_BT (32 * 1024)
+/* Troisième tampon de bande avec la manette (08/11/2026) : seulement s'il reste ensuite de quoi démarrer le Bluetooth
+   (37 Ko), le reste du démarrage (carte SD, tactile : 13 Ko) et les 20 Ko libres avant eng_init qu'avait le jeu avec
+   deux tampons. Sans lui, le cœur 1 attend la fin de l'envoi de chaque bande avant la suivante : à Lucerne, 21,3 i/s
+   au lieu de 23,8 ; les tableaux froids du moteur passés en PSRAM (ENG_FROID) lui ont fait la place */
+#define SRAM_APRES_TROISIEME (72 * 1024)
 static StackType_t pile_rendu[8192], pile_jeu[8192];
 static StaticTask_t tache_rendu, tache_jeu;
 
@@ -133,8 +143,8 @@ static void band_window(int y, int h, int *x0, int *x1) {
    Les bandes se distribuent par un compteur atomique ; « prête » réveille le cœur 1, « dessinée » est donnée par le
    cœur qui termine la dernière bande. Tampons DMA : 0 et 1 pour le cœur 1, 2 pour le cœur 0, réservés avant eng_init
    (il prend ensuite toute la SRAM interne qu'il trouve, et il ne resterait plus trois blocs de 31 Ko). Avec la manette,
-   deux seulement (31 Ko de SRAM rendus) : 0 pour le cœur 1, qui attend la fin de l'envoi de sa bande avant la
-   suivante, 1 pour le cœur 0. */
+   trois aussi s'il reste la SRAM (SRAM_APRES_TROISIEME), sinon deux (31 Ko de SRAM rendus) : 0 pour le cœur 1, qui
+   attend la fin de l'envoi de sa bande avant la suivante, 1 pour le cœur 0. */
 enum { NB = (LCD_H + LCD_BAND - 1) / LCD_BAND };
 static int16_t wx0[NB], wx1[NB];
 static SemaphoreHandle_t sem_ready, sem_drawn;
@@ -212,12 +222,12 @@ static int banc_scen_read(uint32_t off, void *dst, uint32_t len) { memset(dst, 0
 
 /* Poké Ball Plus (manette.c ; RÉGLAGES › MANETTE) : les touches du clavier de la version web, stick = directions (au-delà
    de 38 % de la course), clic du stick = OK (parler, valider, avancer un dialogue), bouton du haut = RETOUR (menu,
-   retour) : comme A et B du Game Boy (choix de l'utilisateur) */
+   retour) : comme A et B du Game Boy (choix de l'utilisateur) ; l'inverse avec BOUTON OK : HAUT (manette_inverse) */
 static uint32_t manette_touches(void) {
     const manette_t m = manette_etat();
     uint32_t k = 0;
-    if (m.boutons & MANETTE_CLIC) k |= ENG_KEY_OK;
-    if (m.boutons & MANETTE_HAUT) k |= ENG_KEY_BACK;
+    if (m.boutons & MANETTE_OK) k |= ENG_KEY_OK;
+    if (m.boutons & MANETTE_RETOUR) k |= ENG_KEY_BACK;
     if (m.x < -38) k |= ENG_KEY_LEFT; else if (m.x > 38) k |= ENG_KEY_RIGHT;
     if (m.y < -38) k |= ENG_KEY_UP; else if (m.y > 38) k |= ENG_KEY_DOWN;
     return k;
@@ -253,6 +263,16 @@ static void game_task(void *arg) {
     for (;;) {
         /* Copie vers la carte SD en cours (sdx.c) : le jeu n'avance plus et ne lit plus la carte */
         if (sdx_pause()) { vTaskDelay(pdMS_TO_TICKS(20)); last = esp_timer_get_time(); continue; }
+#ifdef ENG_PROFILE
+        /* Essais de mesure (SDX XP n) : 1 = en série (le cœur 0 attend que l'image présentée soit dessinée avant de préparer la
+           suivante, et ne dessine pas de bande : le cœur 1 seul, sans rien à côté), 8 = le cœur 0 ne dessine pas de bande
+           (préparation toujours en même temps), 2 = textures lues en 2 × 2 texels (render.c, eng_xp) */
+        const int xp = sdx_xp(), xp_serie = xp & 1, xp_aide = !(xp & 9);
+        eng_xp = xp;
+        if (xp_serie) xSemaphoreTake(sem_drawn, portMAX_DELAY);
+#else
+        const int xp_serie = 0, xp_aide = 1;
+#endif
         int64_t t0 = esp_timer_get_time();
         float dt = (t0 - last) / 1e6f; last = t0;
         eng_input_t in = { 0 };
@@ -268,7 +288,7 @@ static void game_task(void *arg) {
         }
         if (manette_connectee()) { const manette_t m = manette_etat(); in.manette = 1; in.stick_x = m.x / 100.0f; in.stick_y = m.y / 100.0f; manette_tick(); }
         /* Veille : ne revient qu'au réveil (moteur verrouillé) ; le temps passé en veille ne compte pas */
-        if (veille_image(boot, nf > 0 || in.keys)) { last = esp_timer_get_time(); boot_prev = boot_long = 0; continue; }
+        if (veille_image(boot, nf > 0 || in.keys || eng_essai_actif())) {   /* un essai de fluidité compte comme un joueur */ last = esp_timer_get_time(); boot_prev = boot_long = 0; continue; }
         if (boot) boot_long |= veille_boot_long();
         else { if (boot_prev && !boot_long) in.keys |= ENG_KEY_MENU; boot_long = 0; }
         boot_prev = boot;
@@ -285,15 +305,17 @@ static void game_task(void *arg) {
         {   /* course d'essai demandée par le PC (SDX COURSE) */
             int k, a;
             if (sdx_course(&k, &a)) { const int ok = eng_essai_course(k, a); printf(ok ? "SDX COURSE OK %d %d\n" : "SDX ERR course %d %d\n", k, a); fflush(stdout); }
+            float ev[6];
+            if (sdx_essai(ev)) { const int ok = eng_essai_monde(ev[0], ev[1], ev[2], (int)ev[3], ev[4], ev[5]); printf(ok ? "SDX ESSAI OK\n" : "SDX ERR essai refusé\n"); fflush(stdout); }
         }
         eng_update(dt, &in);
         int64_t t1 = esp_timer_get_time();
         eng_build_frame(t0 / 1e6f);
         int64_t t2 = esp_timer_get_time();
         /* Aide : bandes restantes de l'image présentée */
-        for (int b; (b = __atomic_fetch_add(&next_band, 1, __ATOMIC_SEQ_CST)) < NB;) { draw_band(1, b, dma, 2); helped++; }
+        if (xp_aide) for (int b; (b = __atomic_fetch_add(&next_band, 1, __ATOMIC_SEQ_CST)) < NB;) { draw_band(1, b, dma, 2); helped++; }
         int64_t t3 = esp_timer_get_time();
-        xSemaphoreTake(sem_drawn, portMAX_DELAY);   /* toutes les bandes de l'image présentée sont dessinées */
+        if (!xp_serie) xSemaphoreTake(sem_drawn, portMAX_DELAY);   /* toutes les bandes de l'image présentée sont dessinées */
         if (sdx_ecran()) { capture_ecran(dma, 2); prev_t4 = stat_t = esp_timer_get_time(); frames = 0; t_update = t_build = t_help = t_wait = 0; c1_busy = c1_idle = 0; c1_bands = 0; }
         int64_t t4 = esp_timer_get_time();
         t_update += t1 - t0; t_build += t2 - t1; t_help += t3 - t2; t_wait += t4 - t3; frames++;
@@ -325,9 +347,9 @@ static void game_task(void *arg) {
                          pf[PROF_SPRITE] / 240e3f / n, pf[PROF_SHADOW] / 240e3f / n, pf[PROF_SKY] / 240e3f / n);
                 uint32_t bp[BPROF_N];
                 eng_profile_build(bp);
-                ESP_LOGI(TAG, "BANC %d préparation (ms par image) : début %.2f, blocs %.2f, cases %.2f, chunks %.2f, personnages %.2f, tri %.2f, ciel %.2f, interface %.2f",
+                ESP_LOGI(TAG, "BANC %d préparation (ms par image) : début %.2f, blocs %.2f, cases %.2f, chunks %.2f, personnages %.2f, tri %.2f, ciel %.2f, textures du sol %.2f, interface %.2f",
                          banc, bp[BPROF_DEBUT] / 240e3f / n, bp[BPROF_BLOCS] / 240e3f / n, bp[BPROF_CASES] / 240e3f / n, bp[BPROF_CHUNKS] / 240e3f / n,
-                         bp[BPROF_PERSOS] / 240e3f / n, bp[BPROF_TRI] / 240e3f / n, bp[BPROF_CIEL] / 240e3f / n, bp[BPROF_UI] / 240e3f / n);
+                         bp[BPROF_PERSOS] / 240e3f / n, bp[BPROF_TRI] / 240e3f / n, bp[BPROF_CIEL] / 240e3f / n, bp[BPROF_SOL] / 240e3f / n, bp[BPROF_UI] / 240e3f / n);
                 b_frames = b_us3d = b_usui = b_build = b_px = b_tris = b_seg = b_ops = 0;
                 banc++; banc_t = t4;
                 if (banc < 4) eng_teleport(BANC[banc][0], BANC[banc][1], BANC[banc][2]);
@@ -369,10 +391,29 @@ static void game_task(void *arg) {
                      t_update / 1000.0f / n, t_build / 1000.0f / n, t_help / 1000.0f / n, helped / n, t_wait / 1000.0f / n);
             ESP_LOGI(TAG, "cœur 1 : bandes %.1f ms (%.1f par image), attente %.1f ms | 3D %.1f ms, interface %.1f ms (deux cœurs)",
                      c1_busy / 1000.0f / n, c1_bands / n, c1_idle / 1000.0f / n, s->us_3d / 1000.0f, s->us_ui / 1000.0f);
-            ESP_LOGI(TAG, "%.1f i/s | %d triangles (sol %d, routes %d, bâtiments %d, plantes %d ; écartés %d), %d pixels 3D, %d op. interface | PSRAM libre %u Ko, SRAM libre %u Ko",
+            ESP_LOGI(TAG, "%.1f i/s | %d triangles (sol %d, routes %d, bâtiments %d, plantes %d ; écartés %d), %d pixels 3D, %d op. interface | PSRAM libre %u Ko, SRAM libre %u Ko (au plus bas %u)",
                      n * 1e6f / (t4 - stat_t), s->tris, s->cat_tris[0], s->cat_tris[3], s->cat_tris[4], s->cat_tris[2], s->tris_fogged + s->tris_outside,
-                     s->px, s->ui_ops, (unsigned)(heap_caps_get_free_size(MALLOC_CAP_SPIRAM) / 1024), (unsigned)(heap_caps_get_free_size(MALLOC_CAP_INTERNAL) / 1024));
+                     s->px, s->ui_ops, (unsigned)(heap_caps_get_free_size(MALLOC_CAP_SPIRAM) / 1024), (unsigned)(heap_caps_get_free_size(MALLOC_CAP_INTERNAL) / 1024),
+                     (unsigned)(heap_caps_get_minimum_free_size(MALLOC_CAP_INTERNAL) / 1024));   /* au plus bas : depuis le démarrage (réserve du Bluetooth, carte SD) */
             ESP_LOGI(TAG, "chunks : %d chargés, au plus %.2f ms dans une image ; jeu au plus %.1f ms", ch_loads, ch_max / 1000.0f, upd_max / 1000.0f);
+#if defined(ENG_PROFILE) && !CONFIG_ECHOES_BANC
+            {   /* profilage en jeu (-DECHOES_PROFIL=1) : postes du rendu des bandes et de la préparation, par image */
+                uint32_t pf[ENG_PROF_N], bp[BPROF_N];
+                eng_profile(pf);
+                eng_profile_build(bp);
+                ESP_LOGI(TAG, "profil (ms par image, deux cœurs) : effacement %.2f, préparation des triangles %.2f (%.0f appels), lignes %.2f (%.0f) dont pixels %.2f (%.0f plages), sprites %.2f, ombres %.2f, ciel %.2f",
+                         pf[PROF_CLEAR] / 240e3f / n, pf[PROF_SETUP] / 240e3f / n, pf[PROF_TRIS] / n, pf[PROF_ROWS] / 240e3f / n, pf[PROF_NROWS] / n, pf[PROF_PIX] / 240e3f / n, pf[PROF_NRUNS] / n,
+                         pf[PROF_SPRITE] / 240e3f / n, pf[PROF_SHADOW] / 240e3f / n, pf[PROF_SKY] / 240e3f / n);
+                ESP_LOGI(TAG, "préparation (ms par image) : début %.2f, blocs %.2f, cases %.2f, chunks %.2f, personnages %.2f, tri %.2f, ciel %.2f, textures du sol %.2f, interface %.2f",
+                         bp[BPROF_DEBUT] / 240e3f / n, bp[BPROF_BLOCS] / 240e3f / n, bp[BPROF_CASES] / 240e3f / n, bp[BPROF_CHUNKS] / 240e3f / n,
+                         bp[BPROF_PERSOS] / 240e3f / n, bp[BPROF_TRI] / 240e3f / n, bp[BPROF_CIEL] / 240e3f / n, bp[BPROF_SOL] / 240e3f / n, bp[BPROF_UI] / 240e3f / n);
+                uint32_t up[UPROF_N];
+                eng_profile_update(up);
+                ESP_LOGI(TAG, "jeu (ms par image) : début %.2f, interface %.2f, course %.2f, personnages %.2f, chunks %.2f, scénario %.2f, trafic %.2f, fin %.2f",
+                         up[UPROF_DEBUT] / 240e3f / n, up[UPROF_HUD] / 240e3f / n, up[UPROF_COURSE] / 240e3f / n, up[UPROF_PNJ] / 240e3f / n,
+                         up[UPROF_CHUNKS] / 240e3f / n, up[UPROF_SCRIPT] / 240e3f / n, up[UPROF_TRAFIC] / 240e3f / n, up[UPROF_FIN] / 240e3f / n);
+            }
+#endif
             if (manette_connectee()) {
                 int mt, me;
                 manette_mesure(&mt, &me);
@@ -390,7 +431,8 @@ static void game_task(void *arg) {
            de 1 ms, puis le reste en boucle). En retard, on repart de maintenant. */
         {
             /* Cadran verrouillé : 20 images par seconde (le glissement qui déverrouille doit suivre le doigt) */
-            int64_t next = present_t + 1000000 / (eng_verrouille() ? 20 : CONFIG_ECHOES_FPS_MAX), now = esp_timer_get_time();
+            /* écran titre immobile : ECRAN_CALME_IPS (batterie ; la caméra et les cendres y bougent lentement) */
+            int64_t next = present_t + 1000000 / (eng_verrouille() ? 20 : eng_ecran_calme() ? ECRAN_CALME_IPS : CONFIG_ECHOES_FPS_MAX), now = esp_timer_get_time();
 #if CONFIG_ECHOES_BANC
             if (banc < 4) next = now;
 #endif
@@ -428,7 +470,9 @@ static int napps;
    issue jusqu'à ce que le PC rende la main à l'accueil) */
 static void echec_demarrage(void) {
     for (int t = 0; t < 100; t++) { if (sdx_pause()) t = 0; vTaskDelay(pdMS_TO_TICKS(100)); }
-    if (app_presente("montre")) { ESP_LOGW(TAG, "retour à l'accueil de la montre"); horloge_garder(); app_lancer("montre"); }
+    ESP_LOGW(TAG, "retour à l'accueil de la montre");   /* (app_lancer vérifie qu'elle est là) */
+    horloge_garder();
+    app_lancer("montre");
 }
 /* Mémoire interne qui manque au jeu alors que la manette tient celle du Bluetooth : manette coupée (réglage), puis
    redémarrage dans le jeu, sans elle (avant : retour à la montre à chaque lancement) */
@@ -455,11 +499,16 @@ void app_main(void) {
     /* En jeu, pas de Bluetooth, sauf la manette (Poké Ball Plus, RÉGLAGES › MANETTE) : sans elle, sa mémoire statique
        (SRAM interne) est rendue au tas jusqu'au prochain démarrage. Les trois tampons de bande (31 Ko d'un seul tenant
        chacun, en SRAM pour le DMA) sont réservés avant le Bluetooth, dont le contrôleur morcelle la SRAM (sinon :
-       « tampons de bande impossibles à réserver ») ; deux seulement avec la manette */
+       « tampons de bande impossibles à réserver ») ; avec la manette, le troisième s'il reste la SRAM */
     const bool manette = reglages_manette();
     if (!manette) esp_bt_mem_release(ESP_BT_MODE_BTDM);
-    for (int k = 0; k < (manette ? 2 : 3); k++)
+    for (int k = 0; k < 2; k++)
         if (!(band_dma[k] = heap_caps_malloc(LCD_W * LCD_BAND * 2, MALLOC_CAP_DMA))) { ESP_LOGE(TAG, "tampons de bande impossibles à réserver"); echec_demarrage(); return; }
+    if (!manette || (heap_caps_get_free_size(MALLOC_CAP_INTERNAL) >= LCD_W * LCD_BAND * 2 + SRAM_APRES_TROISIEME
+                     && heap_caps_get_largest_free_block(MALLOC_CAP_DMA) >= LCD_W * LCD_BAND * 2)) {
+        if (!(band_dma[2] = heap_caps_malloc(LCD_W * LCD_BAND * 2, MALLOC_CAP_DMA)) && !manette) { ESP_LOGE(TAG, "tampons de bande impossibles à réserver"); echec_demarrage(); return; }
+    }
+    if (manette) ESP_LOGI(TAG, "manette : %d tampons de bande, %u Ko de SRAM libres avant le Bluetooth", band_dma[2] ? 3 : 2, (unsigned)(heap_caps_get_free_size(MALLOC_CAP_INTERNAL) / 1024));
     if (manette) {
         const unsigned avant = (unsigned)heap_caps_get_free_size(MALLOC_CAP_INTERNAL);
         if (manette_demarrer())
@@ -527,8 +576,12 @@ void app_main(void) {
         if (ms) eng_music_attach(ms, sd_music_read);
         else ESP_LOGI(TAG, "pas de " SD_DIR "/musique.bin : pas de musique");
     }
-    ESP_LOGI(TAG, "mémoire rapide : table des couleurs %s, masque %s, bande %s ; SRAM libre %u Ko", (eng_profile_mem() & 1) ? "oui" : "non",
-             (eng_profile_mem() & 2) ? "oui" : "non", (eng_profile_mem() & 4) ? "oui" : "non", (unsigned)(heap_caps_get_free_size(MALLOC_CAP_INTERNAL) / 1024));
+    {   /* tables chaudes du rendu en SRAM interne (render.c, eng_profile_mem) ; cœur 1 = fil 0, cœur 0 = fil 1 */
+        const int pm = eng_profile_mem();
+        ESP_LOGI(TAG, "mémoire rapide : table des couleurs %s ; cœur 1 : masque %s, profondeur %s, bande %s ; cœur 0 : masque %s, profondeur %s, bande %s ; listes %s ; SRAM libre %u Ko",
+                 pm & 1 ? "oui" : "non", pm & 2 ? "oui" : "non", pm & 8 ? "oui" : "non", pm & 4 ? "oui" : "non", pm & 16 ? "oui" : "non", pm & 64 ? "oui" : "non",
+                 pm & 32 ? "oui" : "non", pm & 128 ? "oui" : "non", (unsigned)(heap_caps_get_free_size(MALLOC_CAP_INTERNAL) / 1024));
+    }
     ESP_LOGI(TAG, "monde %d x %d chargé, 3D interne %d x %d, textures %s, PSRAM libre %u Ko", eng_world_size(), eng_world_size(), ENG_W, ENG_H_PX,
              pak_leger ? "du sol lues sur la carte SD" : eng_textures_in_ram() ? "en PSRAM" : "lues en flash", (unsigned)(heap_caps_get_free_size(MALLOC_CAP_SPIRAM) / 1024));
     sem_ready = xSemaphoreCreateBinary(); sem_drawn = xSemaphoreCreateBinary();

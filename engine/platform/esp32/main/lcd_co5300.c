@@ -129,10 +129,11 @@ void lcd_dormir(void) {
     cmd_sync(0x28, NULL, 0); vTaskDelay(pdMS_TO_TICKS(20));
     cmd_sync(0x10, NULL, 0); vTaskDelay(pdMS_TO_TICKS(120));
 }
-void lcd_reveiller(void) {
-    cmd_sync(0x11, NULL, 0); vTaskDelay(pdMS_TO_TICKS(LCD_ATTENTE_MS));
-    cmd_sync(0x29, NULL, 0); vTaskDelay(pdMS_TO_TICKS(20));
-}
+void lcd_reveiller(void) { lcd_sortir_veille(); lcd_afficher(); }
+/* Réveil en deux temps : sortie de veille, affichage encore coupé (la mémoire de l'écran reçoit déjà les images), puis
+   affichage : la nouvelle image est écrite avant d'apparaître (l'app montre y dessine le cadran) */
+void lcd_sortir_veille(void) { cmd_sync(0x11, NULL, 0); vTaskDelay(pdMS_TO_TICKS(LCD_ATTENTE_MS)); }
+void lcd_afficher(void) { cmd_sync(0x29, NULL, 0); vTaskDelay(pdMS_TO_TICKS(20)); }
 
 /* Récupère une transaction terminée (verrou tenu) et libère son tampon s'il s'agit d'un RAMWR */
 static void reap_one(void) {

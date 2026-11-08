@@ -68,7 +68,14 @@ static void tache(void *p) {
 static int demander(demande_t *d) {
     StaticSemaphore_t s;
     d->fait = xSemaphoreCreateBinaryStatic(&s);
-    if (xTaskCreatePinnedToCore(tache, "apps", 4096, d, 6, NULL, 0) != pdPASS) return 0;
+    /* La pile de la petite tâche d'avant (app_presente juste avant app_lancer) n'est rendue que par la tâche inactive :
+       nouvel essai toutes les 50 ms, 1 s au plus (04/11/2026 : mémoire interne presque pleine après un eng_init en échec,
+       la seconde tâche n'était pas créée, le retour à la montre échouait, « pas d'application », et l'écran restait noir) */
+    int t = 0;
+    while (xTaskCreatePinnedToCore(tache, "apps", 4096, d, 6, NULL, 0) != pdPASS) {
+        if (++t >= 20) { ESP_LOGE(TAG, "%s : petite tâche impossible à créer (mémoire interne)", d->nom ? d->nom : "drapeaux"); return 0; }
+        vTaskDelay(pdMS_TO_TICKS(50));
+    }
     xSemaphoreTake(d->fait, portMAX_DELAY);
     return d->r;
 }

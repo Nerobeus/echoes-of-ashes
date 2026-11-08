@@ -29,6 +29,7 @@
 #include <unistd.h>
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
+#include "esp_attr.h"
 #include "esp_heap_caps.h"
 #include "esp_log.h"
 #include "esp_system.h"
@@ -43,6 +44,7 @@
 #include "veille.h"
 #include "transfert.h"
 #include "apps.h"
+#include "eng.h"
 
 static const char *TAG = "sdx";
 
@@ -58,10 +60,11 @@ typedef struct { char nom[NOM_MAX]; uint32_t taille; char emp[EMP_MAX]; } entree
 
 static volatile int demande, arrete, jeu;   /* pause demandée ; le jeu s'est arrêté ; le jeu tourne */
 static int carte_ok, remonte;   /* carte montée ; remontée (ou en défaut) depuis le démarrage : redémarrer après */
-static entree_t man[FICHIERS_MAX], recus[FICHIERS_MAX];
+static entree_t man[FICHIERS_MAX] EXT_RAM_BSS_ATTR, recus[FICHIERS_MAX] EXT_RAM_BSS_ATTR;   /* en PSRAM (08/11/2026 : la SRAM interne manque ; jamais lus pendant une écriture en flash) */
 static int n_man, n_recus;
-static uint8_t *bloc, *dma;
-static uint32_t *table;
+static uint8_t *bloc, *dma;   /* bloc reçu (le tampon commun du moteur, jeu en pause) ; morceau écrit en DMA */
+static int bloc_commun;        /* bloc = tampon commun du moteur (repris par le jeu : à redemander) */
+static uint32_t *table;        /* table du CRC-32 */
 
 /* ---------- Manifeste (manifeste.txt) et fichiers en attente (attente.txt) : « nom taille empreinte » par ligne ---------- */
 static int lire_liste(const char *chemin, entree_t *t) {
@@ -105,7 +108,7 @@ void sdx_oublier(const char *nom) {
 
 /* Au démarrage, dans la tâche principale (pile de 3,5 Ko : tables statiques) : fichiers reçus avant le redémarrage mis
    à la place des anciens ; un fichier déjà renommé (coupure avant la fin) est reconnu à sa taille */
-static entree_t att[FICHIERS_MAX];
+static entree_t att[FICHIERS_MAX] EXT_RAM_BSS_ATTR;
 static void mise_en_place(void) {
     const int n = lire_liste(SD_DIR "/attente.txt", att);
     n_man = lire_liste(SD_DIR "/manifeste.txt", man);
@@ -242,16 +245,14 @@ static void recevoir(const char *nom, uint32_t taille, const char *emp) {
     const char *base = pcdos_nom(nom) ? nom + 6 : nom;
     if (strchr(base, '/') || strchr(base, '\\') || base[0] == '.' || !base[0]) { reponse("SDX ERR nom"); return; }
     if (pcdos_nom(nom)) mkdir("/sd/pcdos", 0775);
-    if (!bloc) bloc = heap_caps_malloc(BLOC_MAX, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
-    if (!dma) dma = heap_caps_malloc(ECRIT_MAX, MALLOC_CAP_DMA | MALLOC_CAP_INTERNAL);
-    if (!table && (table = heap_caps_malloc(256 * sizeof *table, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT)))
-        for (uint32_t i = 0; i < 256; i++) {
-            uint32_t c = i;
-            for (int j = 0; j < 8; j++) c = c & 1 ? 0xEDB88320u ^ (c >> 1) : c >> 1;
-            table[i] = c;
-        }
-    if (!bloc || !dma || !table) { reponse("SDX ERR mémoire"); return; }
     pause_jeu();
+    /* Bloc reçu : le tampon commun du moteur, jeu arrêté (01/11/2026 : rien n'est réservé pendant le jeu, la PSRAM de la
+       montre est presque pleine) ; sans jeu en cours, réservé ici une fois */
+    uint8_t *commun = jeu && arrete ? eng_tampon_commun(BLOC_MAX) : NULL;
+    if (commun) bloc = commun;
+    else if (!bloc || bloc_commun) bloc = heap_caps_malloc(BLOC_MAX, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+    bloc_commun = commun != NULL;
+    if (!bloc || !dma || !table) { reponse("SDX ERR mémoire"); return; }
     char p[96];
     if (!chemin(p, sizeof p, nom, ".nouveau")) { reponse("SDX ERR nom"); return; }
     FILE *f = fopen(p, "wb");
@@ -340,11 +341,22 @@ int sdx_course(int *piste, int *allege) {
     return 1;
 }
 int sdx_ecran(void) { const int d = ecran_dem; ecran_dem = 0; return d; }
+static volatile int xp_val;
+int sdx_xp(void) { return xp_val; }
+static volatile int essai_dem;
+static float essai_v[6];
+int sdx_essai(float *v) { if (!essai_dem) return 0; memcpy(v, essai_v, sizeof essai_v); essai_dem = 0; return 1; }
 
 static void commande(const char *l) {
     if (!strcmp(l, "SDX?")) bonjour();
+    else if (!strncmp(l, "SDX ESSAI ", 10)) {   /* essai de fluidité (eng_essai_monde) : x z cap pluie heure secondes ; réponse : boucle du jeu */
+        float v[6] = { 0, 0, 0, 0, -1, 30 };
+        if (sscanf(l + 10, "%f %f %f %f %f %f", &v[0], &v[1], &v[2], &v[3], &v[4], &v[5]) >= 3) { memcpy(essai_v, v, sizeof v); essai_dem = 1; }
+        else reponse("SDX ERR essai");
+    }
     else if (!strncmp(l, "SDX COURSE", 10)) { int k = 0, a = 1; sscanf(l + 10, "%d %d", &k, &a); course_all = a; course_dem = k < 0 ? 0 : k; }   /* réponse : boucle du jeu */
     else if (!strcmp(l, "SDX ECRAN")) ecran_dem = 1;
+    else if (!strncmp(l, "SDX XP ", 7)) { xp_val = atoi(l + 7); printf("SDX XP OK %d\n", xp_val); fflush(stdout); }   /* essais de mesure (main.c, render.c : eng_xp) */
     else if (!strncmp(l, "SDX MANETTE ", 12)) {
         if (!en_sram(manette_regler, l + 12, NULL)) reponse("SDX ERR manette");
         else { reponse("SDX MANETTE OK"); vTaskDelay(pdMS_TO_TICKS(100)); horloge_garder(); esp_restart(); }
@@ -357,6 +369,7 @@ static void commande(const char *l) {
     }
     else if (!strcmp(l, "SDX FIN")) finir();
     else if (!strcmp(l, "SDX VEILLE")) { veille_demander(); reponse("SDX VEILLE OK"); }   /* essai de la veille depuis le PC */
+    else if (!strcmp(l, "SDX REVEIL")) { veille_reveiller(); reponse("SDX REVEIL OK"); }   /* et du réveil (montre branchée : la console reste) */
     else if (!strncmp(l, "SDX BANC ", 9)) { int k, p, r = 0; if (sscanf(l + 9, "%d %d %d", &k, &p, &r) >= 2) banc(k, p, r); else reponse("SDX ERR commande"); }
     else if (!strcmp(l, "SDX REDEMARRE")) { reponse("SDX REDEMARRE OK"); vTaskDelay(pdMS_TO_TICKS(100)); horloge_garder(); esp_restart(); }
     else if (!strncmp(l, "SDX APP ", 8)) { if (en_sram(app_la, l + 8, NULL)) { reponse("SDX APP OK"); vTaskDelay(pdMS_TO_TICKS(100)); en_sram(lancer_app, l + 8, NULL); } else reponse("SDX ERR application absente"); }
@@ -408,6 +421,14 @@ void sdx_start(int carte) {
     static StaticTask_t tcb;
     carte_ok = carte;
     if (carte) mise_en_place();
+    /* Mémoire de la copie réservée ici, avant le moteur (le bloc reçu, lui, est le tampon commun du moteur) */
+    dma = heap_caps_malloc(ECRIT_MAX, MALLOC_CAP_DMA | MALLOC_CAP_INTERNAL);
+    if ((table = heap_caps_malloc(256 * sizeof *table, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT)))
+        for (uint32_t i = 0; i < 256; i++) {
+            uint32_t c = i;
+            for (int j = 0; j < 8; j++) c = c & 1 ? 0xEDB88320u ^ (c >> 1) : c >> 1;
+            table[i] = c;
+        }
     StackType_t *pile = heap_caps_malloc(PILE, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);   /* pas de SRAM interne : elle va au moteur */
     if (!pile || !xTaskCreateStaticPinnedToCore(tache, "sdx", PILE, NULL, 3, pile, &tcb, 0)) ESP_LOGE(TAG, "tâche de copie impossible à créer");
 }

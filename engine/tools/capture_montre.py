@@ -7,6 +7,15 @@ Essais sur la montre par l'USB (firmware Echoes en jeu, commandes SDX de platfor
                                                  rendu en course), journal des i/s pendant s secondes (40), capture à
                                                  la fin si png est donné
   capture_montre.py journal [s]                  journal de la carte pendant s secondes (20)
+  capture_montre.py essai x z cap pluie heure s [journal.txt] [png]
+                                                 essai de fluidité (SDX ESSAI, eng_essai_monde de game.c) : Sera posée en
+                                                 x, z, pluie 0 / 1, heure 0 à 1 (-1 : celle du moment), elle court vers le
+                                                 cap pendant s secondes ; journal (avec le profil d'un firmware
+                                                 -DECHOES_PROFIL=1) écrit dans journal.txt, capture au milieu
+  capture_montre.py xp n                         essais de mesure du firmware de profilage (SDX XP, main.c et render.c) :
+                                                 1 = en série, 8 = cœur 0 sans bandes, 2 = textures en 2 × 2 texels, 0 = rien
+  capture_montre.py demarrage [s] [journal.txt]  journal du démarrage : rouvre le port dès qu'il revient (après un flash
+                                                 ou un redémarrage), lignes du journal pendant s secondes (40)
 
   --port COMx : port de la montre (sinon le premier ESP32-S3 en USB)
 
@@ -35,6 +44,7 @@ def ouvrir(port):
     s = serial.Serial()
     s.port, s.baudrate, s.timeout = port, 115200, 0.05
     s.dtr = s.rts = False
+    s.write_timeout = 5   # l'app montre (Echoes en veille) ne lit pas la console : pas d'envoi bloqué pour toujours
     s.open()
     return s
 
@@ -59,6 +69,7 @@ class Lien:
 
 RE_IPS = re.compile(r'([0-9.]+) i/s \| (\d+) triangles')
 RE_ANSI = re.compile(r'\x1b\[[0-9;]*m')
+JOURNAL_FICHIER = None   # essai : toutes les lignes de la console y sont ajoutées
 
 
 def journal(lien, duree, afficher=True):
@@ -69,6 +80,9 @@ def journal(lien, duree, afficher=True):
         if l is None:
             continue
         l = RE_ANSI.sub('', l)
+        if JOURNAL_FICHIER:
+            with open(JOURNAL_FICHIER, 'a', encoding='utf-8') as f:
+                f.write(l + chr(10))
         m = RE_IPS.search(l)
         if m:
             ips.append((float(m.group(1)), int(m.group(2))))
@@ -131,14 +145,46 @@ def resume(ips):
 def main():
     a = argparse.ArgumentParser()
     a.add_argument('--port')
-    a.add_argument('action', choices=['ecran', 'course', 'journal'])
+    a.add_argument('action', choices=['ecran', 'course', 'journal', 'essai', 'xp', 'demarrage'])
     a.add_argument('args', nargs='*')
     o = a.parse_args()
+    if o.action == 'demarrage':
+        global JOURNAL_FICHIER
+        JOURNAL_FICHIER = o.args[1] if len(o.args) > 1 else None
+        fin = time.time() + 60
+        while True:
+            try:
+                lien = Lien(ouvrir(o.port or port_auto()))
+                break
+            except (serial.SerialException, SystemExit):
+                if time.time() > fin:
+                    sys.exit('port absent')
+                time.sleep(0.05)
+        journal(lien, float(o.args[0]) if o.args else 40, afficher=False)
+        return
     lien = Lien(ouvrir(o.port or port_auto()))
     if o.action == 'ecran':
         ecran(lien, o.args[0] if o.args else 'ecran_montre.png')
+    elif o.action == 'xp':
+        lien.envoyer(f'SDX XP {int(o.args[0])}')
+        fin = time.time() + 3
+        while time.time() < fin:
+            l = lien.ligne(0.5)
+            if l and 'SDX XP' in l:
+                print(l)
+                return
+        print('pas de réponse (firmware sans SDX XP ?)')
     elif o.action == 'journal':
         resume(journal(lien, float(o.args[0]) if o.args else 20))
+    elif o.action == 'essai':
+        x, z, cap, pluie, heure, s = (float(v) for v in o.args[:6])
+        lien.envoyer(f'SDX ESSAI {x} {z} {cap} {int(pluie)} {heure} {s}')
+        JOURNAL_FICHIER = o.args[6] if len(o.args) > 6 else None
+        ips = journal(lien, s / 2)
+        if len(o.args) > 7:
+            ecran(lien, o.args[7])
+        ips += journal(lien, s / 2 - 1)
+        resume(ips[1:])   # la première mesure couvre le chargement du lieu
     else:
         k, al = int(o.args[0]), int(o.args[1])
         duree = float(o.args[2]) if len(o.args) > 2 else 40

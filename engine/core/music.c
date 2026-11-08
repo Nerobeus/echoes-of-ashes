@@ -4,7 +4,7 @@
  *
  * Le jeu (music_update, à chaque image) choisit la piste voulue et remplit un anneau de 32 blocs (1,3 s) ; la tâche
  * audio (music_mix) les décode et les ajoute aux sons. Piste voulue, de la plus forte à la plus faible :
- *   - course en cours : piste des courses ;
+ *   - course en cours : piste des courses, ou l'une de sa série (course_2, course_3… : chaque course prend la suivante) ;
  *   - combat : victoire, défaite, piste de l'ennemi (les boss), sinon celle des combats ;
  *   - instruction « musique » du scénario, jusqu'à « musique auto » (« musique aucune » : silence) ;
  *   - zone de musique où se trouve Sera (la plus petite) ;
@@ -14,6 +14,7 @@
  * la nouvelle part ; une piste quittée pour un combat ou une course reprend où elle en était.
  */
 #include <math.h>
+#include <stdio.h>
 #include <string.h>
 #include "internal.h"
 
@@ -44,13 +45,18 @@ static struct {
     int cur, cur_combat, fin;           /* piste en cours (-1 aucune), voulue par un combat ou une course, fin lue */
     uint32_t next, skip;                /* prochain bloc à lire ; échantillons à sauter dans ce bloc */
     int reprise_p; uint32_t reprise_b;  /* piste quittée pour un combat ou une course, et son bloc */
+    int course_on, course_k, course_p;  /* course en cours, courses lancées, sa piste (serie) */
+    int club_on, club_k, club_p;        /* boîte de nuit : on y est, visites, sa piste (série de la course) */
     int32_t cache_s[MCACHE], cache_t[MCACHE];   /* chaîne du scénario -> piste */
     int16_t pcm[MSPB]; int pn, pi; uint32_t frac;   /* tâche audio : bloc décodé, position */
-} M = { .cur = -1, .muet = 1, .reprise_p = -1 };
+} M = { .cur = -1, .muet = 1, .reprise_p = -1, .course_k = -1 };
 
 static uint32_t rd32(const uint8_t *p) { return p[0] | (p[1] << 8) | (p[2] << 16) | ((uint32_t)p[3] << 24); }
 
 void music_reset_names(void) { for (int k = 0; k < MCACHE; k++) M.cache_s[k] = -1; }
+/* Anneau des blocs (16 Ko) réservé par eng_init avant les images et le pilote : réservé à eng_music_attach, après
+   eng_init, il ne trouvait plus sa place sur la montre (01/11/2026 : plus de musique) */
+void music_reserver(void) { if (!M.ring && E.cfg.alloc) M.ring = E.cfg.alloc(RING * MBLK, 0); }
 
 void eng_music_attach(uint32_t size, int (*read)(uint32_t off, void *dst, uint32_t len)) {
     uint8_t h[48];
@@ -89,6 +95,20 @@ static int track(int s) {
     return M.cache_t[c];
 }
 
+/* Piste t ou l'une de sa série (t_2, t_3… jusqu'à t_9), la k-ième en tournant : les courses changent de musique
+   (01/11/2026 : trois morceaux de course ; serie de musVoulue dans l'émulateur) */
+static int serie(int t, int k) {
+    if (t < 0) return t;
+    int s[9] = { t }, n = 1;
+    char b[40];   /* nom de 23 caractères au plus, « _ » et le rang : de la marge pour format-truncation */
+    for (int i = 2; i <= 9; i++) {
+        snprintf(b, sizeof b, "%s_%d", M.t[t].nom, i);
+        if ((s[n] = find(b)) < 0) break;
+        n++;
+    }
+    return s[k % n];
+}
+
 /* Piste voulue ; *combat : voulue par un combat ou une course (la piste quittée reprendra) */
 static int wanted(int *combat) {
     const world_t *w = &E.w;
@@ -96,16 +116,25 @@ static int wanted(int *combat) {
     *combat = 0;
     if (accueil_on()) { const char *m = accueil_musique(); return m && m[0] ? find(m) : -1; }   /* écran titre, introduction */
     *combat = 1;
-    if (CR.on) return plan ? track(w->mus_course) : find("course");
+    if (!CR.on) M.course_on = 0;
+    else if (!M.course_on) { M.course_on = 1; M.course_p = serie(plan ? track(w->mus_course) : find("course"), ++M.course_k); }
+    if (CR.on) return M.course_p;
     if (BT.on) {
         if (BT.phase == BP_WIN) return plan ? track(w->mus_victoire) : find("victoire");
         if (BT.phase == BP_LOSE) return plan ? track(w->mus_defaite) : find("defaite");
-        for (int e = 0; e < w->mus_ne; e++) if (w->mus_e[e].perso == BT.perso) return track(w->mus_e[e].piste);
+        for (int e = 0; e < w->mus_ne; e++) if (w->mus_e[e].perso == BT.en[0].perso) return track(w->mus_e[e].piste);   /* le chef du groupe */
         return plan ? track(w->mus_combat) : find("combat");
     }
     *combat = 0;
     if (E.mus_force == 65534) return -1;
-    if (E.mus_force != 65535) return track(E.mus_force);
+    /* Musique imposée par une scène : une chaîne de l'histoire, gardée dans la sauvegarde. Une partie d'avant une régénération du monde
+       pointe vers une autre chaîne (07/11/2026 : plus aucune musique dans le monde après l'ajout des Repris, les chaînes s'étaient
+       décalées) : ce qui n'est pas le nom d'une piste vaut « musique auto » (musVoulue de l'émulateur) */
+    if (E.mus_force != 65535) { const int t = track(E.mus_force); if (t >= 0) return t; }
+    /* Boîte de nuit (E.in.club, 03/11/2026, demande de l'utilisateur) : la techno des courses, une autre de la série à
+       chaque visite (musVoulue de l'émulateur) */
+    if (!E.in.on || !E.in.club) M.club_on = 0;
+    else { if (!M.club_on) { M.club_on = 1; M.club_p = serie(plan ? track(w->mus_course) : find("course"), ++M.club_k); } return M.club_p; }
     /* Autre carte : sa piste (les zones ne valent que sur la planète) */
     if (w->carte) return plan && w->carte < 16 && w->mus_carte[w->carte] != 65535 ? track(w->mus_carte[w->carte]) : plan ? track(w->mus_defaut) : 0;
     int best = -1; float br = 1e9f;

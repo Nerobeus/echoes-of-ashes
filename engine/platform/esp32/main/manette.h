@@ -9,14 +9,23 @@
 
 #define MANETTE_HAUT 1       /* bouton du haut */
 #define MANETTE_CLIC 2       /* clic du stick */
+/* Boutons rendus par manette_etat : OK (A des consoles) et RETOUR (B), le clic du stick et le bouton du haut, ou
+   l'inverse (manette_inverse) */
+#define MANETTE_OK MANETTE_CLIC
+#define MANETTE_RETOUR MANETTE_HAUT
 typedef struct { int boutons, x, y; } manette_t;   /* stick : x et y de -100 à 100 (droite et bas positifs) */
 
 /* NimBLE en central : recherche de « Pokemon PBP », connexion, notifications ; 0 si la pile ne démarre pas (mémoire) */
 bool manette_demarrer(void);
 void manette_arreter(void);
+/* Veille sur place : hôte arrêté, contrôleur désactivé mais gardé avec sa SRAM ; manette_demarrer le reprend au réveil */
+void manette_veille(void);
 bool manette_active(void);
 bool manette_connectee(void);
 manette_t manette_etat(void);      /* tout à zéro sans manette */
+/* OK et RETOUR inversés (OK = bouton du haut) : réglage commun à toutes les applications, gardé en NVS (« manette ») */
+bool manette_inverse(void);
+void manette_inverser(bool oui);
 int manette_batterie(void);        /* niveau de la batterie (%), -1 : inconnu ou pas connectée */
 int64_t manette_vue(void);         /* dernier changement (µs) : les veilles automatiques en tiennent compte */
 /* Mesure (console) : trames reçues et plus grand écart entre deux (ms) depuis l'appel précédent */

@@ -1,0 +1,193 @@
+<!doctype html>
+<html lang="fr"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Le Chœur des Cendres</title>
+<!-- Version autonome pour PC (node tools/build_web.js --pc [--enfant]) : un seul fichier, ouvert d'un double-clic, sans
+     serveur. Moteur C en WebAssembly (3D native 466 × 466), monde et musiques compressés en gzip dans la page,
+     décompressés par le navigateur (DecompressionStream). Commandes de conduite : le joystick d'un doigt au départ. -->
+<style>
+:root{--bg:#07060c;--fg:#e8f6ff;--dim:#8a93a8;--line:#2a2540;--c1:#22e4ff;--c2:#ff4fb0;color-scheme:dark}
+*{box-sizing:border-box}
+html,body{margin:0;height:100%;background:var(--bg);color:var(--fg);font:14px "Segoe UI",system-ui,sans-serif;overflow:hidden}
+#scene{position:fixed;inset:0;display:grid;place-items:center;background:radial-gradient(circle at 50% 45%,#141224 0,var(--bg) 70%)}
+canvas{display:block;border-radius:50%;background:#000;touch-action:none;box-shadow:0 0 0 2px #1b2a3a,0 0 48px rgba(34,228,255,.12)}
+canvas.net{image-rendering:pixelated}
+.barre{position:fixed;top:12px;right:12px;display:flex;gap:8px}
+button{font:12px ui-monospace,"Cascadia Mono",monospace;letter-spacing:.08em;background:rgba(10,12,22,.8);color:var(--fg);border:1px solid var(--line);border-radius:4px;padding:7px 11px;cursor:pointer}
+button:hover{border-color:var(--c1);color:var(--c1)}
+button:focus-visible{outline:2px solid var(--c1);outline-offset:1px}
+#aide{position:fixed;inset:0;display:none;place-items:center;background:rgba(4,4,10,.72);padding:16px}
+#aide.ouverte{display:grid}
+.carte{max-width:560px;width:100%;max-height:calc(100vh - 32px);overflow:auto;background:#0d0c18;border:1px solid var(--line);border-top:2px solid var(--c1);border-radius:6px;padding:20px 22px}
+h1{margin:0 0 4px;font-size:22px;letter-spacing:.04em}
+h2{margin:18px 0 8px;font-size:12px;letter-spacing:.14em;text-transform:uppercase;color:var(--c1)}
+.sous{margin:0;color:var(--dim);font-size:13px}
+dl{display:grid;grid-template-columns:max-content 1fr;gap:6px 14px;margin:0}
+dt{font:12px ui-monospace,"Cascadia Mono",monospace;color:var(--fg);white-space:nowrap}
+dd{margin:0;color:var(--dim)}
+kbd{font:11px ui-monospace,monospace;border:1px solid var(--line);border-bottom-width:2px;border-radius:3px;padding:1px 5px;color:var(--fg)}
+.note{margin:14px 0 0;color:var(--dim);font-size:12px}
+.fin{display:flex;justify-content:flex-end;margin-top:16px}
+#etat{position:fixed;left:0;right:0;bottom:14px;text-align:center;color:var(--dim);font:12px ui-monospace,monospace;pointer-events:none}
+</style></head><body>
+<div id="scene"><canvas id="ecran" width="466" height="466" aria-label="Écran du jeu"></canvas></div>
+<div class="barre" role="group" aria-label="Affichage">
+  <button type="button" id="baide">Aide (H)</button>
+  <button type="button" id="bplein">Plein écran</button>
+</div>
+<p id="etat">Chargement du monde…</p>
+<div id="aide" role="dialog" aria-modal="true" aria-labelledby="titre-aide"><div class="carte">
+  <h1 id="titre-aide">Le Chœur des Cendres</h1>
+  <p class="sous">Version pour PC, dans le navigateur. Même moteur que la montre et le téléphone.</p>
+  <h2>Souris</h2>
+  <dl>
+    <dt>Clic au sol</dt><dd>Sera s'y rend ; bouton maintenu : elle suit le pointeur (loin d'elle, elle court)</dd>
+    <dt>Bord du cercle</dt><dd>glisser pour tourner la caméra</dd>
+    <dt>Clic sur une bulle</dt><dd>parler, monter dans un véhicule, entrer</dd>
+    <dt>Double-clic sur Sera</dt><dd>menu</dd>
+    <dt>Joystick</dt><dd>en véhicule, cercle sous le véhicule : cliquer dessus puis glisser (vers le haut avancer, sur les côtés braquer, vers le bas freiner et reculer)</dd>
+  </dl>
+  <h2>Clavier</h2>
+  <dl>
+    <dt><kbd>Z</kbd><kbd>Q</kbd><kbd>S</kbd><kbd>D</kbd> ou flèches</dt><dd>se déplacer, conduire (<kbd>W</kbd><kbd>A</kbd><kbd>S</kbd><kbd>D</kbd> en QWERTY)</dd>
+    <dt><kbd>A</kbd> <kbd>E</kbd></dt><dd>tourner la caméra (<kbd>Q</kbd> <kbd>E</kbd> en QWERTY)</dd>
+    <dt><kbd>Entrée</kbd> <kbd>Espace</kbd></dt><dd>parler, valider</dd>
+    <dt><kbd>Échap</kbd></dt><dd>retour</dd>
+    <dt><kbd>M</kbd></dt><dd>menu</dd>
+    <dt><kbd>R</kbd> <kbd>F</kbd></dt><dd>vaisseau : monter, descendre</dd>
+    <dt><kbd>H</kbd></dt><dd>cette aide</dd>
+  </dl>
+  <p class="note">Menu SYSTÈME › COMMANDES : JOYSTICK (un doigt ou la souris) ou DOUBLES (écran tactile, deux pouces : gaz à gauche, volant à droite). Les parties sont gardées dans ce navigateur : effacer les données du site les efface.</p>
+  <div class="fin"><button type="button" id="bjouer">Jouer</button></div>
+</div></div>
+<script id="wasm" type="application/octet-stream">@@WASM@@</script>
+<script id="pak" type="application/octet-stream">@@PAK_GZ@@</script>
+<script id="musique" type="application/octet-stream">@@MUSIQUE_GZ@@</script>
+<script>
+(async () => {
+  const etat = document.getElementById('etat');
+  // Base64 décodé par morceaux de 4 Mo dans un tableau de la bonne taille, puis texte de la balise rendu
+  const b64 = id => {
+    const el = document.getElementById(id), t = el.textContent.trim();
+    if (!t) return null;
+    const n = t.length / 4 * 3 - (t.endsWith('==') ? 2 : t.endsWith('=') ? 1 : 0), o = new Uint8Array(n);
+    for (let i = 0, j = 0; i < t.length; i += 1 << 22) {
+      const s = atob(t.slice(i, i + (1 << 22)));
+      for (let k = 0; k < s.length; k++) o[j++] = s.charCodeAt(k);
+    }
+    el.textContent = '';
+    return o;
+  };
+  const gunzip = async b => new Uint8Array(await new Response(new Blob([b]).stream().pipeThrough(new DecompressionStream('gzip'))).arrayBuffer());
+  const pause = () => new Promise(r => setTimeout(r, 30));   // laisse le texte d'état s'afficher
+  if (!window.DecompressionStream || !window.WebAssembly) { etat.textContent = 'Navigateur trop ancien : Chrome, Edge, Firefox ou Safari récent requis'; return; }
+
+  // Aide : ouverte au premier lancement, puis par H ou le bouton
+  const aide = document.getElementById('aide');
+  let vue = false;
+  try { vue = localStorage.getItem('echoes-pc-aide') === '1'; } catch (e) {}
+  const montrer = on => { aide.classList.toggle('ouverte', on); if (!on) { try { localStorage.setItem('echoes-pc-aide', '1'); } catch (e) {} } };
+  document.getElementById('baide').onclick = () => montrer(!aide.classList.contains('ouverte'));
+  document.getElementById('bjouer').onclick = () => montrer(false);
+  aide.addEventListener('pointerdown', e => { if (e.target === aide) montrer(false); });
+  if (!vue) montrer(true);
+  document.getElementById('bplein').onclick = () => document.fullscreenElement ? document.exitFullscreen() : document.documentElement.requestFullscreen().catch(() => {});
+
+  await pause();
+  let pak;
+  try { pak = await gunzip(b64('pak')); } catch (e) { etat.textContent = 'Monde illisible (' + e.message + ')'; return; }
+  etat.textContent = 'Démarrage du moteur…'; await pause();
+  const cv = document.getElementById('ecran'), ctx = cv.getContext('2d'), img = ctx.createImageData(466, 466);
+  let X = null;
+  // Sauvegardes : emplacements dans le stockage local du navigateur
+  const env = {
+    js_save_write: (slot, ptr, len) => {
+      try { const a = new Uint8Array(X.memory.buffer, ptr, len); let s = ''; for (let i = 0; i < a.length; i++) s += String.fromCharCode(a[i]);
+        localStorage.setItem('echoes-pc-sauve-' + slot, btoa(s)); return len; } catch (e) { return -1; }
+    },
+    js_save_read: (slot, ptr, cap) => {
+      try { const s = localStorage.getItem('echoes-pc-sauve-' + slot); if (!s) return -1;
+        const a = Uint8Array.from(atob(s), c => c.charCodeAt(0)), n = Math.min(cap, a.length);
+        new Uint8Array(X.memory.buffer, ptr, n).set(a.subarray(0, n)); return n; } catch (e) { return -1; }
+    }
+  };
+  const wasi = new Proxy({}, { get: (_, name) => name === 'proc_exit' ? () => { throw new Error('exit'); } : () => 0 });
+  const { instance } = await WebAssembly.instantiate(b64('wasm'), { env, wasi_snapshot_preview1: wasi });
+  X = instance.exports;
+  if (X._initialize) X._initialize();
+  const pp = X.web_alloc(pak.length);
+  new Uint8Array(X.memory.buffer, pp, pak.length).set(pak);
+  if (X.web_init(pp, pak.length, 1) !== 0) { etat.textContent = 'Paquet refusé par le moteur'; return; }   // 1 : joystick au départ
+  pak = null;
+  // Musiques : copiées dans la mémoire du module (lues de là comme sur la carte SD)
+  try {
+    const mz = b64('musique');
+    if (mz) { const m = await gunzip(mz), p = X.web_alloc(m.length); if (p) { new Uint8Array(X.memory.buffer, p, m.length).set(m); X.web_music(p, m.length); } }
+  } catch (e) {}
+  etat.textContent = '';
+
+  // Taille : la plus grande qui tient ; à partir du double, un multiple entier en pixels nets, sinon lissée
+  const taille = () => {
+    const dispo = Math.max(200, Math.min(innerWidth, innerHeight) - 32), k = Math.floor(dispo / 466), s = k >= 2 ? k * 466 : dispo;
+    cv.style.width = cv.style.height = s + 'px';
+    cv.classList.toggle('net', k >= 2);
+  };
+  addEventListener('resize', taille); taille();
+
+  // Son : démarré au premier geste (les navigateurs l'exigent) ; la page tire les échantillons du moteur par blocs
+  let audio = null;
+  const startAudio = () => {
+    if (audio) { if (audio.state === 'suspended') audio.resume(); return; }
+    audio = new (window.AudioContext || window.webkitAudioContext)();
+    const node = audio.createScriptProcessor(2048, 0, 1);
+    node.onaudioprocess = e => {
+      const out = e.outputBuffer.getChannelData(0);
+      if (!X || !X.web_audio || document.hidden) { out.fill(0); return; }
+      const ptr = X.web_audio(out.length, audio.sampleRate), pcm = new Int16Array(X.memory.buffer, ptr, out.length);
+      for (let i = 0; i < out.length; i++) out[i] = pcm[i] / 32768;
+    };
+    node.connect(audio.destination);
+  };
+  addEventListener('pointerdown', startAudio); addEventListener('keydown', startAudio);
+
+  // Clavier (codes physiques : ZQSD en AZERTY = WASD en QWERTY)
+  const keys = new Set();
+  const KB = { KeyW: 1, ArrowUp: 1, KeyS: 2, ArrowDown: 2, KeyA: 4, ArrowLeft: 4, KeyD: 8, ArrowRight: 8, KeyQ: 16, KeyE: 32, Enter: 64, Space: 64, Escape: 128, KeyM: 256, KeyR: 512, KeyF: 1024 };
+  addEventListener('keydown', e => {
+    if (e.code === 'KeyH' && !e.repeat) { montrer(!aide.classList.contains('ouverte')); return; }
+    if (aide.classList.contains('ouverte')) { if (e.code === 'Escape' || e.code === 'Enter') montrer(false); e.preventDefault(); return; }
+    if (KB[e.code] && !e.ctrlKey && !e.altKey && !e.metaKey) { keys.add(e.code); e.preventDefault(); }
+  });
+  addEventListener('keyup', e => keys.delete(e.code));
+  addEventListener('blur', () => { keys.clear(); fingers.clear(); });
+
+  // Pointeur : la souris (bouton gauche) ou deux doigts au plus, en pixels de l'écran 466
+  const fingers = new Map();
+  const pos = e => { const r = cv.getBoundingClientRect(); return [(e.clientX - r.left) / r.width * 466, (e.clientY - r.top) / r.height * 466]; };
+  cv.addEventListener('pointerdown', e => {
+    if (e.pointerType === 'mouse' && e.button !== 0) return;
+    cv.setPointerCapture(e.pointerId); e.preventDefault();
+    if (fingers.size < 2) fingers.set(e.pointerId, pos(e));
+  });
+  cv.addEventListener('pointermove', e => { if (fingers.has(e.pointerId)) fingers.set(e.pointerId, pos(e)); });
+  const lift = e => fingers.delete(e.pointerId);
+  cv.addEventListener('pointerup', lift); cv.addEventListener('pointercancel', lift);
+  cv.addEventListener('contextmenu', e => e.preventDefault());
+
+  // Boucle : 60 images par seconde au plus (écrans à 120 ou 144 Hz : le moteur ne tourne pas plus vite pour rien)
+  let last = performance.now(), prochaine = 0;
+  const loop = now => {
+    requestAnimationFrame(loop);
+    if (now < prochaine) return;
+    prochaine = Math.max(prochaine + 1000 / 60, now - 1000 / 60);
+    const dt = Math.min(0.1, (now - last) / 1000); last = now;
+    let k = 0;
+    if (!aide.classList.contains('ouverte')) keys.forEach(c => k |= KB[c]);
+    const f = aide.classList.contains('ouverte') ? [] : [...fingers.values()];
+    X.web_frame(dt, now / 1000, k, f.length > 0, f[0] ? f[0][0] : 0, f[0] ? f[0][1] : 0, f.length > 1, f[1] ? f[1][0] : 0, f[1] ? f[1][1] : 0);
+    img.data.set(new Uint8Array(X.memory.buffer, X.web_fb(), 466 * 466 * 4));
+    ctx.putImageData(img, 0, 0);
+  };
+  requestAnimationFrame(loop);
+})();
+</script>
+</body></html>

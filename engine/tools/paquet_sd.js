@@ -5,6 +5,8 @@
  *   - TEX ne garde que les tuiles du décor (avant GROUND_OFF) et les grands décors (après BIG_OFF, qui devient
  *     GROUND_OFF dans HEAD ; la taille de TEX aussi) ; TEXS : décalage des textures du sol dans monde.pak u32, nombre u32 ;
  *   - CHNK et CART restent tels quels (leurs décalages sont ceux de monde.pak), CDAT, INTR et CRTD restent sur la carte ;
+ *   - PLAN (plans de la carte du menu) reste sur la carte ; PLAX : son décalage dans monde.pak u32, sa taille u32 ;
+ *   - REPT (textes des répliques par zone) reste sur la carte ; REPX : son décalage dans monde.pak u32, sa taille u32 ;
  *   - SDPK : taille de monde.pak u32 (le firmware vérifie que la carte porte le bon fichier).
  * Le moteur lit le reste par eng_config_t.pak_read dans monde.pak (format : engine/core/pak.h).
  *
@@ -48,6 +50,16 @@ function paquetLeger(full) {
     let sprxN = 0, retire = 0;
     for (const s of S) {
         if (s.tag === 'CDAT' || s.tag === 'INTR' || s.tag === 'CRTD' || s.tag === 'END ') continue;   // CRTD : cartes secondaires, sur la carte SD
+        if (s.tag === 'PLAN') {   // plans de la carte du menu (carte.c) : sur la carte SD ; PLAX : leur place dans monde.pak
+            const px = Buffer.alloc(8); px.writeUInt32LE(s.data, 0); px.writeUInt32LE(s.len, 4);
+            parts.push(section('PLAX', px)); retire += s.len;
+            continue;
+        }
+        if (s.tag === 'REPT') {   // textes des répliques par zone (core/repliques.c) : sur la carte SD ; REPX : leur place dans monde.pak
+            const rx = Buffer.alloc(8); rx.writeUInt32LE(s.data, 0); rx.writeUInt32LE(s.len, 4);
+            parts.push(section('REPX', rx)); retire += s.len;
+            continue;
+        }
         if (s.tag === 'HEAD') { parts.push(section('HEAD', head)); continue; }
         if (s.tag === 'TEX ') { parts.push(section('TEX ', tex), section('TEXS', texs)); retire += T.len - tex.length; continue; }
         if (s.tag === 'SPRS') {

@@ -21,6 +21,7 @@ enum {
     SON_VENT, SON_MAGIE, SON_PLOUF, SON_VALIDER, SON_ANNULER, SON_PORTE,
     /* moteurs d'autres sortes de véhicules, choisis par l'atelier d'après le nom (section SONM) */
     SON_MOTEUR_MOTO, SON_MOTEUR_SPORT, SON_MOTEUR_CHENILLES, SON_MOTEUR_ELECTRIQUE, SON_MOTEUR_REACTEUR,
+    SON_PAS_MECH,   /* pas lourd du mech conduit, une fois par foulée (ride_drive de game.c) */
     SON_N
 };
 #define SON_SIRENE SON_N         /* sirène de l'alarme : fabriquée par le moteur (dent de scie de 700 Hz) */
@@ -28,9 +29,15 @@ enum {
    frotte contre un mur ou un obstacle */
 enum { CLE_VEHICULE = 1, CLE_TRAFIC = 2, CLE_FROTTEMENT = 16, CLE_SIRENE = 17, CLE_COURSE = 32 };
 
+/* Mixage (SYSTÈME › SON, 01/11/2026) : chaque son appartient à un canal, dont le niveau (0 à 1) s'ajoute au volume
+   général ; moteurs : les boucles des véhicules ; interface : bips du texte, menus, valider, annuler ; effets : le reste */
+enum { CANAL_MUSIQUE, CANAL_EFFETS, CANAL_MOTEURS, CANAL_INTERFACE, CANAUX };
+
 void audio_load(const uint8_t *p, uint32_t size);
 void son_jouer(int son, float vol, float hauteur);
 void son_boucle(int cle, int son, float vol, float hauteur);
 void audio_fin_image(void);
+void audio_canal(int canal, float niveau);
+float audio_canal_niveau(int canal);
 
 #endif

@@ -291,6 +291,7 @@ void d_envoyer(void) {
     if (y1 > LCD_H) y1 = LCD_H;
     sale0 = LCD_H; sale1 = -1;
     int t = 0;
+    lcd_wait_all();   /* tampons partagés (d_init_ext) : rien d'autre ne doit encore les lire */
     for (int y = y0; y < y1; y += bande) {
         const int h = y1 - y < bande ? y1 - y : bande;
         lcd_buffer_wait(t);

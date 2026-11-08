@@ -1,5 +1,5 @@
 /*
- * Echoes of Ashes - moteur RPG façon PS1 pour ESP32-S3 (API publique du cœur)
+ * Le Chœur des Cendres (anciennement Echoes of Ashes ; identifiants « echoes » gardés) - moteur RPG façon PS1 pour ESP32-S3 (API publique du cœur)
  *
  * Le cœur est en C99 sans dépendance de plateforme : il lit un paquet monde (monde.pak, exporté par
  * l'émulateur, voir pak.h), fait avancer le jeu et dessine l'écran rond 466 × 466 par bandes en RGB565.
@@ -144,6 +144,9 @@ typedef struct {
     /* Reprendre la dernière partie sauvegardée sans l'écran titre (ESP32 : après une mise en veille passée par l'app
        montre) */
     int reprendre;
+    /* Commandes de conduite au départ (facultatif) : 1 le joystick d'un seul doigt (page web pour PC : une souris n'a qu'un
+       pointeur), 0 les commandes doubles (deux pouces) ; SYSTÈME › COMMANDES les change, la sauvegarde garde le choix */
+    int joystick;
 } eng_config_t;
 
 typedef struct {
@@ -213,6 +216,8 @@ void eng_move_to(float x, float z);
    piste k avec le premier véhicule de course et des rivaux d'autres planches, le joueur piloté vers l'axe de la piste ;
    allege = 0 : sans l'allègement du rendu en course (sol simplifié plus tôt, render.c), pour comparer. 0 : refusée */
 int eng_essai_course(int piste, int allege);
+int eng_essai_monde(float x, float z, float cap, int pluie, float heure, float s);
+int eng_essai_actif(void);   /* essai de fluidité : Sera posée, pluie, heure, elle court s secondes (game.c) */
 /* Profilage du rendu des bandes (compilé avec ENG_PROFILE, sinon tout à zéro) : cycles des deux cœurs additionnés
    depuis le dernier appel, par poste ; out reçoit ENG_PROF_N valeurs (ou NULL : remise à zéro seulement) */
 enum { PROF_CLEAR, PROF_SETUP, PROF_ROWS, PROF_PIX, PROF_SPRITE, PROF_SHADOW, PROF_SKY, PROF_TRIS, PROF_NROWS, PROF_NRUNS, PROF_N };
@@ -221,9 +226,17 @@ void eng_profile(uint32_t *out);
 /* Profilage de la préparation de l'image (eng_build_frame, cœur 0), mêmes règles : caméra et personnages proches, blocs
    lointains, cases, chunks (garde-corps, bâtiments, blocs), fondus, pluie et personnages, aplatissement et répartition
    par bande, ciel, interface */
-enum { BPROF_DEBUT, BPROF_BLOCS, BPROF_CASES, BPROF_CHUNKS, BPROF_PERSOS, BPROF_TRI, BPROF_CIEL, BPROF_UI, BPROF_N };
+enum { BPROF_DEBUT, BPROF_BLOCS, BPROF_CASES, BPROF_CHUNKS, BPROF_PERSOS, BPROF_TRI, BPROF_CIEL, BPROF_SOL, BPROF_UI, BPROF_N };
 void eng_profile_build(uint32_t *out);
+/* Profilage du jeu (eng_update, cœur 0), mêmes règles : début (ambiance, sons, musique), interface et gestes, course ou
+   conduite, personnages et patrouilles, chunks (world_stream), scénario (mise en scène, passages, météo, script), trafic,
+   fin (intérieur, police, sauvegarde, coffres, eau) */
+enum { UPROF_DEBUT, UPROF_HUD, UPROF_COURSE, UPROF_PNJ, UPROF_CHUNKS, UPROF_SCRIPT, UPROF_TRAFIC, UPROF_FIN, UPROF_N };
+void eng_profile_update(uint32_t *out);
 int eng_profile_mem(void);
+#ifdef ENG_PROFILE
+extern int eng_xp;   /* essais de mesure (firmware de profilage) : bit 2 = textures lues en 2 × 2 texels (raster_poly) */
+#endif
 /* Côté du monde en cases */
 int eng_world_size(void);
 /* Zoom de la caméra (1 : distance d'origine), borné du zoom mini du paquet à 5 (ZOOM_MAX) */
@@ -239,6 +252,13 @@ void eng_set_horloge(int secondes);
 int eng_sauvegarder(void);
 /* 1 sur l'écran titre (pas de partie en cours) */
 int eng_ecran_titre(void);
+/* 1 sur une page de menu de l'écran titre que personne ne touche depuis une seconde : la plateforme peut ralentir la
+   cadence (batterie de la montre), seules la caméra et les cendres bougent, lentement */
+int eng_ecran_calme(void);
+/* Tampon commun du moteur (celui des images, réservé par eng_init : rien n'est réservé pendant le jeu) prêté à la
+   plateforme le jeu en pause (ESP32 : copie de la carte SD par l'USB), NULL s'il fait moins de n octets ; le jeu le
+   reprend à la première image demandée */
+void *eng_tampon_commun(uint32_t n);
 /* Montre : date (jour 1-31, mois 1-12, jour de la semaine 0 dimanche - 6) et batterie (%, -1 inconnue ; en charge), pour
    le cadran du mode verrouillé */
 void eng_set_date(int jour, int mois, int jsem);

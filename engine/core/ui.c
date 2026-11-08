@@ -16,7 +16,7 @@
 #endif
 #define MAX_X 96
 
-enum { OP_POLY, OP_MASK, OP_IMAGE, OP_RMASK, OP_SPRITE, OP_HALO };   /* OP_SPRITE : image indexée, index 0 transparent, lignes de c octets */
+enum { OP_POLY, OP_MASK, OP_IMAGE, OP_RMASK, OP_SPRITE, OP_HALO, OP_BORD };   /* OP_SPRITE : image indexée, index 0 transparent, lignes de c octets ; OP_BORD : halo des bords de l'image (plein écran) */
 typedef struct {
     uint8_t kind, a;
     uint16_t c;
@@ -28,6 +28,7 @@ typedef struct {
         /* image : px (masque msk, ou aucun), ou rgb (3 octets par pixel, convertis au dessin : carte du menu) */
         struct { const uint16_t *px; const uint8_t *msk, *rgb; uint16_t w, h; float x, y, s, ccx, ccy, cr; } img;
         struct { float cx, cy, r0, r1; uint8_t g2; } halo;   /* anneau dégradé (ui_halo) */
+        struct { float x0, y0, x1, y1, e; } bord;            /* bords de l'image, épaisseur e (ui_halo_bord) */
     } u;
 } op_t;
 
@@ -48,13 +49,16 @@ static void circle_spans(void) {
 int ui_ox, ui_oy;
 /* Taille du canevas de l'interface : 466 × 466 (écran rond), ou toute l'image (plein écran : eng_set_screen) */
 int ui_w = ENG_SCREEN, ui_h = ENG_SCREEN;
+/* Taille de toute l'image (plein écran : eng_set_screen) ; le canevas peut s'arrêter avant, aux marges de la barre d'état et
+   de la barre de navigation (eng_set_safe) */
+int ui_img_w = ENG_SCREEN, ui_img_h = ENG_SCREEN;
 /* Décalage appliqué à l'enregistrement de chaque opération (ui_translate) : un écran pas encore refait pour le plein
    écran se dessine dans un cadre de 466 × 466 centré */
 static float tx, ty;
 void ui_translate(float x, float y) { tx = x; ty = y; }
 float ui_tx(void) { return tx; }
 float ui_ty(void) { return ty; }
-static ui_font_t fonts[16];
+static ui_font_t fonts[16] ENG_FROID;   /* en PSRAM (08/11/2026 : la SRAM interne va aux tampons d'envoi à l'écran) */
 static int nfonts;
 static ui_mask_t *icons;
 static char (*icon_names)[9];
@@ -141,7 +145,8 @@ int ui_init(void) {
 /* Couleur 565 dans l'ordre des octets des bandes envoyées */
 uint16_t ui_native(uint16_t c) { return swap ? sw16(c) : c; }
 
-void ui_begin(int swap565) { UB->nops = UB->npts = 0; swap = swap565; }
+static int img_der = -1;   /* rang de la dernière image enregistrée à cette image (ui_miroir), -1 : aucune */
+void ui_begin(int swap565) { UB->nops = UB->npts = 0; swap = swap565; img_der = -1; }
 int ui_op_count(void) { return UB->nops; }
 int ui_pts_count(void) { return UB->npts; }
 void ui_present(void) { UR = UB; UB = UB == &UF[0] ? &UF[1] : &UF[0]; }
@@ -178,10 +183,31 @@ void ui_rect(float x, float y, float w, float h, uint16_t c, int alpha) {
     ui_poly(q, 4, c, alpha);
 }
 
+/* Voile sur toute l'image, marges du téléphone comprises (barre d'état, barre de navigation : hors du canevas, où new_op
+   rogne tout le reste), sans le décalage d'ui_translate ; sur l'écran rond, le canevas est l'image (01/11/2026 : les voiles
+   des sorts, l'éclair et les fondus laissaient des bandes claires en haut et en bas du téléphone) */
+void ui_voile_image(uint16_t c, int alpha) {
+    if (UB->nops >= MAX_OPS || alpha <= 0 || UB->npts + 12 > MAX_PTS) return;
+    const float x0 = (float)-ui_ox, x1 = (float)(ui_img_w - ui_ox), y0 = (float)-ui_oy, y1 = (float)(ui_img_h - ui_oy);
+    op_t *o = &UB->ops[UB->nops++];
+    o->kind = OP_POLY; o->c = c; o->a = (uint8_t)(alpha > 255 ? 255 : alpha);
+    o->ymin = (int16_t)y0; o->ymax = (int16_t)y1;
+    const float xy[8] = { x0, y0, x1, y0, x1, y1, x0, y1 };
+    float *q = &UB->pts[UB->npts];
+    for (int i = 0; i < 4; i++) {
+        const int j = (i + 1) & 3;
+        const float dy = xy[j * 2 + 1] - xy[i * 2 + 1];
+        q[i * 3] = xy[i * 2]; q[i * 3 + 1] = xy[i * 2 + 1];
+        q[i * 3 + 2] = dy != 0 ? (xy[j * 2] - xy[i * 2]) / dy : 0;
+    }
+    o->u.poly.p0 = (uint32_t)UB->npts; o->u.poly.np = 4;
+    UB->npts += 12;
+}
+
 void ui_line(float x0, float y0, float x1, float y1, float w, uint16_t c, int alpha) {
     float dx = x1 - x0, dy = y1 - y0, l = sqrtf(dx * dx + dy * dy);
     if (l < 1e-4f) return;
-    float nx = -dy / l * w / 2, ny = dx / l * w / 2;
+    const float k = w / 2 / l, nx = -dy * k, ny = dx * k;   /* (une division au lieu de deux : logicielle sur l'ESP32) */
     float q[8] = { x0 + nx, y0 + ny, x1 + nx, y1 + ny, x1 - nx, y1 - ny, x0 - nx, y0 - ny };
     ui_poly(q, 4, c, alpha);
 }
@@ -251,7 +277,11 @@ static uint32_t utf8_next(const char **s) {
 static const ui_mask_t *glyph(const ui_font_t *f, uint32_t cp) {
     if (cp < 128) return f->ascii[cp] ? f->ascii[cp] : f->ascii['?'];
     for (int i = 0; i < f->n; i++) if (f->g[i].cp == cp) return &f->g[i];
-    return f->ascii['?'];
+    /* Signes typographiques absents de la police exportée : leur équivalent simple plutôt que « ? » (01/11/2026 : le
+       moins de « −40 CR » des boutiques) */
+    const int rep = cp == 0x2212 || cp == 0x2013 || cp == 0x2014 ? '-' : cp == 0x2019 || cp == 0x2018 ? '\''
+                  : cp == 0xA0 || cp == 0x202F ? ' ' : '?';
+    return f->ascii[rep] ? f->ascii[rep] : f->ascii['?'];
 }
 
 const ui_font_t *ui_font(int style, int size) {
@@ -265,16 +295,24 @@ const ui_font_t *ui_font(int style, int size) {
     return best ? best : small;
 }
 
-float ui_text_width(const ui_font_t *f, const char *s) {
+/* Filtre des textes (ui_filtre) : le texte filtré, le temps d'un appel (l'interface se construit sur un seul fil) */
+static ui_filtre_t filtre;
+static char filtre_buf[256];
+ui_filtre_t ui_filtre(ui_filtre_t f) { const ui_filtre_t a = filtre; filtre = f; return a; }
+static const char *filtrer(const char *s) { return filtre && s ? filtre(s, filtre_buf, (int)sizeof filtre_buf) : s; }
+
+static float text_w(const ui_font_t *f, const char *s) {
     if (!f) return 0;
     float w = 0;
     while (*s) { const ui_mask_t *g = glyph(f, utf8_next(&s)); if (g) w += g->adv16 / 16.0f; }
     return w;
 }
+float ui_text_width(const ui_font_t *f, const char *s) { return text_w(f, filtrer(s)); }
 
 const ui_font_t *ui_fit(int style, const char *s, float max_w, int size, int min) {
     const ui_font_t *f = ui_font(style, size);
-    while (f && ui_text_width(f, s) > max_w && f->size > min) {
+    s = filtrer(s);
+    while (f && text_w(f, s) > max_w && f->size > min) {
         const ui_font_t *g = ui_font(style, f->size - 1);
         if (!g || g == f) break;
         f = g;
@@ -284,7 +322,8 @@ const ui_font_t *ui_fit(int style, const char *s, float max_w, int size, int min
 
 float ui_text(const ui_font_t *f, float x, float y, int align, uint16_t c, int alpha, const char *s) {
     if (!f) return 0;
-    float w = ui_text_width(f, s);
+    s = filtrer(s);
+    float w = text_w(f, s);
     float pen = (align == UI_CENTER ? x - w / 2 : align == UI_RIGHT ? x - w : x) + tx;
     y += ty;
     while (*s) {
@@ -303,7 +342,8 @@ float ui_text(const ui_font_t *f, float x, float y, int align, uint16_t c, int a
 void ui_text_arc(const ui_font_t *f, float cx, float cy, float r, float a, int bottom, uint16_t c, int alpha, const char *s) {
     if (!f || r < 1) return;
     cx += tx; cy += ty;
-    const float w = ui_text_width(f, s), dir = bottom ? -1.0f : 1.0f;
+    s = filtrer(s);
+    const float w = text_w(f, s), dir = bottom ? -1.0f : 1.0f;
     float pen = 0;
     while (*s) {
         const ui_mask_t *g = glyph(f, utf8_next(&s));
@@ -336,15 +376,25 @@ void ui_icon(const char *name, float cx, float cy, int size, uint16_t c, int alp
         int d = abs(icon_sizes[i] - size);
         if (d < bd) { bd = d; best = &icons[i]; }
     }
+    if (!best && !strcmp(name, "team")) { ui_icon("stat", cx, cy, size, c, alpha); return; }   /* paquet d'avant le menu ÉQUIPE */
     if (!best || !best->w) return;
     float gx = floorf(cx + tx + 0.5f) + best->x0, gy = floorf(cy + ty + 0.5f) + best->y0;
     op_t *o = new_op(OP_MASK, c, alpha, gy, gy + best->h);
     if (o) { o->u.mask.m = best; o->u.mask.x = (int16_t)gx; o->u.mask.y = (int16_t)gy; }
 }
 
+/* Carte d'opacité quelconque (m doit rester lisible jusqu'au dessin de l'image suivante), coin à (x0, y0) du centre */
+void ui_masque(const ui_mask_t *m, float cx, float cy, uint16_t c, int alpha) {
+    if (!m || !m->w) return;
+    const float gx = floorf(cx + tx + 0.5f) + m->x0, gy = floorf(cy + ty + 0.5f) + m->y0;
+    op_t *o = new_op(OP_MASK, c, alpha, gy, gy + m->h);
+    if (o) { o->u.mask.m = m; o->u.mask.x = (int16_t)gx; o->u.mask.y = (int16_t)gy; }
+}
+
 static void image_op(const uint16_t *px, const uint8_t *mask, const uint8_t *rgb, int w, int h, float x, float y, float s, float ccx, float ccy, float cr) {
     x += tx; y += ty; ccx += tx; ccy += ty;
     op_t *o = new_op(OP_IMAGE, 0, 255, fmaxf(y, ccy - cr), fminf(y + h * s, ccy + cr));
+    img_der = o ? UB->nops - 1 : -1;
     if (!o) return;
     o->u.img.px = px; o->u.img.msk = mask; o->u.img.rgb = rgb; o->u.img.w = (uint16_t)w; o->u.img.h = (uint16_t)h;
     o->u.img.x = x; o->u.img.y = y; o->u.img.s = s; o->u.img.ccx = ccx; o->u.img.ccy = ccy; o->u.img.cr = cr;
@@ -364,9 +414,17 @@ void ui_image_pal(const uint8_t *ix, const uint16_t *pal, int w, int h, float x,
 void ui_sprite(const uint8_t *ix, int stride, const uint16_t *pal, int w, int h, float x, float y, float s, int a, float ccx, float ccy, float cr) {
     x += tx; y += ty; ccx += tx; ccy += ty;
     op_t *o = new_op(OP_SPRITE, (uint16_t)stride, a, fmaxf(y, ccy - cr), fminf(y + h * s, ccy + cr));
+    img_der = o ? UB->nops - 1 : -1;
     if (!o) return;
     o->u.img.px = pal; o->u.img.msk = NULL; o->u.img.rgb = ix; o->u.img.w = (uint16_t)w; o->u.img.h = (uint16_t)h;
     o->u.img.x = x; o->u.img.y = y; o->u.img.s = s; o->u.img.ccx = ccx; o->u.img.ccy = ccy; o->u.img.cr = cr;
+}
+/* L'image que l'appel précédent vient d'enregistrer (ui_sprite, ui_image…) se dessine retournée gauche-droite, dans le même
+   rectangle : la carte du menu et les plans des pistes (03/11/2026 : la vue 3D montre le plan de l'Atelier en miroir). Le
+   signe de l'échelle le note (band_image), sans place de plus dans l'opération ; rien si cet appel n'a rien enregistré */
+void ui_miroir(void) {
+    if (img_der >= 0 && img_der == UB->nops - 1) UB->ops[img_der].u.img.s = -fabsf(UB->ops[img_der].u.img.s);
+    img_der = -1;
 }
 
 /* Anneau dégradé de r0 à r1 autour de (cx, cy) : opacité nulle en r0, alpha en r1, en proportion du carré de la
@@ -378,17 +436,48 @@ void ui_halo(float cx, float cy, float r0, float r1, uint16_t c, int alpha, int 
     if (!o) return;
     o->u.halo.cx = cx; o->u.halo.cy = cy; o->u.halo.r0 = r0; o->u.halo.r1 = r1; o->u.halo.g2 = (uint8_t)!!g2;
 }
+#if ENG_DYN
+/* Halo des bords de toute l'image (plein écran, 02/11/2026 : accélération en course ; le cercle de la montre n'allait
+   pas au téléphone) : opacité alpha au bord, nulle à e pixels dedans, en carré de la distance (comme ui_halo) ; marges
+   de la barre d'état et de la barre de navigation comprises, sans le décalage d'ui_translate (comme ui_voile_image).
+   Une passe : chaque pixel de la bande des bords mélangé une fois, le milieu de l'image n'est pas parcouru */
+void ui_halo_bord(float e, uint16_t c, int alpha) {
+    if (UB->nops >= MAX_OPS || alpha <= 0 || e < 1) return;
+    op_t *o = &UB->ops[UB->nops++];
+    o->kind = OP_BORD; o->c = c; o->a = (uint8_t)(alpha > 255 ? 255 : alpha);
+    o->u.bord.x0 = (float)-ui_ox; o->u.bord.x1 = (float)(ui_img_w - ui_ox); o->u.bord.y0 = (float)-ui_oy; o->u.bord.y1 = (float)(ui_img_h - ui_oy); o->u.bord.e = e;
+    o->ymin = (int16_t)o->u.bord.y0; o->ymax = (int16_t)o->u.bord.y1;
+}
+#endif
 
 /* ---------- Rastérisation dans une bande (en IRAM sur l'ESP32 : ENG_HOT) ---------- */
 ENG_HOT static void band_poly(const op_t *o, const band_t *B) {
     const float *p = &UR->pts[o->u.poly.p0];
     int n = (int)o->u.poly.np;
     int ys = o->ymin > B->by0 ? o->ymin : B->by0, ye = o->ymax < B->by1 ? o->ymax : B->by1;
+    if (ys >= ye) return;
     float xs[MAX_X];
+    /* Arêtes qui croisent une ligne de la bande, relevées une fois par bande (08/11/2026 : un arc de jauge a une trentaine
+       d'arêtes, toutes testées à chacune de ses 150 lignes ; mêmes croisements, dans le même ordre) ; au-delà de 128
+       arêtes, toutes */
+    uint8_t act[128];
+    int na = 0;
+    if (n <= 128) {
+        const float lo = ys + 0.5f, hi = ye - 0.5f;
+        for (int i = 0; i < n; i++) {
+            const float ya = p[i * 3 + 1], yb = p[(i + 1 == n ? 0 : i + 1) * 3 + 1];
+            if ((ya < yb ? ya : yb) <= hi && (ya > yb ? ya : yb) > lo) act[na++] = (uint8_t)i;
+        }
+    }
     for (int y = ys; y < ye; y++) {
         float py = y + 0.5f;
         int nx = 0;
-        for (int i = 0; i < n && nx < MAX_X; i++) {
+        if (n <= 128) for (int a = 0; a < na && nx < MAX_X; a++) {
+            const int i = act[a];
+            float ya = p[i * 3 + 1], yb = p[(i + 1 == n ? 0 : i + 1) * 3 + 1];
+            if ((ya <= py) != (yb <= py)) xs[nx++] = p[i * 3] + (py - ya) * p[i * 3 + 2];
+        }
+        else for (int i = 0; i < n && nx < MAX_X; i++) {
             float ya = p[i * 3 + 1], yb = p[(i + 1 == n ? 0 : i + 1) * 3 + 1];
             if ((ya <= py) != (yb <= py)) xs[nx++] = p[i * 3] + (py - ya) * p[i * 3 + 2];
         }
@@ -437,6 +526,32 @@ ENG_HOT static void band_halo(const op_t *o, const band_t *B) {
     }
 }
 
+#if ENG_DYN
+/* Halo des bords (ui_halo_bord) : d = distance au bord le plus proche ; opacité alpha × (1 - d / e)² */
+ENG_HOT static void band_bord(const op_t *o, const band_t *B) {
+    const float x0 = o->u.bord.x0, x1 = o->u.bord.x1, y0 = o->u.bord.y0, y1 = o->u.bord.y1, e = o->u.bord.e, ie = 1 / e;
+    const int ys = o->ymin > B->by0 ? o->ymin : B->by0, ye = o->ymax < B->by1 ? o->ymax : B->by1;
+    const int la = (int)ceilf(x0 + e), rb = (int)floorf(x1 - e);   /* colonnes des bandes de gauche [.., la) et de droite [rb, ..) */
+    for (int y = ys; y < ye; y++) {
+        const float py = y + 0.5f, dy = fminf(py - y0, y1 - py);
+        uint16_t *row = B->dst + (y - B->by0) * B->w - B->x0;
+        for (int s = 0; s < 2; s++) {   /* près du haut ou du bas : toute la ligne, en une travée ; sinon les deux côtés */
+            int xa = s ? rb : B->x0, xb = s ? B->x1 : la;
+            if (dy < e) { if (s) break; xa = B->x0; xb = B->x1; }
+            if (xa < B->x0) xa = B->x0;
+            if (xb > B->x1) xb = B->x1;
+            for (int x = xa; x < xb; x++) {
+                const float px = x + 0.5f, d = fminf(dy, fminf(px - x0, x1 - px));
+                if (d >= e) continue;
+                const float f = 1 - d * ie;
+                const int t = (int)(o->a * f * f);
+                if (t >= 8) blend(&row[x], o->c, t);
+            }
+        }
+    }
+}
+#endif
+
 ENG_HOT static void band_mask(const op_t *o, const band_t *B) {
     const ui_mask_t *m = o->u.mask.m;
     int row_bytes = (m->w + 1) >> 1;
@@ -457,32 +572,48 @@ ENG_HOT static void band_mask(const op_t *o, const band_t *B) {
 }
 
 /* Glyphe tourné : chaque pixel de la boîte englobante revient dans le repère du glyphe (point le plus proche). Le
-   long d'une ligne, (u, v) avance de (co, -si) ; décalés de 16, ils restent positifs dans la boîte et la troncature
-   vaut floorf (un appel de bibliothèque sur l'ESP32) */
+   long d'une ligne, (u, v) avance de (co, -si), en virgule fixe 16.16 : un seul test non signé par coordonnée, et la
+   ligne s'arrête dès qu'elle ressort du glyphe (convexe) (08/11/2026 : les coordonnées en arc de l'écran du monde, 56
+   glyphes tournés, étaient près de la moitié du dessin de l'interface ; mêmes pixels). Le plancher sans floorf (un appel
+   de bibliothèque sur l'ESP32) : décalé de 2^23, tout reste positif et la troncature vaut le plancher */
+#define FIXE_DECAL 8388608.0f
+static inline int32_t fixe16(float v) { return (int32_t)(v * 65536 + FIXE_DECAL) - (int32_t)FIXE_DECAL; }
 ENG_HOT static void band_rmask(const op_t *o, const band_t *B) {
     const ui_mask_t *m = o->u.rmask.m;
     const int row_bytes = (m->w + 1) >> 1;
     int at[16];                           /* opacité de chacun des 16 niveaux, une fois par opération */
     for (int k = 0; k < 16; k++) at[k] = k * 17 * o->a / 255;
     const float co = o->u.rmask.co, si = o->u.rmask.si;
+    const int32_t dU = fixe16(co), dV = fixe16(-si);
+    const uint32_t W = (uint32_t)m->w << 16, H = (uint32_t)m->h << 16;
+    const float iU = dU ? 1.0f / dU : 0, iV = dV ? 1.0f / dV : 0;   /* entrée dans le glyphe estimée par ligne, à un pixel près */
     int ys = o->ymin > B->by0 ? o->ymin : B->by0, ye = o->ymax < B->by1 ? o->ymax : B->by1;
     int xs = o->u.rmask.x0 > B->x0 ? o->u.rmask.x0 : B->x0, xe = o->u.rmask.x1 < B->x1 ? o->u.rmask.x1 : B->x1;
+    const uint16_t c = o->c;
     for (int y = ys; y < ye; y++) {
         const float dy = y + 0.5f - o->u.rmask.oy, dx = xs + 0.5f - o->u.rmask.ox;
-        float u = dx * co + dy * si - m->x0 + 16, v = dy * co - dx * si - m->y0 + 16;
+        int32_t U = fixe16(dx * co + dy * si - m->x0), V = fixe16(dy * co - dx * si - m->y0);
+        const float eu = dU > 0 ? -U * iU : dU < 0 ? ((float)W - U) * iU : 0, ev = dV > 0 ? -V * iV : dV < 0 ? ((float)H - V) * iV : 0;
+        const float e = (eu > ev ? eu : ev) - 1;
+        const int k0 = e > 0 ? (e < (float)(xe - xs) ? (int)e : xe - xs) : 0;
+        U += k0 * dU; V += k0 * dV;
         uint16_t *row = B->dst + (y - B->by0) * B->w - B->x0;
-        for (int x = xs; x < xe; x++, u += co, v -= si) {
-            const int i = (int)u - 16, j = (int)v - 16;
-            if (u < 16 || v < 16 || i >= m->w || j >= m->h) continue;
-            const uint8_t b = m->data[j * row_bytes + (i >> 1)];
-            const int v = (i & 1) ? b & 15 : b >> 4;
-            if (v) blend(&row[x], o->c, at[v]);
+        int dedans = 0;
+        for (int x = xs + k0; x < xe; x++, U += dU, V += dV) {
+            if ((uint32_t)U >= W || (uint32_t)V >= H) { if (dedans) break; continue; }
+            dedans = 1;
+            const int i = U >> 16;
+            const uint8_t b = m->data[(V >> 16) * row_bytes + (i >> 1)];
+            const int nv = (i & 1) ? b & 15 : b >> 4;
+            if (nv) blend(&row[x], c, at[nv]);
         }
     }
 }
 
 ENG_HOT static void band_image(const op_t *o, const band_t *B) {
     float s = o->u.img.s, r2 = o->u.img.cr * o->u.img.cr;
+    const int mir = s < 0;   /* retournée gauche-droite (ui_miroir) */
+    if (mir) s = -s;
     int ys = o->ymin > B->by0 ? o->ymin : B->by0, ye = o->ymax < B->by1 ? o->ymax : B->by1;
     int xs = (int)floorf(o->u.img.x), xe = (int)ceilf(o->u.img.x + o->u.img.w * s);
     if (xs < B->x0) xs = B->x0;
@@ -490,18 +621,30 @@ ENG_HOT static void band_image(const op_t *o, const band_t *B) {
     /* Colonne de l'image sous chaque colonne de la bande (-1 : hors de l'image) : la même division, une fois par colonne
        au lieu d'une par pixel (division en logiciel sur l'ESP32) */
     int16_t colx[ENG_W > ENG_SCREEN ? ENG_W : ENG_SCREEN];
-    if (ys < ye) for (int x = xs; x < xe; x++) { const int sx = (int)((x + 0.5f - o->u.img.x) / s); colx[x - xs] = (int16_t)(sx < 0 || sx >= o->u.img.w ? -1 : sx); }
+    if (ys < ye) for (int x = xs; x < xe; x++) { const int sx = (int)((x + 0.5f - o->u.img.x) / s); colx[x - xs] = (int16_t)(sx < 0 || sx >= o->u.img.w ? -1 : mir ? o->u.img.w - 1 - sx : sx); }
     for (int y = ys; y < ye; y++) {
         int sy = (int)((y + 0.5f - o->u.img.y) / s);
         if (sy < 0 || sy >= o->u.img.h) continue;
-        float dy = y + 0.5f - o->u.img.ccy;
+        /* Colonnes de la ligne dans le disque de découpe : une racine par ligne au lieu d'un test par pixel (01/11/2026 :
+           la carte du menu couvre presque tout l'écran de tuiles) */
+        const float dy = y + 0.5f - o->u.img.ccy, q = r2 - dy * dy;
+        if (q < 0) continue;
+        const float hc = sqrtf(q);
+        int xa = (int)ceilf(o->u.img.ccx - hc - 0.5f), xb = (int)floorf(o->u.img.ccx + hc - 0.5f) + 1;
+        if (xa < xs) xa = xs;
+        if (xb > xe) xb = xe;
         uint16_t *row = B->dst + (y - B->by0) * B->w - B->x0;
-        for (int x = xs; x < xe; x++) {
-            float dx = x + 0.5f - o->u.img.ccx;
-            if (dx * dx + dy * dy > r2) continue;
+        if (o->kind == OP_SPRITE) {   /* index (0 transparent), lignes de o->c octets */
+            const uint8_t *src = o->u.img.rgb + sy * o->c;
+            const uint16_t *pl = o->u.img.px;
+            if (o->a >= 255) {
+                for (int x = xa; x < xb; x++) { const int sx = colx[x - xs]; if (sx < 0) continue; const uint8_t k = src[sx]; if (k) row[x] = swap ? sw16(pl[k]) : pl[k]; }
+            } else for (int x = xa; x < xb; x++) { const int sx = colx[x - xs]; if (sx < 0) continue; const uint8_t k = src[sx]; if (k) blend(&row[x], pl[k], o->a); }
+            continue;
+        }
+        for (int x = xa; x < xb; x++) {
             const int sx = colx[x - xs];
             if (sx < 0) continue;
-            if (o->kind == OP_SPRITE) { const uint8_t k = o->u.img.rgb[sy * o->c + sx]; if (k) blend(&row[x], o->u.img.px[k], o->a); continue; }
             int i = sy * o->u.img.w + sx;
             if (o->u.img.rgb && o->u.img.px) blend(&row[x], o->u.img.px[o->u.img.rgb[i]], 255);   /* indexée */
             else if (o->u.img.rgb) { const uint8_t *p = o->u.img.rgb + i * 3; blend(&row[x], ui_rgb(((uint32_t)p[0] << 16) | (p[1] << 8) | p[2]), 255); }
@@ -516,10 +659,20 @@ ENG_HOT void ui_render_band(int y0, int h, uint16_t *dst, int x0, int x1) {
     for (int i = 0; i < UR->nops; i++) {
         const op_t *o = &UR->ops[i];
         if (o->ymax <= y0 || o->ymin >= y0 + h) continue;
+#ifdef ENG_COMPTE
+        extern unsigned long eng_ui_us[8], eng_ui_n[8]; extern uint32_t (*eng_compte_us)(void);
+        const uint32_t tq0 = eng_compte_us ? eng_compte_us() : 0;
+#endif
         if (o->kind == OP_POLY) band_poly(o, &B);
         else if (o->kind == OP_HALO) band_halo(o, &B);
+#if ENG_DYN
+        else if (o->kind == OP_BORD) band_bord(o, &B);
+#endif
         else if (o->kind == OP_MASK) band_mask(o, &B);
         else if (o->kind == OP_RMASK) band_rmask(o, &B);
         else band_image(o, &B);
+#ifdef ENG_COMPTE
+        { const int kk = o->kind < 8 ? o->kind : 7; eng_ui_us[kk] += (eng_compte_us ? eng_compte_us() : 0) - tq0; eng_ui_n[kk]++; }
+#endif
     }
 }

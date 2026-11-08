@@ -140,13 +140,19 @@ static void c_manette(int s) {
     esp_restart();
 }
 
+/* Bouton OK de la manette : clic du stick (RETOUR : bouton du haut) ou l'inverse ; réglage commun aux applications
+   (manette.c, NVS « manette »), le même dans les consoles (BOUTON A) */
+static const char *v_bouton(void) { return manette_inverse() ? "HAUT" : "CLIC"; }
+static void c_bouton(int s) { (void)s; manette_inverser(!manette_inverse()); }
+
 const eng_reglage_t reglages_montre[] = {
     { "VOLUME", v_volume, c_volume },
     { "LUMINOSITÉ", v_lum, c_lum },
     { "VEILLE", v_veille, c_veille },
     { "MANETTE", v_manette, c_manette },
+    { "BOUTON OK", v_bouton, c_bouton },
 };
 const int reglages_nombre = sizeof reglages_montre / sizeof reglages_montre[0];
 /* En jeu, en bas du menu SYSTÈME (eng_config_t.regls_jeu) */
-const eng_reglage_t reglages_jeu[] = { { "MANETTE", v_manette, c_manette } };
+const eng_reglage_t reglages_jeu[] = { { "MANETTE", v_manette, c_manette }, { "BOUTON OK", v_bouton, c_bouton } };
 const int reglages_jeu_nombre = sizeof reglages_jeu / sizeof reglages_jeu[0];

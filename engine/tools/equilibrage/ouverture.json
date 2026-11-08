@@ -1,0 +1,427 @@
+{
+ "note": "Ouverture de chaque étape des annexes : l'étape principale après laquelle elle se fait. 01-02/11/2026 : d'après les niveaux d'origine (une étape attend la suite de l'histoire quand son niveau d'origine dépassait de 4 ou plus celui de la précédente) ; 02/11/2026 au soir (reprise du récit, tools/histoire/audit_recit du dépôt) : quêtes fondues d'après fusion/ouverture_fondues.json, absorbées retirées, ouvertures décalées (ouvertures_decalees.json) jamais avant leur nouveau point (progression.js) ; 03/11/2026 : quêtes des maîtres m01 à m04, ouvertes par les drapeaux bors (acte1#4), cache_rivet_vue (acte2a#2), acte3 (acte2#7) et archives (acte4#3)",
+ "etapes": {
+  "odric": [
+   "acte4#2",
+   "acte4#2",
+   "acte4#2",
+   "acte4#2",
+   "acte5#7"
+  ],
+  "h01": [
+   "prologue#8",
+   "prologue#8"
+  ],
+  "h04": [
+   "acte2a#1",
+   "acte2a#1",
+   "acte2a#1",
+   "acte2a#1",
+   "acte2a#1",
+   "acte2a#1",
+   "acte2#3",
+   "acte2#3",
+   "acte2#3",
+   "acte2#3",
+   "acte2#3",
+   "acte2#3",
+   "acte2#5",
+   "acte2#5",
+   "acte2#5"
+  ],
+  "e04": [
+   "acte1#1",
+   "acte1#1",
+   "acte1#1",
+   "acte1#1"
+  ],
+  "v02": [
+   "acte1#11",
+   "acte1#11",
+   "acte1#11",
+   "acte1#11",
+   "acte1#11",
+   "acte1#11",
+   "acte1#11",
+   "acte1#11"
+  ],
+  "v04": [
+   "acte1#5",
+   "acte1#5"
+  ],
+  "v07": [
+   "acte1#3",
+   "acte1#3"
+  ],
+  "v09": [
+   "acte1#3",
+   "acte1#3"
+  ],
+  "h10": [
+   "a62#2",
+   "a62#2"
+  ],
+  "h11": [
+   "a63#1",
+   "a63#1",
+   "a63#1",
+   "a63#1",
+   "a63#1"
+  ],
+  "eveil-sera": [
+   "a61#3"
+  ],
+  "eveil-jade": [
+   "a61#3"
+  ],
+  "eveil-jade-recrue": [
+   "a61#3"
+  ],
+  "eveil-ambre": [
+   "a61#3"
+  ],
+  "eveil-ambre-recrue": [
+   "a62#2"
+  ],
+  "eveil-azur": [
+   "a61#3"
+  ],
+  "eveil-azur-recrue": [
+   "a62#2"
+  ],
+  "eveil-saule": [
+   "a61#3"
+  ],
+  "eveil-saule-recrue": [
+   "a61#3"
+  ],
+  "eveil-onyx": [
+   "a61#3"
+  ],
+  "eveil-onyx-recrue": [
+   "a61#3"
+  ],
+  "r05": [
+   "a63#2",
+   "a63#2"
+  ],
+  "s04": [
+   "acte5#1",
+   "acte5#1"
+  ],
+  "s05": [
+   "acte5#7",
+   "acte5#7"
+  ],
+  "s10": [
+   "acte5#7",
+   "acte5#7",
+   "acte5#7",
+   "acte5#7",
+   "acte5#7",
+   "acte5#7",
+   "acte5#7"
+  ],
+  "s01": [
+   "acte5#7",
+   "acte5#7",
+   "acte5#7",
+   "acte5#7",
+   "acte5#7",
+   "acte5#7"
+  ],
+  "s07": [
+   "acte5#7",
+   "acte5#7",
+   "acte5#7"
+  ],
+  "s11": [
+   "acte5#7",
+   "acte5#7"
+  ],
+  "s02": [
+   "acte5#7",
+   "acte5#7"
+  ],
+  "s08": [
+   "acte5#7",
+   "acte5#7"
+  ],
+  "s09": [
+   "acte5#7",
+   "acte5#7"
+  ],
+  "j01": [
+   "acte1#3",
+   "acte1#3"
+  ],
+  "j02": [
+   "acte1#5"
+  ],
+  "j03": [
+   "acte2a#2",
+   "acte2a#2"
+  ],
+  "j04": [
+   "acte2#2"
+  ],
+  "k04": [
+   "acte1#1",
+   "acte1#1"
+  ],
+  "k05": [
+   "acte1#4"
+  ],
+  "k06": [
+   "acte2#1",
+   "acte2#1",
+   "acte2#1",
+   "acte2#1"
+  ],
+  "k07": [
+   "acte2#6",
+   "acte2#6"
+  ],
+  "c01": [
+   "acte2#2",
+   "acte2#2",
+   "acte2#2"
+  ],
+  "c02": [
+   "acte4#1",
+   "acte4#1",
+   "acte4#1"
+  ],
+  "c03": [
+   "acte2a#1",
+   "acte2a#1",
+   "acte2a#1"
+  ],
+  "c04": [
+   "acte4#3",
+   "acte4#3"
+  ],
+  "c05": [
+   "acte2#4",
+   "acte2#4"
+  ],
+  "c06": [
+   "acte2#2",
+   "acte2#2"
+  ],
+  "c09": [
+   "acte2#4",
+   "acte2#4",
+   "acte2#4",
+   "acte2#4",
+   "acte2#4",
+   "acte2#4"
+  ],
+  "e01": [
+   "acte2#1",
+   "acte2#1",
+   "acte2#1",
+   "acte2#1",
+   "acte2#1"
+  ],
+  "e02": [
+   "acte2#3",
+   "acte2#3",
+   "acte2#3",
+   "acte2#3",
+   "acte2#4",
+   "acte2#4",
+   "acte2#4"
+  ],
+  "e03": [
+   "acte3#3",
+   "acte3#3",
+   "acte3#3",
+   "acte3#3"
+  ],
+  "e06": [
+   "acte1#11",
+   "acte2#3",
+   "acte2#6"
+  ],
+  "e07": [
+   "acte5#1",
+   "acte5#1",
+   "acte5#1",
+   "acte5#7"
+  ],
+  "h06": [
+   "acte3#3",
+   "acte3#3",
+   "acte3#4",
+   "acte3#4",
+   "acte3#4"
+  ],
+  "h09": [
+   "acte4#5",
+   "acte4#5"
+  ],
+  "v05": [
+   "acte4#3",
+   "acte4#3",
+   "acte4#3"
+  ],
+  "v06": [
+   "acte3#4",
+   "acte3#4"
+  ],
+  "v08": [
+   "acte2#6",
+   "acte2#6"
+  ],
+  "v10": [
+   "acte4#4"
+  ],
+  "t01": [
+   "acte2#7",
+   "acte2#7",
+   "acte3#1",
+   "acte3#1",
+   "acte3#1",
+   "acte3#1",
+   "acte3#1",
+   "acte3#1",
+   "acte3#1",
+   "acte3#4"
+  ],
+  "t03": [
+   "acte2#2",
+   "acte2#2",
+   "acte2#2",
+   "acte2#2",
+   "acte2#2",
+   "acte2#2",
+   "acte2#2",
+   "acte2#3",
+   "acte2#3",
+   "acte2#3"
+  ],
+  "t05": [
+   "acte3#5",
+   "acte3#5",
+   "acte3#5",
+   "acte3#5",
+   "acte3#5"
+  ],
+  "f03": [
+   "acte1#4",
+   "acte1#4"
+  ],
+  "f01": [
+   "acte1#6",
+   "acte1#6"
+  ],
+  "f04": [
+   "acte2a#2",
+   "acte2a#2",
+   "acte2#1",
+   "acte2#1",
+   "acte2#1",
+   "acte2#1",
+   "acte2#1",
+   "acte2#1",
+   "acte2#2",
+   "acte2#2",
+   "acte2#2"
+  ],
+  "t08": [
+   "acte3#1",
+   "acte3#1"
+  ],
+  "r01": [
+   "acte3#5",
+   "acte3#5",
+   "acte3#5",
+   "acte3#5"
+  ],
+  "r06": [
+   "acte2#6",
+   "acte2#6",
+   "acte2#6"
+  ],
+  "r03": [
+   "acte4#5"
+  ],
+  "r04": [
+   "acte3#5",
+   "acte3#5"
+  ],
+  "k01": [
+   "acte3#6",
+   "acte3#6",
+   "acte3#6",
+   "acte3#6",
+   "acte3#6"
+  ],
+  "k02": [
+   "acte3#3"
+  ],
+  "k03": [
+   "acte4#6"
+  ],
+  "c10": [
+   "acte2#2",
+   "acte2#2",
+   "acte2#2"
+  ],
+  "c11": [
+   "acte4#1"
+  ],
+  "c12": [
+   "acte4#4"
+  ],
+  "c13": [
+   "acte4#3"
+  ],
+  "c14": [
+   "acte5#1",
+   "acte5#1"
+  ],
+  "c15": [
+   "acte4#2",
+   "acte4#2"
+  ],
+  "c16": [
+   "acte5#7"
+  ],
+  "x01": [
+   "acte1#2",
+   "acte1#2",
+   "acte1#2",
+   "acte1#2",
+   "acte1#2"
+  ],
+  "x02": [
+   "acte3#7",
+   "acte3#7",
+   "acte3#7"
+  ],
+  "x03": [
+   "acte4#4",
+   "acte4#4",
+   "acte4#4",
+   "acte4#4"
+  ],
+  "m01": [
+   "acte1#4",
+   "acte1#4"
+  ],
+  "m02": [
+   "acte2a#2",
+   "acte2a#2"
+  ],
+  "m03": [
+   "acte2#7",
+   "acte2#7"
+  ],
+  "m04": [
+   "acte4#3",
+   "acte4#3"
+  ]
+ }
+}

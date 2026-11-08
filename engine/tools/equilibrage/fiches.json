@@ -1,512 +1,1514 @@
 {
- "SENTINELLE": {
-  "rang": "boss",
-  "lvl": 4,
-  "hp": 7694,
-  "atk": 718,
-  "spd": 8,
-  "sorts": null,
-  "magie": 0
- },
  "GLANEUR": {
-  "rang": "normal",
-  "lvl": 5,
-  "hp": 3177,
-  "atk": 530,
+  "rang": "ordinaire",
+  "lvl": 8,
+  "niv": 8,
+  "hp": 4265,
+  "atk": 714,
   "spd": 10,
   "sorts": null,
-  "magie": 0
- },
- "GLANEUR BLANC": {
-  "rang": "boss",
-  "lvl": 3,
-  "hp": 3973,
-  "atk": 503,
-  "spd": 16,
-  "sorts": null,
-  "magie": 0
- },
- "ESSAIM": {
-  "rang": "boss",
-  "lvl": 7,
-  "hp": 10491,
-  "atk": 820,
-  "spd": 9,
-  "sorts": null,
-  "magie": 0
- },
- "PATROUILLE": {
-  "rang": "boss",
-  "lvl": 14,
-  "hp": 13782,
-  "atk": 1272,
-  "spd": 10,
-  "sorts": null,
-  "magie": 0
- },
- "FOUISSEUR": {
-  "rang": "boss",
-  "lvl": 17,
-  "hp": 19748,
-  "atk": 1629,
-  "spd": 8,
-  "sorts": null,
-  "magie": 0
- },
- "RÔDEUR": {
-  "rang": "boss",
-  "lvl": 19,
-  "hp": 19559,
-  "atk": 1354,
-  "spd": 13,
-  "sorts": null,
-  "magie": 0
+  "magie": 0,
+  "cible": 0.97,
+  "mesure": {
+   "p": 1,
+   "t": 40,
+   "perte": 0.18
+  }
  },
  "HERSE": {
-  "rang": "normal",
-  "lvl": 12,
-  "hp": 5830,
-  "atk": 506,
+  "rang": "ordinaire",
+  "lvl": 18,
+  "niv": 18,
+  "hp": 7907,
+  "atk": 686,
   "spd": 7,
   "sorts": null,
-  "magie": 0
+  "magie": 0,
+  "cible": 0.97,
+  "mesure": {
+   "p": 1,
+   "t": 40,
+   "perte": 0.08
+  }
  },
  "ÉCHASSIER": {
-  "rang": "normal",
-  "lvl": 16,
-  "hp": 6930,
-  "atk": 582,
+  "rang": "ordinaire",
+  "lvl": 26,
+  "niv": 26,
+  "hp": 10742,
+  "atk": 901,
   "spd": 9,
   "sorts": null,
-  "magie": 0
- },
- "TRAQUEUSE": {
-  "rang": "boss",
-  "lvl": 23,
-  "hp": 21835,
-  "atk": 1638,
-  "spd": 12,
-  "sorts": null,
-  "magie": 0
- },
- "GARDIENNE": {
-  "rang": "boss",
-  "lvl": 43,
-  "hp": 50325,
-  "atk": 2337,
-  "spd": 9,
-  "sorts": null,
-  "magie": 0
- },
- "INQUISITEUR": {
-  "rang": "boss",
-  "lvl": 11,
-  "hp": 13403,
-  "atk": 1132,
-  "spd": 11,
-  "sorts": null,
-  "magie": 0
- },
- "GRAND INQUISITEUR": {
-  "rang": "boss",
-  "lvl": 56,
-  "hp": 59638,
-  "atk": 2584,
-  "spd": 11,
-  "sorts": null,
-  "magie": 0
- },
- "MALDEN": {
-  "rang": "boss",
-  "lvl": 60,
-  "hp": 126778,
-  "atk": 2194,
-  "spd": 10,
-  "sorts": null,
-  "magie": 0
+  "magie": 0,
+  "cible": 0.97,
+  "mesure": {
+   "p": 1,
+   "t": 40,
+   "perte": 0.1
+  }
  },
  "COLOSSE": {
   "rang": "normal",
-  "lvl": 10,
-  "hp": 5028,
-  "atk": 545,
+  "lvl": 12,
+  "niv": 12,
+  "hp": 5821,
+  "atk": 632,
   "spd": 9,
   "sorts": null,
-  "magie": 0
+  "magie": 0,
+  "cible": null,
+  "mesure": {
+   "p": 1,
+   "t": 40,
+   "perte": 0.13
+  }
  },
  "VIGILE": {
   "rang": "normal",
-  "lvl": 10,
-  "hp": 5003,
-  "atk": 542,
+  "lvl": 12,
+  "niv": 14,
+  "hp": 5660,
+  "atk": 613,
   "spd": 9,
   "sorts": null,
-  "magie": 0
+  "magie": 0,
+  "cible": null,
+  "mesure": {
+   "p": 1,
+   "t": 40,
+   "perte": 0.12
+  }
  },
  "VIGILE ROUGE": {
   "rang": "normal",
-  "lvl": 10,
-  "hp": 5003,
-  "atk": 542,
+  "lvl": 12,
+  "niv": 12,
+  "hp": 5789,
+  "atk": 629,
   "spd": 9,
   "sorts": null,
-  "magie": 0
+  "magie": 0,
+  "cible": null,
+  "mesure": {
+   "p": 1,
+   "t": 40,
+   "perte": 0.13
+  }
  },
  "CHAR LOURD": {
-  "rang": "normal",
-  "lvl": 10,
-  "hp": 4998,
-  "atk": 541,
+  "rang": "ordinaire",
+  "lvl": 12,
+  "niv": 49,
+  "hp": 6454,
+  "atk": 699,
   "spd": 9,
   "sorts": null,
-  "magie": 0
+  "magie": 0,
+  "cible": 0.97,
+  "mesure": {
+   "p": 1,
+   "t": 40,
+   "perte": 0.13
+  }
  },
  "CHAR LOURD 2": {
   "rang": "normal",
-  "lvl": 10,
-  "hp": 5020,
-  "atk": 544,
+  "lvl": 12,
+  "niv": 44,
+  "hp": 6552,
+  "atk": 709,
   "spd": 9,
   "sorts": null,
-  "magie": 0
+  "magie": 0,
+  "cible": null,
+  "mesure": {
+   "p": 1,
+   "t": 40,
+   "perte": 0.13
+  }
  },
  "CHENILLETTE": {
-  "rang": "normal",
-  "lvl": 10,
-  "hp": 5012,
-  "atk": 543,
+  "rang": "ordinaire",
+  "lvl": 12,
+  "niv": 44,
+  "hp": 6578,
+  "atk": 713,
   "spd": 9,
   "sorts": null,
-  "magie": 0
+  "magie": 0,
+  "cible": 0.97,
+  "mesure": {
+   "p": 1,
+   "t": 40,
+   "perte": 0.13
+  }
  },
  "DRONE": {
-  "rang": "normal",
-  "lvl": 10,
-  "hp": 5002,
-  "atk": 542,
+  "rang": "ordinaire",
+  "lvl": 12,
+  "niv": 14,
+  "hp": 5662,
+  "atk": 615,
   "spd": 9,
   "sorts": null,
-  "magie": 0
+  "magie": 0,
+  "cible": 0.97,
+  "mesure": {
+   "p": 1,
+   "t": 40,
+   "perte": 0.13
+  }
  },
  "TRICÉRATOPS": {
-  "rang": "normal",
-  "lvl": 10,
-  "hp": 5041,
-  "atk": 546,
-  "spd": 9,
-  "sorts": null,
-  "magie": 0
- },
- "MANTE": {
-  "rang": "normal",
-  "lvl": 10,
-  "hp": 5012,
-  "atk": 543,
-  "spd": 9,
-  "sorts": null,
-  "magie": 0
- },
- "ROBOT DE GUERRE": {
-  "rang": "normal",
-  "lvl": 10,
-  "hp": 5015,
-  "atk": 543,
-  "spd": 9,
-  "sorts": null,
-  "magie": 0
- },
- "PILLARDE": {
-  "rang": "normal",
-  "lvl": 5,
-  "hp": 3268,
-  "atk": 453,
-  "spd": 11,
-  "sorts": null,
-  "magie": 0
- },
- "CENDREUSE": {
-  "rang": "normal",
-  "lvl": 9,
-  "hp": 4664,
-  "atk": 484,
-  "spd": 10,
-  "sorts": null,
-  "magie": 0
- },
- "NONNE DE BRAISE": {
-  "rang": "normal",
-  "lvl": 11,
-  "hp": 5362,
-  "atk": 489,
-  "spd": 9,
-  "sorts": null,
-  "magie": 0
- },
- "MERCENAIRE": {
-  "rang": "normal",
-  "lvl": 14,
-  "hp": 6019,
-  "atk": 559,
-  "spd": 13,
-  "sorts": null,
-  "magie": 0
- },
- "SIRÈNE DES VASES": {
-  "rang": "normal",
-  "lvl": 18,
-  "hp": 7549,
-  "atk": 615,
-  "spd": 10,
-  "sorts": null,
-  "magie": 0
- },
- "BROUTEUR": {
-  "rang": "normal",
-  "lvl": 5,
-  "hp": 3257,
-  "atk": 560,
-  "spd": 9,
-  "sorts": null,
-  "magie": 0
- },
- "LOUP DE CENDRE": {
-  "rang": "normal",
-  "lvl": 10,
-  "hp": 5032,
-  "atk": 582,
-  "spd": 9,
-  "sorts": null,
-  "magie": 0
- },
- "CORNEFER": {
-  "rang": "normal",
-  "lvl": 8,
-  "hp": 4367,
-  "atk": 546,
-  "spd": 9,
-  "sorts": null,
-  "magie": 0
- },
- "LYNX DE CUIVRE": {
-  "rang": "normal",
-  "lvl": 9,
-  "hp": 4682,
-  "atk": 561,
-  "spd": 9,
-  "sorts": null,
-  "magie": 0
- },
- "CORBEAU D'ACIER": {
-  "rang": "normal",
-  "lvl": 6,
-  "hp": 3683,
-  "atk": 518,
-  "spd": 9,
-  "sorts": null,
-  "magie": 0
- },
- "SANGLIER FOREUR": {
-  "rang": "normal",
-  "lvl": 7,
-  "hp": 4021,
-  "atk": 530,
-  "spd": 9,
-  "sorts": null,
-  "magie": 0
- },
- "RAPTOR DE CHROME": {
-  "rang": "normal",
-  "lvl": 13,
-  "hp": 5939,
-  "atk": 635,
-  "spd": 9,
-  "sorts": null,
-  "magie": 0
- },
- "SCORPION DE ROUILLE": {
-  "rang": "normal",
-  "lvl": 11,
-  "hp": 5294,
-  "atk": 594,
-  "spd": 9,
-  "sorts": null,
-  "magie": 0
- },
- "TORTUE-REMPART": {
-  "rang": "normal",
-  "lvl": 14,
-  "hp": 6249,
-  "atk": 656,
-  "spd": 9,
-  "sorts": null,
-  "magie": 0
- },
- "SERPENT DE CÂBLE": {
-  "rang": "normal",
+  "rang": "ordinaire",
   "lvl": 12,
-  "hp": 5644,
-  "atk": 617,
-  "spd": 9,
-  "sorts": null,
-  "magie": 0
- },
- "CRABE TITAN": {
-  "rang": "normal",
-  "lvl": 16,
-  "hp": 6915,
+  "niv": 49,
+  "hp": 6474,
   "atk": 702,
   "spd": 9,
   "sorts": null,
-  "magie": 0
+  "magie": 0,
+  "cible": 0.97,
+  "mesure": {
+   "p": 1,
+   "t": 40,
+   "perte": 0.12
+  }
+ },
+ "MANTE": {
+  "rang": "normal",
+  "lvl": 12,
+  "niv": 22,
+  "hp": 5623,
+  "atk": 610,
+  "spd": 9,
+  "sorts": null,
+  "magie": 0,
+  "cible": null,
+  "mesure": {
+   "p": 1,
+   "t": 40,
+   "perte": 0.13
+  }
+ },
+ "ROBOT DE GUERRE": {
+  "rang": "ordinaire",
+  "lvl": 12,
+  "niv": 44,
+  "hp": 6591,
+  "atk": 712,
+  "spd": 9,
+  "sorts": null,
+  "magie": 0,
+  "cible": 0.97,
+  "mesure": {
+   "p": 1,
+   "t": 40,
+   "perte": 0.13
+  }
+ },
+ "PILLARDE": {
+  "rang": "ordinaire",
+  "lvl": 8,
+  "niv": 8,
+  "hp": 4278,
+  "atk": 592,
+  "spd": 11,
+  "sorts": null,
+  "magie": 0,
+  "cible": 0.97,
+  "mesure": {
+   "p": 1,
+   "t": 40,
+   "perte": 0.18
+  }
+ },
+ "CENDREUSE": {
+  "rang": "normal",
+  "lvl": 12,
+  "niv": 12,
+  "hp": 5660,
+  "atk": 587,
+  "spd": 10,
+  "sorts": null,
+  "magie": 0,
+  "cible": null,
+  "mesure": {
+   "p": 1,
+   "t": 40,
+   "perte": 0.14
+  }
+ },
+ "NONNE DE BRAISE": {
+  "rang": "ordinaire",
+  "lvl": 14,
+  "niv": 14,
+  "hp": 6316,
+  "atk": 574,
+  "spd": 9,
+  "sorts": null,
+  "magie": 0,
+  "cible": 0.97,
+  "mesure": {
+   "p": 1,
+   "t": 40,
+   "perte": 0.11
+  }
+ },
+ "MERCENAIRE": {
+  "rang": "ordinaire",
+  "lvl": 19,
+  "niv": 19,
+  "hp": 7636,
+  "atk": 709,
+  "spd": 13,
+  "sorts": null,
+  "magie": 0,
+  "cible": 0.97,
+  "mesure": {
+   "p": 1,
+   "t": 40,
+   "perte": 0.15
+  }
+ },
+ "SIRÈNE DES VASES": {
+  "rang": "ordinaire",
+  "lvl": 28,
+  "niv": 28,
+  "hp": 11108,
+  "atk": 903,
+  "spd": 10,
+  "sorts": null,
+  "magie": 0,
+  "cible": 0.97,
+  "mesure": {
+   "p": 1,
+   "t": 40,
+   "perte": 0.12
+  }
+ },
+ "BROUTEUR": {
+  "rang": "normal",
+  "lvl": 8,
+  "niv": 8,
+  "hp": 4314,
+  "atk": 742,
+  "spd": 9,
+  "sorts": null,
+  "magie": 0,
+  "cible": null,
+  "mesure": {
+   "p": 1,
+   "t": 40,
+   "perte": 0.16
+  }
+ },
+ "LOUP DE CENDRE": {
+  "rang": "ordinaire",
+  "lvl": 12,
+  "niv": 12,
+  "hp": 5776,
+  "atk": 669,
+  "spd": 9,
+  "sorts": null,
+  "magie": 0,
+  "cible": 0.97,
+  "mesure": {
+   "p": 1,
+   "t": 40,
+   "perte": 0.13
+  }
+ },
+ "CORNEFER": {
+  "rang": "normal",
+  "lvl": 10,
+  "niv": 10,
+  "hp": 5004,
+  "atk": 629,
+  "spd": 9,
+  "sorts": null,
+  "magie": 0,
+  "cible": null,
+  "mesure": {
+   "p": 1,
+   "t": 40,
+   "perte": 0.14
+  }
+ },
+ "LYNX DE CUIVRE": {
+  "rang": "normal",
+  "lvl": 12,
+  "niv": 12,
+  "hp": 5716,
+  "atk": 686,
+  "spd": 9,
+  "sorts": null,
+  "magie": 0,
+  "cible": null,
+  "mesure": {
+   "p": 1,
+   "t": 40,
+   "perte": 0.14
+  }
+ },
+ "CORBEAU D'ACIER": {
+  "rang": "ordinaire",
+  "lvl": 8,
+  "niv": 8,
+  "hp": 4409,
+  "atk": 619,
+  "spd": 9,
+  "sorts": null,
+  "magie": 0,
+  "cible": 0.97,
+  "mesure": {
+   "p": 1,
+   "t": 40,
+   "perte": 0.15
+  }
+ },
+ "SANGLIER FOREUR": {
+  "rang": "ordinaire",
+  "lvl": 9,
+  "niv": 9,
+  "hp": 4702,
+  "atk": 618,
+  "spd": 9,
+  "sorts": null,
+  "magie": 0,
+  "cible": 0.97,
+  "mesure": {
+   "p": 1,
+   "t": 40,
+   "perte": 0.15
+  }
+ },
+ "RAPTOR DE CHROME": {
+  "rang": "ordinaire",
+  "lvl": 19,
+  "niv": 19,
+  "hp": 7931,
+  "atk": 845,
+  "spd": 9,
+  "sorts": null,
+  "magie": 0,
+  "cible": 0.97,
+  "mesure": {
+   "p": 1,
+   "t": 40,
+   "perte": 0.12
+  }
+ },
+ "SCORPION DE ROUILLE": {
+  "rang": "ordinaire",
+  "lvl": 14,
+  "niv": 14,
+  "hp": 6309,
+  "atk": 708,
+  "spd": 9,
+  "sorts": null,
+  "magie": 0,
+  "cible": 0.97,
+  "mesure": {
+   "p": 1,
+   "t": 40,
+   "perte": 0.13
+  }
+ },
+ "TORTUE-REMPART": {
+  "rang": "normal",
+  "lvl": 19,
+  "niv": 19,
+  "hp": 7935,
+  "atk": 832,
+  "spd": 9,
+  "sorts": null,
+  "magie": 0,
+  "cible": null,
+  "mesure": {
+   "p": 1,
+   "t": 40,
+   "perte": 0.12
+  }
+ },
+ "SERPENT DE CÂBLE": {
+  "rang": "ordinaire",
+  "lvl": 18,
+  "niv": 18,
+  "hp": 7619,
+  "atk": 835,
+  "spd": 9,
+  "sorts": null,
+  "magie": 0,
+  "cible": 0.97,
+  "mesure": {
+   "p": 1,
+   "t": 40,
+   "perte": 0.13
+  }
+ },
+ "CRABE TITAN": {
+  "rang": "normal",
+  "lvl": 26,
+  "niv": 26,
+  "hp": 10622,
+  "atk": 1077,
+  "spd": 9,
+  "sorts": null,
+  "magie": 0,
+  "cible": null,
+  "mesure": {
+   "p": 1,
+   "t": 40,
+   "perte": 0.12
+  }
  },
  "GRIFFON D'ACIER": {
   "rang": "normal",
-  "lvl": 18,
-  "hp": 7509,
-  "atk": 743,
+  "lvl": 28,
+  "niv": 28,
+  "hp": 11186,
+  "atk": 1106,
   "spd": 9,
   "sorts": null,
-  "magie": 0
+  "magie": 0,
+  "cible": null,
+  "mesure": {
+   "p": 1,
+   "t": 40,
+   "perte": 0.12
+  }
  },
  "MAMMOUTH DE FER": {
-  "rang": "normal",
-  "lvl": 20,
-  "hp": 8178,
-  "atk": 792,
+  "rang": "ordinaire",
+  "lvl": 31,
+  "niv": 31,
+  "hp": 12441,
+  "atk": 1205,
   "spd": 9,
   "sorts": null,
-  "magie": 0
+  "magie": 0,
+  "cible": 0.97,
+  "mesure": {
+   "p": 1,
+   "t": 40,
+   "perte": 0.12
+  }
  },
- "REINE DES CENDRES": {
-  "rang": "élite",
-  "lvl": 22,
-  "hp": 23714,
-  "atk": 1270,
+ "SORCIÈRE NÉON": {
+  "rang": "eliteZone",
+  "lvl": 28,
+  "niv": 28,
+  "hp": 25085,
+  "atk": 1344,
+  "spd": 10,
+  "sorts": [
+   "foudre3",
+   "brasier1"
+  ],
+  "magie": 40,
+  "cible": null,
+  "mesure": {
+   "p": 0.848,
+   "t": 95,
+   "perte": 0.49
+  }
+ },
+ "PATROUILLE": {
+  "rang": "garde",
+  "lvl": 19,
+  "niv": 9,
+  "hp": 18832,
+  "atk": 1738,
   "spd": 10,
   "sorts": null,
-  "magie": 40
+  "magie": 0,
+  "cible": 0.95,
+  "mesure": {
+   "p": 1,
+   "t": 66,
+   "perte": 0.32
+  },
+  "autres": [
+   "acte1#5 100 %",
+   "acte1#5 99 %",
+   "acte1#8 100 %",
+   "acte1#10 100 %",
+   "j03#1 100 %",
+   "c03#3 100 %",
+   "acte2a#3 92 %",
+   "e03#3 100 %",
+   "acte4#1 100 %",
+   "acte4#2 100 %",
+   "acte1#3 à −5 100 %"
+  ]
+ },
+ "SENTINELLE D'ÉLITE": {
+  "rang": "garde",
+  "lvl": 48,
+  "niv": 39,
+  "hp": 62135,
+  "atk": 2964,
+  "spd": 9,
+  "sorts": [
+   "foudre2",
+   "sacre1"
+  ],
+  "magie": 22,
+  "cible": 0.95,
+  "mesure": {
+   "p": 0.967,
+   "t": 125,
+   "perte": 0.67
+  },
+  "autres": [
+   "r01#2 95 %",
+   "r01#3 93 %",
+   "r01#4 95 %",
+   "r03#1 99 %"
+  ]
+ },
+ "GARDE DU BRASIER": {
+  "rang": "garde",
+  "lvl": 51,
+  "niv": 47,
+  "hp": 63976,
+  "atk": 3052,
+  "spd": 11,
+  "sorts": null,
+  "magie": 0,
+  "cible": 0.95,
+  "mesure": {
+   "p": 1,
+   "t": 137,
+   "perte": 0.57
+  },
+  "autres": [
+   "v05#2 86 %",
+   "v10#1 99 %",
+   "c16#1 98 %",
+   "acte5#5 à −5 100 %"
+  ]
+ },
+ "SENTINELLE": {
+  "rang": "boss",
+  "lvl": 7,
+  "niv": 3,
+  "hp": 17316,
+  "atk": 1616,
+  "spd": 8,
+  "sorts": null,
+  "magie": 0,
+  "cible": 0.93,
+  "mesure": {
+   "p": 0.942,
+   "t": 83,
+   "perte": 0.49
+  }
+ },
+ "ESSAIM": {
+  "rang": "boss",
+  "lvl": 9,
+  "niv": 14,
+  "hp": 14805,
+  "atk": 1158,
+  "spd": 9,
+  "sorts": null,
+  "magie": 0,
+  "cible": 0.93,
+  "mesure": {
+   "p": 0.998,
+   "t": 114,
+   "perte": 0.5
+  },
+  "autres": [
+   "h04#5 85 %",
+   "acte1#7 à −5 100 %"
+  ]
+ },
+ "FOUISSEUR": {
+  "rang": "boss",
+  "lvl": 27,
+  "niv": 16,
+  "hp": 33065,
+  "atk": 2725,
+  "spd": 8,
+  "sorts": null,
+  "magie": 0,
+  "cible": 0.93,
+  "mesure": {
+   "p": 0.957,
+   "t": 96,
+   "perte": 0.61
+  },
+  "autres": [
+   "acte1#9 à −5 99 %"
+  ]
+ },
+ "RÔDEUR": {
+  "rang": "annexe",
+  "lvl": 28,
+  "niv": 18,
+  "hp": 32747,
+  "atk": 2269,
+  "spd": 13,
+  "sorts": null,
+  "magie": 0,
+  "cible": 0.8,
+  "mesure": {
+   "p": 0.8,
+   "t": 99,
+   "perte": 0.78
+  }
+ },
+ "TRAQUEUSE": {
+  "rang": "boss",
+  "lvl": 34,
+  "niv": 28,
+  "hp": 32536,
+  "atk": 2441,
+  "spd": 12,
+  "sorts": null,
+  "magie": 0,
+  "cible": 0.93,
+  "mesure": {
+   "p": 0.987,
+   "t": 98,
+   "perte": 0.65
+  },
+  "autres": [
+   "t03#9 99 %",
+   "acte3#1 99 %",
+   "h06#1 100 %",
+   "acte2#2 à −5 99 %"
+  ]
+ },
+ "GARDIENNE": {
+  "rang": "boss",
+  "lvl": 50,
+  "niv": 41,
+  "hp": 68743,
+  "atk": 3195,
+  "spd": 9,
+  "sorts": null,
+  "magie": 0,
+  "cible": 0.93,
+  "mesure": {
+   "p": 0.952,
+   "t": 133,
+   "perte": 0.7
+  },
+  "autres": [
+   "acte3#7 à −5 97 %"
+  ]
+ },
+ "INQUISITRICE": {
+  "rang": "boss",
+  "lvl": 14,
+  "niv": 9,
+  "hp": 17153,
+  "atk": 1455,
+  "spd": 11,
+  "sorts": null,
+  "magie": 0,
+  "cible": 0.93,
+  "mesure": {
+   "p": 0.987,
+   "t": 88,
+   "perte": 0.43
+  },
+  "autres": [
+   "c01#3 87 %",
+   "acte1#3 à −5 100 %"
+  ]
+ },
+ "GRAND INQUISITEUR": {
+  "rang": "boss",
+  "lvl": 53,
+  "niv": 45,
+  "hp": 71103,
+  "atk": 3079,
+  "spd": 11,
+  "sorts": null,
+  "magie": 0,
+  "cible": 0.93,
+  "mesure": {
+   "p": 0.938,
+   "t": 130,
+   "perte": 0.69
+  },
+  "autres": [
+   "acte5#1 à −5 96 %"
+  ]
+ },
+ "MALDEN": {
+  "rang": "boss",
+  "lvl": 55,
+  "niv": 46,
+  "hp": 113764,
+  "atk": 1969,
+  "spd": 10,
+  "sorts": null,
+  "magie": 0,
+  "cible": 0.93,
+  "mesure": {
+   "p": 0.968,
+   "t": 219,
+   "perte": 0.73
+  },
+  "autres": [
+   "acte5#2 à −5 99 %"
+  ]
+ },
+ "REINE DES CENDRES": {
+  "rang": "elite",
+  "lvl": 33,
+  "niv": 39,
+  "hp": 39431,
+  "atk": 2110,
+  "spd": 10,
+  "sorts": [
+   "foudre1",
+   "foudre2"
+  ],
+  "magie": 40,
+  "cible": 0.93,
+  "mesure": {
+   "p": 0.967,
+   "t": 111,
+   "perte": 0.63
+  },
+  "autres": [
+   "t08#1 93 %",
+   "s01#3 100 %",
+   "acte3#5 à −5 100 %"
+  ]
  },
  "TITAN DE LA SOURCE": {
   "rang": "hardcore",
   "lvl": 96,
-  "hp": 78892,
-  "atk": 2677,
+  "niv": 96,
+  "hp": 276794,
+  "atk": 9390,
   "spd": 10,
-  "sorts": null,
-  "magie": 40
+  "sorts": [
+   "foudre3",
+   "brasier1"
+  ],
+  "magie": 40,
+  "cible": 0.25,
+  "mesure": {
+   "p": 0.285,
+   "t": 168,
+   "perte": 0.77
+  }
  },
  "ARCHANGE DU CHŒUR": {
-  "rang": "élite",
-  "lvl": 30,
-  "hp": 21398,
-  "atk": 1146,
+  "rang": "elite",
+  "lvl": 40,
+  "niv": 31,
+  "hp": 31968,
+  "atk": 1713,
   "spd": 10,
-  "sorts": null,
-  "magie": 40
+  "sorts": [
+   "brasier2",
+   "brasier3"
+  ],
+  "magie": 40,
+  "cible": 0.93,
+  "mesure": {
+   "p": 0.962,
+   "t": 84,
+   "perte": 0.5
+  },
+  "autres": [
+   "acte5#6 98 %",
+   "acte2#5 à −5 96 %"
+  ]
  },
  "ARAIGNÉE-FORTERESSE": {
-  "rang": "élite",
-  "lvl": 26,
-  "hp": 27155,
-  "atk": 1455,
+  "rang": "elite",
+  "lvl": 37,
+  "niv": 37,
+  "hp": 44851,
+  "atk": 2404,
   "spd": 10,
-  "sorts": null,
-  "magie": 40
- },
- "SORCIÈRE NÉON": {
-  "rang": "élite",
-  "lvl": 18,
-  "hp": 15077,
-  "atk": 808,
-  "spd": 10,
-  "sorts": null,
-  "magie": 40
+  "sorts": [
+   "foudre1",
+   "foudre2"
+  ],
+  "magie": 40,
+  "cible": 0.93,
+  "mesure": {
+   "p": 0.937,
+   "t": 114,
+   "perte": 0.67
+  },
+  "autres": [
+   "acte3#4 à −5 97 %"
+  ]
  },
  "LÉVIATHAN D'ACIER": {
   "rang": "hardcore",
   "lvl": 92,
-  "hp": 74856,
-  "atk": 2540,
+  "niv": 92,
+  "hp": 260331,
+  "atk": 8833,
   "spd": 10,
-  "sorts": null,
-  "magie": 40
+  "sorts": [
+   "brasier2",
+   "brasier3"
+  ],
+  "magie": 40,
+  "cible": 0.25,
+  "mesure": {
+   "p": 0.25,
+   "t": 164,
+   "perte": 0.8
+  }
  },
  "CHEFFE DE GUERRE": {
-  "rang": "élite",
-  "lvl": 20,
-  "hp": 22085,
-  "atk": 1183,
+  "rang": "elite",
+  "lvl": 31,
+  "niv": 32,
+  "hp": 37450,
+  "atk": 2007,
   "spd": 10,
-  "sorts": null,
-  "magie": 40
+  "sorts": [
+   "foudre1",
+   "foudre2"
+  ],
+  "magie": 40,
+  "cible": 0.93,
+  "mesure": {
+   "p": 0.942,
+   "t": 125,
+   "perte": 0.67
+  },
+  "autres": [
+   "c11#1 95 %",
+   "acte2#6 à −5 97 %"
+  ]
  },
  "PHÉNIX DE BRAISE": {
   "rang": "hardcore",
   "lvl": 94,
-  "hp": 76111,
-  "atk": 2582,
+  "niv": 94,
+  "hp": 271574,
+  "atk": 9215,
   "spd": 10,
-  "sorts": null,
-  "magie": 40
+  "sorts": [
+   "foudre3",
+   "brasier1"
+  ],
+  "magie": 40,
+  "cible": 0.25,
+  "mesure": {
+   "p": 0.25,
+   "t": 169,
+   "perte": 0.78
+  }
  },
  "DUCHESSE DE LA VASE": {
-  "rang": "élite",
-  "lvl": 24,
-  "hp": 18014,
-  "atk": 965,
+  "rang": "elite",
+  "lvl": 34,
+  "niv": 30,
+  "hp": 28657,
+  "atk": 1537,
   "spd": 10,
-  "sorts": null,
-  "magie": 40
+  "sorts": [
+   "brasier2",
+   "brasier3"
+  ],
+  "magie": 40,
+  "cible": 0.93,
+  "mesure": {
+   "p": 0.935,
+   "t": 85,
+   "perte": 0.51
+  },
+  "autres": [
+   "acte2#3 à −5 95 %"
+  ]
  },
- "IMPÉRATRICE DE HALO": {
+ "IMPÉRATRICE DE LUCERNE": {
   "rang": "hardcore",
   "lvl": 95,
-  "hp": 74616,
-  "atk": 2532,
+  "niv": 95,
+  "hp": 266568,
+  "atk": 9047,
   "spd": 10,
-  "sorts": null,
-  "magie": 40
+  "sorts": [
+   "foudre2",
+   "foudre3"
+  ],
+  "magie": 40,
+  "cible": 0.25,
+  "mesure": {
+   "p": 0.245,
+   "t": 163,
+   "perte": 0.79
+  }
  },
  "MANTE-REINE": {
-  "rang": "élite",
-  "lvl": 25,
-  "hp": 26306,
-  "atk": 1409,
+  "rang": "elite",
+  "lvl": 37,
+  "niv": 40,
+  "hp": 44901,
+  "atk": 2405,
   "spd": 10,
-  "sorts": null,
-  "magie": 40
+  "sorts": [
+   "brasier1",
+   "brasier2"
+  ],
+  "magie": 40,
+  "cible": 0.93,
+  "mesure": {
+   "p": 0.943,
+   "t": 123,
+   "perte": 0.68
+  },
+  "autres": [
+   "s02#2 99 %",
+   "acte3#6 à −5 95 %"
+  ]
  },
  "CHASSERESSE ÉCARLATE": {
-  "rang": "élite",
-  "lvl": 21,
-  "hp": 16717,
-  "atk": 896,
+  "rang": "elite",
+  "lvl": 31,
+  "niv": 43,
+  "hp": 30225,
+  "atk": 1619,
   "spd": 10,
-  "sorts": null,
-  "magie": 40
+  "sorts": [
+   "brasier3",
+   "givre1"
+  ],
+  "magie": 40,
+  "cible": 0.93,
+  "mesure": {
+   "p": 0.925,
+   "t": 87,
+   "perte": 0.48
+  },
+  "autres": [
+   "acte4#2 à −5 94 %"
+  ]
  },
  "ROI DES FERRAILLES": {
   "rang": "hardcore",
   "lvl": 90,
-  "hp": 53827,
-  "atk": 3693,
-  "spd": 9,
+  "niv": 90,
+  "hp": 220064,
+  "atk": 15097,
+  "spd": 10,
   "sorts": [
    "foudre2",
    "neant3"
   ],
-  "magie": 30
+  "magie": 30,
+  "cible": 0.25,
+  "mesure": {
+   "p": 0.24,
+   "t": 130,
+   "perte": 0.78
+  }
  },
  "COLOSSE JUMEAU": {
   "rang": "hardcore",
   "lvl": 99,
-  "hp": 60136,
-  "atk": 3868,
-  "spd": 9,
+  "niv": 99,
+  "hp": 232252,
+  "atk": 14938,
+  "spd": 10,
   "sorts": [
    "meteore3",
    "terre2"
   ],
-  "magie": 35
+  "magie": 35,
+  "cible": 0.25,
+  "mesure": {
+   "p": 0.233,
+   "t": 130,
+   "perte": 0.78
+  }
+ },
+ "HERSE-MÈRE": {
+  "rang": "annexe",
+  "lvl": 38,
+  "niv": 32,
+  "hp": 59839,
+  "atk": 2854,
+  "spd": 7,
+  "sorts": null,
+  "magie": 0,
+  "cible": 0.8,
+  "mesure": {
+   "p": 0.823,
+   "t": 160,
+   "perte": 0.76
+  }
+ },
+ "ÉCHASSIER NOIR": {
+  "rang": "annexe",
+  "lvl": 39,
+  "niv": 33,
+  "hp": 53504,
+  "atk": 2553,
+  "spd": 9,
+  "sorts": [
+   "eau2"
+  ],
+  "magie": 20,
+  "cible": 0.8,
+  "mesure": {
+   "p": 0.738,
+   "t": 135,
+   "perte": 0.74
+  }
+ },
+ "TRAQUEUSE BORGNE": {
+  "rang": "annexe",
+  "lvl": 45,
+  "niv": 37,
+  "hp": 55097,
+  "atk": 2629,
+  "spd": 13,
+  "sorts": null,
+  "magie": 0,
+  "cible": 0.8,
+  "mesure": {
+   "p": 0.768,
+   "t": 121,
+   "perte": 0.79
+  }
+ },
+ "GRUE DES RUINES": {
+  "rang": "annexe",
+  "lvl": 40,
+  "niv": 35,
+  "hp": 65164,
+  "atk": 3111,
+  "spd": 6,
+  "sorts": null,
+  "magie": 0,
+  "cible": 0.8,
+  "mesure": {
+   "p": 0.778,
+   "t": 155,
+   "perte": 0.75
+  }
+ },
+ "SENTINELLE ROUILLÉE": {
+  "rang": "annexe",
+  "lvl": 46,
+  "niv": 38,
+  "hp": 65337,
+  "atk": 3119,
+  "spd": 8,
+  "sorts": [
+   "foudre2"
+  ],
+  "magie": 20,
+  "cible": 0.8,
+  "mesure": {
+   "p": 0.822,
+   "t": 136,
+   "perte": 0.74
+  }
+ },
+ "COLOSSE NAIN": {
+  "rang": "annexe",
+  "lvl": 51,
+  "niv": 44,
+  "hp": 78495,
+  "atk": 3743,
+  "spd": 7,
+  "sorts": [
+   "terre2"
+  ],
+  "magie": 25,
+  "cible": 0.8,
+  "mesure": {
+   "p": 0.795,
+   "t": 147,
+   "perte": 0.73
+  }
+ },
+ "GARDIEN DE VASE": {
+  "rang": "annexe",
+  "lvl": 50,
+  "niv": 39,
+  "hp": 69917,
+  "atk": 3339,
+  "spd": 8,
+  "sorts": [
+   "poison2"
+  ],
+  "magie": 20,
+  "cible": 0.8,
+  "mesure": {
+   "p": 0.812,
+   "t": 136,
+   "perte": 0.74
+  },
+  "autres": [
+   "x03#2 94 %"
+  ]
+ },
+ "CHASSEUR": {
+  "rang": "annexe",
+  "lvl": 37,
+  "niv": 28,
+  "hp": 41029,
+  "atk": 2842,
+  "spd": 11,
+  "sorts": null,
+  "magie": 0,
+  "cible": 0.8,
+  "mesure": {
+   "p": 0.818,
+   "t": 114,
+   "perte": 0.74
+  },
+  "autres": [
+   "c15#1 86 %"
+  ]
+ },
+ "ÉCHO DU CHŒUR": {
+  "rang": "annexe",
+  "lvl": 57,
+  "niv": 52,
+  "hp": 41865,
+  "atk": 2955,
+  "spd": 11,
+  "sorts": [
+   "sacre3",
+   "neant2"
+  ],
+  "magie": 30,
+  "cible": 0.93,
+  "mesure": {
+   "p": 0.95,
+   "t": 70,
+   "perte": 0.49
+  },
+  "autres": [
+   "eveil-jade-recrue#1 95 %",
+   "eveil-azur-recrue#1 93 %"
+  ]
+ },
+ "VEILLEUSE": {
+  "rang": "boss",
+  "lvl": 28,
+  "niv": 44,
+  "hp": 28001,
+  "atk": 1502,
+  "spd": 10,
+  "sorts": [
+   "foudre3",
+   "brasier1"
+  ],
+  "magie": 40,
+  "cible": 0.93,
+  "mesure": {
+   "p": 0.927,
+   "t": 88,
+   "perte": 0.5
+  },
+  "autres": [
+   "acte4#7 à −5 95 %"
+  ]
+ },
+ "GARDIENNE DE L'ÉCOUTE": {
+  "rang": "annexe",
+  "lvl": 54,
+  "niv": 46,
+  "hp": 70852,
+  "atk": 3385,
+  "spd": 11,
+  "sorts": [
+   "foudre2",
+   "neant1"
+  ],
+  "magie": 25,
+  "cible": 0.8,
+  "mesure": {
+   "p": 0.782,
+   "t": 129,
+   "perte": 0.73
+  }
+ },
+ "GEÔLIER DES LANTERNES": {
+  "rang": "annexe",
+  "lvl": 55,
+  "niv": 45,
+  "hp": 67648,
+  "atk": 3229,
+  "spd": 12,
+  "sorts": [
+   "brasier2",
+   "foudre2"
+  ],
+  "magie": 25,
+  "cible": 0.8,
+  "mesure": {
+   "p": 0.765,
+   "t": 122,
+   "perte": 0.73
+  },
+  "autres": [
+   "s05#1 79 %"
+  ]
+ },
+ "FOREUSE DES CALOTTES": {
+  "rang": "annexe",
+  "lvl": 57,
+  "niv": 51,
+  "hp": 82354,
+  "atk": 3931,
+  "spd": 8,
+  "sorts": [
+   "givre2",
+   "terre2"
+  ],
+  "magie": 25,
+  "cible": 0.8,
+  "mesure": {
+   "p": 0.815,
+   "t": 132,
+   "perte": 0.73
+  }
+ },
+ "DÉVOREUR DE SEMIS": {
+  "rang": "annexe",
+  "lvl": 57,
+  "niv": 49,
+  "hp": 74393,
+  "atk": 3551,
+  "spd": 10,
+  "sorts": [
+   "poison2",
+   "terre2"
+  ],
+  "magie": 25,
+  "cible": 0.8,
+  "mesure": {
+   "p": 0.808,
+   "t": 130,
+   "perte": 0.72
+  }
+ },
+ "PIE DU VIDE": {
+  "rang": "annexe",
+  "lvl": 55,
+  "niv": 49,
+  "hp": 65277,
+  "atk": 3116,
+  "spd": 13,
+  "sorts": [
+   "foudre2",
+   "vent2"
+  ],
+  "magie": 25,
+  "cible": 0.8,
+  "mesure": {
+   "p": 0.828,
+   "t": 118,
+   "perte": 0.75
+  }
+ },
+ "TISSEUSE DE PHOBOS": {
+  "rang": "annexe",
+  "lvl": 57,
+  "niv": 49,
+  "hp": 75071,
+  "atk": 3582,
+  "spd": 10,
+  "sorts": [
+   "foudre2",
+   "neant2"
+  ],
+  "magie": 25,
+  "cible": 0.8,
+  "mesure": {
+   "p": 0.797,
+   "t": 130,
+   "perte": 0.74
+  }
+ },
+ "GARDIEN DE L'ARCHE": {
+  "rang": "annexe",
+  "lvl": 57,
+  "niv": 49,
+  "hp": 86923,
+  "atk": 4147,
+  "spd": 7,
+  "sorts": [
+   "sacre2",
+   "terre2"
+  ],
+  "magie": 25,
+  "cible": 0.8,
+  "mesure": {
+   "p": 0.745,
+   "t": 149,
+   "perte": 0.74
+  }
+ },
+ "CANONNIÈRE": {
+  "rang": "final",
+  "lvl": 57,
+  "niv": 50,
+  "hp": 53979,
+  "atk": 2575,
+  "spd": 11,
+  "sorts": [
+   "brasier3",
+   "foudre2"
+  ],
+  "magie": 30,
+  "cible": 0.93,
+  "mesure": {
+   "p": 0.922,
+   "t": 89,
+   "perte": 0.56
+  },
+  "autres": [
+   "a61#2 à −5 90 %"
+  ]
+ },
+ "BRISE-GLACE": {
+  "rang": "final",
+  "lvl": 57,
+  "niv": 54,
+  "hp": 78254,
+  "atk": 3734,
+  "spd": 8,
+  "sorts": [
+   "givre3",
+   "terre2"
+  ],
+  "magie": 30,
+  "cible": 0.93,
+  "mesure": {
+   "p": 0.938,
+   "t": 92,
+   "perte": 0.5
+  },
+  "autres": [
+   "a62#2 à −5 96 %"
+  ]
+ },
+ "LÉVIATHAN DES GLACES": {
+  "rang": "final",
+  "lvl": 57,
+  "niv": 56,
+  "hp": 71476,
+  "atk": 3411,
+  "spd": 10,
+  "sorts": [
+   "givre3",
+   "eau2"
+  ],
+  "magie": 30,
+  "cible": 0.93,
+  "mesure": {
+   "p": 0.935,
+   "t": 84,
+   "perte": 0.49
+  },
+  "autres": [
+   "a63#1 à −5 95 %"
+  ]
+ },
+ "CHŒUR DES PROFONDEURS": {
+  "rang": "final",
+  "lvl": 57,
+  "niv": 56,
+  "hp": 58310,
+  "atk": 2784,
+  "spd": 11,
+  "sorts": [
+   "eau3",
+   "neant3"
+  ],
+  "magie": 35,
+  "cible": 0.93,
+  "mesure": {
+   "p": 0.943,
+   "t": 69,
+   "perte": 0.52
+  },
+  "autres": [
+   "a63#2 à −5 96 %"
+  ]
+ },
+ "GLANEUR BLANC": {
+  "rang": "annexe",
+  "lvl": 4,
+  "niv": 6,
+  "hp": 9229,
+  "atk": 1170,
+  "spd": 16,
+  "sorts": null,
+  "magie": 0,
+  "cible": 0.8,
+  "mesure": {
+   "p": 0.815,
+   "t": 66,
+   "perte": 0.51
+  }
+ },
+ "REPRIS": {
+  "rang": "ordinaire",
+  "lvl": 21,
+  "niv": 21,
+  "hp": 8800,
+  "atk": 900,
+  "spd": 7,
+  "sorts": null,
+  "magie": 0,
+  "cible": 0.97,
+  "mesure": {
+   "p": 1,
+   "t": 40,
+   "perte": 0.12
+  }
+ },
+ "REPRISE": {
+  "rang": "ordinaire",
+  "lvl": 23,
+  "niv": 23,
+  "hp": 9600,
+  "atk": 950,
+  "spd": 8,
+  "sorts": null,
+  "magie": 0,
+  "cible": 0.97,
+  "mesure": {
+   "p": 1,
+   "t": 40,
+   "perte": 0.14
+  }
+ },
+ "PREMIER REPRIS": {
+  "rang": "annexe",
+  "lvl": 32,
+  "niv": 32,
+  "hp": 42000,
+  "atk": 2600,
+  "spd": 8,
+  "sorts": [
+   "neant1",
+   "neant2"
+  ],
+  "magie": 40,
+  "cible": 0.8,
+  "mesure": {
+   "p": 0.812,
+   "t": 121,
+   "perte": 0.7
+  }
  }
 }

@@ -85,12 +85,14 @@ static int delai_s = CONFIG_ECHOES_VEILLE_S;   /* sans action pendant ce temps :
 void veille_delai(int s) { delai_s = s; }
 static volatile int demandee;
 void veille_demander(void) { demandee = 1; }
+static volatile int reveil_pc;   /* SDX REVEIL : réveil demandé depuis le PC (essais de la veille sans toucher la montre) */
+void veille_reveiller(void) { reveil_pc = 1; }
 
 #if !CONFIG_ECHOES_BANC
-/* Ce qui réveille : 1 BOOT, 2 doigt (INT du tactile), 4 PWR */
+/* Ce qui réveille : 1 BOOT, 2 doigt (INT du tactile), 4 PWR, 8 le PC (SDX REVEIL) */
 /* Le doigt ne réveille pas (demande de l'utilisateur : la montre au poignet se rallumait sans cesse) ; bit 2 gardé
    pour le journal */
-static int reveil(void) { return (gpio_get_level(CONFIG_ECHOES_BOOT_GPIO) ? 0 : 1) | alim_bouton_pwr() << 2; }
+static int reveil(void) { return (gpio_get_level(CONFIG_ECHOES_BOOT_GPIO) ? 0 : 1) | alim_bouton_pwr() << 2 | (reveil_pc ? 8 : 0); }
 
 static void dormir(int cause) {
     finir_image();                         /* plus rien à l'écran ni dans la file SPI */
@@ -116,9 +118,10 @@ static void dormir(int cause) {
              sauve ? " (partie sauvegardée)" : "", pc ? ", PC branché : écran éteint seulement" : "", alim_usb());
     /* Boutons et doigt relâchés depuis 300 ms, sinon le réveil serait immédiat (PWR rebondit au relâchement : SYS_OUT
        de la 1,75" C n'est pas filtré) */
+    reveil_pc = 0;
     for (int calme = 0; calme < 15; ) { calme = reveil() ? 0 : calme + 1; vTaskDelay(pdMS_TO_TICKS(20)); }
     const bool bt = manette_active();   /* manette : pas de veille légère avec le Bluetooth, relancée au réveil */
-    manette_arreter();
+    manette_veille();   /* contrôleur gardé avec sa SRAM, repris au réveil */
     for (;;) {
         if (usb_serial_jtag_is_connected() || alim_usb()) vTaskDelay(pdMS_TO_TICKS(50));   /* PC ou câble USB : pas de veille légère (l'USB doit pouvoir s'établir) */
         else {
@@ -137,7 +140,7 @@ static void dormir(int cause) {
         }
         int r = reveil();
         if (r & 4) { vTaskDelay(pdMS_TO_TICKS(30)); if (!alim_bouton_pwr()) r &= ~4; else ESP_LOGI(TAG, "PWR : touche de l'AXP2101 0x%x", alim_pwr_axp()); }   /* un vrai appui, pas un rebond */
-        if (r) { ESP_LOGI(TAG, "réveil par%s%s%s", r & 1 ? " BOOT" : "", r & 2 ? " le tactile" : "", r & 4 ? " PWR" : ""); break; }
+        if (r) { ESP_LOGI(TAG, "réveil par%s%s%s%s", r & 1 ? " BOOT" : "", r & 2 ? " le tactile" : "", r & 4 ? " PWR" : "", r & 8 ? " le PC" : ""); reveil_pc = 0; break; }
         batterie(esp_timer_get_time());
     }
     lcd_reveiller();

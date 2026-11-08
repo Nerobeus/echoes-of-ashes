@@ -22,5 +22,7 @@ void lcd_wait_all(void);
 /* Veille de l'écran : DISPOFF puis SLPIN (plus rien en cours d'envoi) ; réveil : SLPOUT, 120 ms, DISPON */
 void lcd_dormir(void);
 void lcd_reveiller(void);
+void lcd_sortir_veille(void);   /* lcd_reveiller en deux temps : sortie de veille, affichage encore coupé… */
+void lcd_afficher(void);        /* …puis affichage, une fois la nouvelle image écrite */
 
 #endif

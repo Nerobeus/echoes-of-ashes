@@ -13,6 +13,8 @@ int veille_image(int boot, int doigt);
 void veille_delai(int s);
 /* Veille demandée par une autre tâche (SDX VEILLE, essais depuis le PC) : prise à l'image suivante */
 void veille_demander(void);
+/* Réveil demandé par le PC (SDX REVEIL) : la montre en veille, branchée, se réveille comme sur PWR */
+void veille_reveiller(void);
 /* 1 si BOOT est tenu depuis plus d'une seconde (son relâchement n'ouvre pas le menu) */
 int veille_boot_long(void);
 

@@ -67,6 +67,8 @@ static int sera_pas(float x, float z) {
     if (E.in.on) return int_libre(x, z);
     return sol_libre(x, z, 1) && !char_block(x, z, E.sera.x, E.sera.z, NULL);
 }
+/* Place libre pour le corps de Sera dehors (marges MARGE_MUR et MARGE_DECOR comprises ; sortie d'un intérieur : interieur.c) */
+int sera_libre(float x, float z) { return !E.in.on && sol_libre(x, z, 0); }
 /* Sera posée sur la place libre la plus proche de (x0, z0), jusqu'à rmax cases (nearestWalkable de l'émulateur) ;
    rien de libre (chunks pas encore chargés) : au point exact */
 void sera_placer(float x0, float z0, float rmax) {
@@ -87,6 +89,7 @@ static int sol_libre(float x, float z, int swim) {
     const chunk_t *c = chunk_of_cell(i, j);   /* chunk pas encore chargé : on attend */
     if (!c) return 0;
     uint8_t f = c->flags[cell_local(i, j)];
+    if (f & F_RAIDE) return 0;
     const int wk = water_kind(f);
     if (wk && !(swim && (wk == 1 || sera_etanche()))) return 0;
     /* Rectangles de collision : chacun est rangé dans tous les chunks qu'il touche, marge comprise. Marge (le corps de
@@ -101,12 +104,31 @@ static int sol_libre(float x, float z, int swim) {
     return 1;
 }
 
+/* ---------- Héroïne choisie : la recrue de son nom se montre en Sera (internal.h) ---------- */
+int heroine_recrue(void) {
+    const int k = E.heroine;
+    return k >= 0 && k < E.w.npersos && E.w.persos[k].membre > 0 ? E.w.persos[k].membre : -1;
+}
+int membre_en_sera(int m) { return m > 0 && m == heroine_recrue() && E.w.psheet >= 0; }
+int perso_en_sera(int p) { return p >= 0 && p < E.w.npersos && membre_en_sera(E.w.persos[p].membre); }
+/* Taille de Sera : celle de sa planche, même dans ses tenues */
+static float sera_taille(void) { return E.w.psheet >= 0 ? E.w.sheets[E.w.psheet].taille : 1.0f; }
+perso_vue_t perso_vue(int p, int var) {
+    /* hors de la bibliothèque (-1 : aucun personnage) : Sera, sans lire avant le tableau (-Warray-bounds de l'ESP-IDF) */
+    if (perso_en_sera(p) || p < 0 || p >= E.w.npersos) return (perso_vue_t){ E.w.psheet, 0, OMBRE_JOUEUR, 0, sera_taille() };
+    const perso_t *pe = &E.w.persos[p];
+    return (perso_vue_t){ pe->sheet, perso_remap(p, var), p, pe->vremap, pe->taille };
+}
+
 /* ---------- Tenues ---------- */
 /* Porteur des tenues du membre m : le joueur (Sera, ou l'héroïne choisie au départ), sinon le personnage de la
-   bibliothèque de son nom (-1 : aucun) */
-static int tenue_owner(int m) { return m == 0 ? (E.heroine >= 0 ? E.heroine : TENUE_JOUEUR) : E.w.party_perso[m]; }
+   bibliothèque de son nom (-1 : aucun) ; la recrue de l'héroïne choisie : celles de Sera (TENUE_JOUEUR) */
+static int tenue_owner(int m) {
+    if (m == 0) return E.heroine >= 0 ? E.heroine : TENUE_JOUEUR;
+    return membre_en_sera(m) ? TENUE_JOUEUR : E.w.party_perso[m];
+}
 /* Une tenue 18+ n'est à personne tant que le 18+ est verrouillé (édition unique, tenue_vue) */
-int tenue_mine(int m, int t) { return m >= 0 && m < 4 && t >= 0 && t < E.w.ntenues && E.w.tenues[t].owner == tenue_owner(m) && tenue_vue(t); }
+int tenue_mine(int m, int t) { return m >= 0 && m < NMEMB && t >= 0 && t < E.w.ntenues && E.w.tenues[t].owner == tenue_owner(m) && tenue_vue(t); }
 int tenue_named(int m, const char *nom) {
     for (int t = 0; nom && t < E.w.ntenues; t++) if (tenue_mine(m, t) && !strcmp(E.w.tenues[t].nom, nom)) return t;
     return -1;
@@ -115,7 +137,7 @@ int tenue_named(int m, const char *nom) {
    scénario levé (la dernière de la liste) ; sinon celle qu'il porte (menu ÉQUIP., instruction « tenue ») */
 int tenue_of(int m, int sec) {
     const world_t *w = &E.w;
-    const int own = m >= 0 && m < 4 ? tenue_owner(m) : -1;
+    const int own = m >= 0 && m < NMEMB ? tenue_owner(m) : -1;
     if (own < 0) return -1;
     int nage = -1, course = -1, drap = -1;
     for (int t = 0; t < w->ntenues; t++) {
@@ -130,7 +152,18 @@ int tenue_of(int m, int sec) {
     (void)nage; (void)sec;
     if (CR.on && course >= 0) return course;
     if (drap >= 0) return drap;
-    return tenue_mine(m, E.tenue_eq[m]) ? E.tenue_eq[m] : -1;
+    if (tenue_mine(m, E.tenue_eq[m])) return E.tenue_eq[m];
+    /* Armure qui se voit (bikini, 18+ : sa tenue de même nom, ITEMS[].tenue) : portée tant que le menu ÉQUIP. ou
+       l'instruction « tenue » n'en a pas mis une autre (03/11/2026, tenueOf de l'émulateur) */
+    const int a = E.eq[m][EQ_ARMURE];
+    return a != EQ_AUCUN && a < n_items && ITEMS[a].type == 5 && ITEMS[a].tenue ? tenue_named(m, ITEMS[a].tenue) : -1;
+}
+/* Tenue de base d'une variante de couleur (même porteur, même planche, sans table) : ses cut-ins servent aux variantes */
+int tenue_base(int t) {
+    if (t < 0 || t >= E.w.ntenues || !E.w.tenues[t].vremap) return t;
+    for (int k = 0; k < E.w.ntenues; k++)
+        if (!E.w.tenues[k].vremap && E.w.tenues[k].owner == E.w.tenues[t].owner && E.w.tenues[k].sheet == E.w.tenues[t].sheet) return k;
+    return t;
 }
 int tenue_nage(int perso) {
     for (int t = 0; t < E.w.ntenues; t++) if (E.w.tenues[t].owner == perso && E.w.tenues[t].ctx == TENUE_NAGE) return t;
@@ -139,10 +172,25 @@ int tenue_nage(int perso) {
 int member_sheet(int m) {
     const int t = tenue_of(m, 0);
     if (t >= 0) return E.w.tenues[t].sheet;
-    if (m == 0) return E.heroine >= 0 ? E.w.persos[E.heroine].sheet : E.w.psheet;
-    const int pp = m > 0 && m < 4 ? E.w.party_perso[m] : -1;
-    return pp >= 0 ? E.w.persos[pp].sheet : -1;
+    return member_sheet_base(m);
 }
+/* Planche du membre m sans sa tenue */
+int member_sheet_base(int m) {
+    if (m == 0) return E.heroine >= 0 ? E.w.persos[E.heroine].sheet : E.w.psheet;
+    const int pp = m > 0 && m < NMEMB ? E.w.party_perso[m] : -1;
+    return pp >= 0 ? perso_vue(pp, 0).sheet : -1;   /* la recrue de l'héroïne choisie : la planche de Sera */
+}
+/* Planche du membre m en mouvement (04/11/2026) : une tenue de pose (pole dance, twerk, champagne de Jade : ni marche ni
+   course, la même tenue que sa planche de base, qu'on ne fait pas marcher depuis sa pose) prend la marche et la course de
+   la planche de base ; seraAnim de l'émulateur */
+int member_sheet_mouv(int m) {
+    const int ps = member_sheet(m), b = member_sheet_base(m);
+    return ps >= 0 && b >= 0 && !has_anim(ps, ANIM_WALK) && !has_anim(ps, ANIM_RUN) ? b : ps;
+}
+/* Taille du joueur : celle de Sera (sa planche, et ses tenues), ou celle du personnage de l'héroïne choisie, même dans
+   ses tenues (comme appliquerHeroine de l'émulateur ; avant le 01/11/2026, la taille de la planche portée, 1 pour une
+   héroïne) */
+float joueur_taille(void) { return E.heroine >= 0 ? E.w.persos[E.heroine].taille : sera_taille(); }
 int member_tissu(int m) { const int t = tenue_of(m, 0); return t >= 0 ? E.w.tenues[t].vremap : 0; }
 float swim_alt(void) {
     const int i = (int)floorf(E.sera.x), j = (int)floorf(E.sera.z);
@@ -153,10 +201,15 @@ float swim_alt(void) {
 
 /* ---------- Trafic ---------- */
 /* Jusqu'à traf_max véhicules (ceux de la bibliothèque marqués PERS_TRAFIC, sauf bateau et vaisseau) autour de Sera. Ils
-   apparaissent entre 10 et 18 cases d'elle et disparaissent au-delà de 22. Sur les routes, ils suivent les axes (ROUT)
-   sur la voie de droite ; au bout d'un axe, un autre qui passe à moins de 1,2 case, sinon demi-tour. Dans les rues des
-   villes, de case en case (8 voisines), tout droit de préférence, un peu sur la droite. Arrêt si quelqu'un est devant ou
-   si Sera s'adresse à eux (pour les voler) ; comme l'émulateur. */
+   apparaissent entre 10 et 18 cases d'elle et disparaissent au-delà de 22. Une seule circulation (01/11/2026, demande de
+   l'utilisateur : plus de trafic des routes et de trafic des rues à part) : sur les routes, les véhicules suivent les axes
+   (ROUT) sur la voie de droite ; dans les rues des villes et des villages, de case en case, sur la voie de droite de la
+   rue (voie_rue), plus lentement (TRAF_LENT). Au bout d'un axe : un autre axe qui passe à moins de 1,2 case, ou la rue
+   devant (rue_entree) ; dans une rue : le bout d'un axe à moins de SORTIE_R cases qui continue la marche (rue_suivant) ;
+   d'un réseau à l'autre, une liaison en ligne droite (mode POUR_RALLIE), sans demi-tour ni saut. Demi-tour seulement au
+   bout d'une impasse. Arrêt si un piéton est devant, un véhicule devant dans le même sens et la même voie (gene_veh : un
+   véhicule qui vient en face ne gêne jamais ; sur un chemin ou une rue trop étroits pour deux, chacun se serre sur le
+   bas-côté et ralentit), ou si Sera s'adresse à eux (pour les voler) ; comme l'émulateur. */
 /* Case de rue pour le trafic « case par case » : les rues des villes (F_STREET) ; sans axes de routes (ROUT, ancien
    paquet), les routes aussi. Jamais sous un bâtiment ni dans un rectangle de collision. */
 static int is_road(int i, int j) {
@@ -173,22 +226,8 @@ static int is_road(int i, int j) {
 static void pour_case(traffic_t *t);   /* poursuivants de la police (plus bas) : leurs choix aux carrefours */
 static void pour_lane_fin(traffic_t *t, float ex, float ez, const int *cr, const int *cs, const float *ck, int nc);
 static int pour_patrouille(float x, float z);
-static void traffic_next(traffic_t *t) {
-    if (t->poursuite) { pour_case(t); return; }
-    const int hx = t->ni - t->ci, hz = t->nj - t->cj;
-    int odi[8], odj[8], n = 0; float w[8], sum = 0;
-    for (int dj = -1; dj <= 1; dj++) for (int di = -1; di <= 1; di++) {
-        if ((!di && !dj) || !is_road(t->ni + di, t->nj + dj)) continue;
-        const float c = (di * hx + dj * hz) / (hypotf((float)di, (float)dj) * hypotf((float)hx, (float)hz));   /* cosinus avec le cap */
-        if (c <= -0.2f) continue;
-        static const float W[3] = { 0.6f, 1.5f, 6 };   /* en table : le ternaire faisait planter GCC Xtensa (postreload) */
-        odi[n] = di; odj[n] = dj; w[n] = W[(c > 0.3f) + (c > 0.9f)]; sum += w[n]; n++;
-    }
-    if (!n) { int a = t->ci, b = t->cj; t->ci = t->ni; t->cj = t->nj; t->ni = a; t->nj = b; return; }   /* cul-de-sac */
-    float r = frand() * sum; int o = 0;
-    for (; o < n - 1; o++) { r -= w[o]; if (r <= 0) break; }
-    t->ci = t->ni; t->cj = t->nj; t->ni += odi[o]; t->nj += odj[o];
-}
+static void traffic_next(traffic_t *t);   /* rues : le pas suivant (plus bas, après les axes) */
+static int chaussee_at(float x, float z);   /* route ou rue en (x, z) (plus bas, avec les piétons) */
 
 /* ---------- Axes des routes (ROUT) : le trafic roule sur la voie de droite ---------- */
 static void route_pt(const route_t *r, int i, float *x, float *z) { memcpy(x, r->p + i * 8, 4); memcpy(z, r->p + i * 8 + 4, 4); }
@@ -206,19 +245,39 @@ static float lane_len(const traffic_t *t) {
     const float l = hypotf(bx - ax, bz - az);
     return l > 1e-3f ? l : 1e-3f;
 }
-/* Place sur la voie de droite : au quart de la largeur depuis l'axe (milieu de la demi-chaussée) */
-static void lane_place(traffic_t *t) {
-    const route_t *r = &E.w.routes[t->road];
-    const int a = t->sgn > 0 ? t->seg : t->seg + 1, b = t->sgn > 0 ? t->seg + 1 : t->seg;
+/* Croisement (01/11/2026, demande de l'utilisateur : les voitures ne se croisaient pas sur les chemins) : deux véhicules
+   se croisent si chacun roule à CROISE_DEMI case au moins de l'axe. Sur une voie plus étroite (rue d'une case, ou chemin
+   d'une case des paquets d'avant le 01/11/2026 : voie à 0,25 ; les chemins ont 2 cases depuis, voies à 0,5 comme la
+   route), celui qui roule se serre sur le bas-côté (serre, jusqu'à SERRE_VOIE de l'axe) et ralentit (SERRE_ALLURE)
+   quand un véhicule vient en face à moins de SERRE_DIST cases, sans s'arrêter ni faire demi-tour */
+#define CROISE_DEMI 0.5f
+#define SERRE_VOIE 0.62f
+#define SERRE_RUE (SERRE_VOIE - 0.25f)   /* rue d'une case : de sa voie (0,25) au bas-côté */
+#define SERRE_DIST 5.0f
+#define SERRE_ALLURE 0.5f
+#define SERRE_VITE 2.0f                  /* par seconde */
+static float lane_off(const route_t *r, float serre) {
+    const float o = r->hw * 0.5f;
+    return o < CROISE_DEMI ? o + (SERRE_VOIE - o) * serre : o;
+}
+/* Place sur la voie de droite (au quart de la largeur depuis l'axe : milieu de la demi-chaussée) de l'abscisse k du
+   segment seg de l'axe road parcouru dans le sens sgn */
+static void lane_point(int road, int seg, int sgn, float k, float serre, float *x, float *z, float *dir) {
+    const route_t *r = &E.w.routes[road];
+    const int a = sgn > 0 ? seg : seg + 1, b = sgn > 0 ? seg + 1 : seg;
     float ax, az, bx, bz, nax, naz, nbx, nbz;
     route_pt(r, a, &ax, &az); route_pt(r, b, &bx, &bz); route_nrm(r, a, &nax, &naz); route_nrm(r, b, &nbx, &nbz);
-    const float k = t->k, off = r->hw * 0.5f * t->sgn;
-    t->x = ax + (bx - ax) * k + (nax + (nbx - nax) * k) * off;
-    t->z = az + (bz - az) * k + (naz + (nbz - naz) * k) * off;
-    t->dir = atan2f(bx - ax, bz - az);
+    const float off = lane_off(r, serre) * sgn;
+    *x = ax + (bx - ax) * k + (nax + (nbx - nax) * k) * off;
+    *z = az + (bz - az) * k + (naz + (nbz - naz) * k) * off;
+    if (dir) *dir = atan2f(bx - ax, bz - az);
 }
-/* Bout de l'axe : un autre axe qui passe à moins de 1,2 case (carrefour, embranchement), pris au hasard, dans le sens
-   qui s'éloigne de son extrémité (au hasard au milieu d'un axe) ; sinon demi-tour */
+static void lane_place(traffic_t *t) { lane_point(t->road, t->seg, t->sgn, t->k, t->serre, &t->x, &t->z, &t->dir); }
+/* Bout de l'axe : un autre axe qui passe à moins de 1,2 case (carrefour, embranchement), dans le sens qui s'éloigne de
+   son extrémité (au hasard au milieu d'un axe), ou la rue devant (entrée d'une ville ou d'un village : rue_entree, puis
+   une liaison), au hasard ; sinon demi-tour */
+static int rue_entree(const traffic_t *t, float ex, float ez, int *ri, int *rj);
+static void liaison_rue(traffic_t *t, int ri, int rj, float hx, float hz);
 static void lane_next(traffic_t *t) {
     const world_t *w = &E.w;
     const route_t *r = &w->routes[t->road];
@@ -244,16 +303,215 @@ static void lane_next(traffic_t *t) {
         cr[nc] = q; cs[nc] = bs; ck[nc] = bk; cg[nc] = at_start ? 1 : at_end ? -1 : frand() < 0.5f ? 1 : -1; nc++;
     }
     if (t->poursuite && !pour_patrouille(ex, ez)) { pour_lane_fin(t, ex, ez, cr, cs, ck, nc); return; }   /* poursuivant : vers sa cible */
-    if (!nc) { t->sgn = -t->sgn; t->k = 0; return; }   /* cul-de-sac : demi-tour */
-    const int c = (int)(frand() * nc) % nc;
+    int ri = 0, rj = 0;
+    const int rue = rue_entree(t, ex, ez, &ri, &rj);
+    if (!nc && !rue) { t->sgn = -t->sgn; t->k = 0; return; }   /* impasse : demi-tour */
+    const int c = (int)(frand() * (nc + rue)) % (nc + rue);
+    if (c == nc) {   /* dans la rue */
+        float ax, az;
+        route_pt(r, t->sgn > 0 ? r->n - 2 : 1, &ax, &az);
+        liaison_rue(t, ri, rj, ex - ax, ez - az);
+        return;
+    }
     t->road = cr[c]; t->seg = cs[c]; t->sgn = cg[c];
     t->k = t->sgn > 0 ? ck[c] : 1 - ck[c];
+}
+
+/* ---------- Rues : voie de droite, entrées et sorties (01/11/2026, circulation unique) ---------- */
+#define RUE_CAP 4           /* cases de rue comptées de chaque côté (coupe en travers) */
+#define RUE_LARGE 5         /* plus large en travers : carrefour ou place */
+#define RUE_DROITE 0.3f     /* carrefour, place : à droite du milieu de la case (comme avant) */
+#define ENTREE_R 3.5f       /* cases : rue cherchée devant le bout d'un axe */
+#define SORTIE_R 3.5f       /* cases : bout d'axe cherché autour d'une case de rue (comme ENTREE_R : l'entrée a son retour) */
+#define RUELLE 0.15f        /* poids d'une ruelle d'une case (impasse le plus souvent) prise depuis une rue */
+static int rue_case(int i, int j) {
+    if (i < 0 || j < 0 || i >= E.w.n || j >= E.w.n) return 0;
+    const chunk_t *c = chunk_of_cell(i, j);
+    return c && (c->flags[cell_local(i, j)] & F_STREET);
+}
+static int rue_suite(int i, int j, int di, int dj) {   /* cases de rue de suite après (i, j) dans le sens (di, dj) */
+    int n = 0;
+    while (n < RUE_CAP && rue_case(i + di * (n + 1), j + dj * (n + 1))) n++;
+    return n;
+}
+/* Axe de la rue en (i, j) pour un véhicule qui va dans le sens (hx, hz) : la plus longue des suites de cases de rue en x et
+   en z à travers la case (égalité : l'axe dominant du cap), dans le sens du cap (ux, uz) ; R cases de rue à sa droite
+   ((uz, -ux)), L à sa gauche ; rend la largeur en travers (plus de RUE_LARGE : carrefour ou place) */
+static int rue_axe(int i, int j, float hx, float hz, int *ux, int *uz, int *R, int *L) {
+    const int lx = rue_suite(i, j, 1, 0) + rue_suite(i, j, -1, 0), lz = rue_suite(i, j, 0, 1) + rue_suite(i, j, 0, -1);
+    const int ax = lx > lz ? 1 : lz > lx ? 0 : fabsf(hx) >= fabsf(hz);
+    *ux = ax ? (hx >= 0 ? 1 : -1) : 0; *uz = ax ? 0 : (hz >= 0 ? 1 : -1);
+    *R = rue_suite(i, j, *uz, -*ux); *L = rue_suite(i, j, -*uz, *ux);
+    return *R + *L + 1;
+}
+/* Point de la voie de droite dans la case de rue (i, j), cap (hx, hz) : au quart de la largeur de la chaussée depuis son
+   milieu (le même pour toutes les cases d'une coupe : changer de file de cases ne se voit pas) ; carrefour ou place :
+   RUE_DROITE à droite du milieu de la case ; *etroit : rue trop étroite pour se croiser (voie à moins de CROISE_DEMI) */
+static void voie_rue(int i, int j, float hx, float hz, float *x, float *z, uint8_t *etroit) {
+    int ux, uz, R, L;
+    const int W = rue_axe(i, j, hx, hz, &ux, &uz, &R, &L);
+    const float off = W <= RUE_LARGE ? (R - L) * 0.5f + W * 0.25f : RUE_DROITE;
+    *x = i + 0.5f + uz * off; *z = j + 0.5f - ux * off;
+    if (etroit) *etroit = W <= RUE_LARGE && W * 0.25f < CROISE_DEMI;
+}
+/* Cap pour le point de voie de la case suivante : le pas (sx, sz) et la marche (hx, hz) ensemble (un pas de côté garde le
+   sens de la rue) ; demi-tour : le pas seul */
+static void cap_pas(float hx, float hz, float sx, float sz, float *cx, float *cz) {
+    const float hl = hypotf(hx, hz), sl = hypotf(sx, sz);
+    if (sl < 1e-4f) { *cx = hx; *cz = hz; return; }
+    sx /= sl; sz /= sl;
+    if (hl < 1e-4f || (hx * sx + hz * sz) / hl < -0.5f) { *cx = sx; *cz = sz; return; }
+    *cx = hx / hl + sx; *cz = hz / hl + sz;
+}
+/* Marche du segment de rue en cours (sinon le pas de case) */
+static void rue_marche(const traffic_t *t, float *hx, float *hz) {
+    *hx = t->ex - t->sx; *hz = t->ez - t->sz;
+    if (*hx * *hx + *hz * *hz < 1e-4f) { *hx = (float)(t->ni - t->ci); *hz = (float)(t->nj - t->cj); }
+}
+/* Pas de rue vers la case voisine (ni, nj) depuis la fin du segment en cours */
+static void rue_pas(traffic_t *t, int ni, int nj) {
+    float hx, hz, cx, cz;
+    rue_marche(t, &hx, &hz);
+    cap_pas(hx, hz, (float)(ni - t->ni), (float)(nj - t->nj), &cx, &cz);
+    t->sx = t->ex; t->sz = t->ez; t->ci = t->ni; t->cj = t->nj; t->ni = ni; t->nj = nj;
+    voie_rue(ni, nj, cx, cz, &t->ex, &t->ez, &t->etroit);
+}
+/* Demi-tour dans la rue, depuis (x, z) : vers la case d'où il vient, sur l'autre voie */
+static void rue_demi(traffic_t *t, float x, float z) {
+    const int ci = t->ci, cj = t->cj;
+    float hx = (float)(ci - t->ni), hz = (float)(cj - t->nj);
+    if (hx == 0 && hz == 0) { hx = -sinf(t->dir); hz = -cosf(t->dir); }
+    t->ci = t->ni; t->cj = t->nj; t->ni = ci; t->nj = cj; t->sx = x; t->sz = z; t->k = 0;
+    voie_rue(ci, cj, hx, hz, &t->ex, &t->ez, &t->etroit);
+}
+/* Liaison vers la rue (ri, rj), entrée dans le sens (hx, hz) : en ligne droite jusqu'à son point de voie */
+static void liaison_rue(traffic_t *t, int ri, int rj, float hx, float hz) {
+    t->mode = POUR_RALLIE; t->wl = 1; t->wi = (int16_t)ri; t->wj = (int16_t)rj; t->stuck = 0;
+    voie_rue(ri, rj, hx, hz, &t->wx, &t->wz, NULL);
+}
+/* Rue devant le bout (ex, ez) de l'axe que t parcourt : la case de rue la plus proche du point une case plus loin dans la
+   marche, à moins de ENTREE_R cases du bout et pas derrière lui ; 0 : aucune */
+static int rue_entree(const traffic_t *t, float ex, float ez, int *ri, int *rj) {
+    const route_t *r = &E.w.routes[t->road];
+    float ax, az;
+    route_pt(r, t->sgn > 0 ? r->n - 2 : 1, &ax, &az);
+    float hx = ex - ax, hz = ez - az;
+    const float hl = hypotf(hx, hz);
+    if (hl < 1e-4f) return 0;
+    hx /= hl; hz /= hl;
+    const int m = (int)ceilf(ENTREE_R), i0 = (int)floorf(ex), j0 = (int)floorf(ez);
+    float bd = 1e9f;
+    int ok = 0;
+    for (int dj = -m; dj <= m; dj++) for (int di = -m; di <= m; di++) {
+        const float cx = i0 + di + 0.5f - ex, cz = j0 + dj + 0.5f - ez;
+        if (cx * cx + cz * cz > ENTREE_R * ENTREE_R || cx * hx + cz * hz < -0.3f || !is_road(i0 + di, j0 + dj)) continue;
+        const float d = hypotf(cx - hx, cz - hz);
+        if (d < bd) { bd = d; *ri = i0 + di; *rj = j0 + dj; ok = 1; }
+    }
+    return ok;
+}
+/* Pas suivant dans les rues depuis la case (i, j), où le véhicule arrive au point (x0, z0) en allant dans le sens
+   (hx, hz). Cap : l'axe de la rue dans le sens de sa marche (carrefour ou place : sa marche). Cases voisines : tout droit
+   de préférence (6), en biais (1,5), à angle droit seulement à un carrefour (0,6 ; ailleurs ce n'est que la file de cases
+   d'à côté), ou si rien d'autre ; jamais en arrière. Bouts d'axes à moins de SORTIE_R cases qui continuent sa marche
+   (sortie d'une ville ou d'un village : mêmes poids, puis la liaison vers l'axe). Impasse : demi-tour. */
+static void rue_suivant(traffic_t *t, int i, int j, float x0, float z0, float hx, float hz) {
+    const world_t *w = &E.w;
+    float hl = hypotf(hx, hz);
+    if (hl < 1e-4f) { hx = sinf(t->dir); hz = cosf(t->dir); hl = 1; }
+    hx /= hl; hz /= hl;
+    int ux, uz, R, L;
+    const int W0 = rue_axe(i, j, hx, hz, &ux, &uz, &R, &L), carrefour = W0 > RUE_LARGE;
+    const float cx = carrefour ? hx : (float)ux, cz = carrefour ? hz : (float)uz;
+    static const float W3[3] = { 0.6f, 1.5f, 6 };   /* en table : le ternaire faisait planter GCC Xtensa (postreload) */
+    int odi[12], odj[12], oq[12], n = 0;
+    float wt[12], sum = 0;
+    for (int passe = 0; passe < 2 && !n; passe++)   /* 2e passe : à angle droit, faute de mieux */
+        for (int dj = -1; dj <= 1; dj++) for (int di = -1; di <= 1; di++) {
+            if ((!di && !dj) || !is_road(i + di, j + dj)) continue;
+            const float c = (di * cx + dj * cz) / hypotf((float)di, (float)dj);   /* cosinus avec le cap */
+            if (c <= -0.2f || (c <= 0.3f && !carrefour && !passe)) continue;
+            /* ruelle d'une case de large (souvent une impasse) depuis une rue plus large : RUELLE du poids */
+            int vx, vz, vr, vl;
+            const float ru = W0 > 1 && rue_axe(i + di, j + dj, cx + di, cz + dj, &vx, &vz, &vr, &vl) == 1 ? RUELLE : 1;
+            odi[n] = di; odj[n] = dj; oq[n] = -1; wt[n] = W3[(c > 0.3f) + (c > 0.9f)] * ru; sum += wt[n]; n++;
+        }
+    for (int q = 0; q < w->nroutes && n < 11; q++) {   /* sorties : bouts d'axes qui continuent sa marche */
+        const route_t *r = &w->routes[q];
+        if (r->n < 2) continue;
+        for (int e = 0; e < 2 && n < 12; e++) {
+            float ex, ez, bx, bz;
+            route_pt(r, e ? r->n - 1 : 0, &ex, &ez); route_pt(r, e ? r->n - 2 : 1, &bx, &bz);
+            const float dx = ex - (i + 0.5f), dz = ez - (j + 0.5f), vl = hypotf(bx - ex, bz - ez);
+            if (dx * dx + dz * dz > SORTIE_R * SORTIE_R || dx * cx + dz * cz < -0.5f || vl < 1e-4f) continue;   /* loin, ou derrière */
+            const float c = ((bx - ex) * cx + (bz - ez) * cz) / vl;
+            if (c <= 0.3f) continue;
+            odi[n] = 0; odj[n] = 0; oq[n] = q * 2 + e; wt[n] = W3[1 + (c > 0.9f)]; sum += wt[n]; n++;
+        }
+    }
+    t->x = x0; t->z = z0;
+    if (!n) {   /* impasse : demi-tour, vers la case de rue la plus en arrière */
+        int bi = 0, bj = 0;
+        float bc = 2;
+        for (int dj = -1; dj <= 1; dj++) for (int di = -1; di <= 1; di++) {
+            if ((!di && !dj) || !is_road(i + di, j + dj)) continue;
+            const float c = (di * hx + dj * hz) / hypotf((float)di, (float)dj);
+            if (c < bc) { bc = c; bi = di; bj = dj; }
+        }
+        if (bc > 1.5f) { t->on = 0; return; }   /* case de rue isolée */
+        t->ci = i; t->cj = j; t->ni = i + bi; t->nj = j + bj; t->sx = x0; t->sz = z0;
+        voie_rue(t->ni, t->nj, (float)bi, (float)bj, &t->ex, &t->ez, &t->etroit);
+        return;
+    }
+    float rr = frand() * sum;
+    int o = 0;
+    for (; o < n - 1; o++) { rr -= wt[o]; if (rr <= 0) break; }
+    t->ci = i; t->cj = j;
+    if (oq[o] >= 0) {   /* sortie : liaison vers le bout de l'axe, sur sa voie de droite */
+        const int q = oq[o] >> 1, e = oq[o] & 1, seg = e ? w->routes[q].n - 2 : 0, g = e ? -1 : 1;
+        t->ni = i; t->nj = j; t->sx = t->ex = x0; t->sz = t->ez = z0; t->k = 0; t->stuck = 0;
+        t->mode = POUR_RALLIE; t->wl = 0; t->wq = (int16_t)q; t->ws = (int16_t)seg; t->wg = (int8_t)g; t->wk = e ? 1.0f : 0.0f;
+        lane_point(q, seg, g, 0, 0, &t->wx, &t->wz, NULL);
+        return;
+    }
+    float qx, qz;
+    cap_pas(hx, hz, (float)odi[o], (float)odj[o], &qx, &qz);
+    t->ni = i + odi[o]; t->nj = j + odj[o]; t->sx = x0; t->sz = z0;
+    voie_rue(t->ni, t->nj, qx, qz, &t->ex, &t->ez, &t->etroit);
+}
+/* Bout du segment de rue : le pas suivant (poursuivant : vers sa cible, pour_case) */
+static void traffic_next(traffic_t *t) {
+    if (t->poursuite) { pour_case(t); return; }
+    float hx, hz;
+    rue_marche(t, &hx, &hz);
+    rue_suivant(t, t->ni, t->nj, t->ex, t->ez, hx, hz);
+}
+/* Fin de la liaison d'un véhicule du trafic : dans la rue (le pas suivant depuis sa case) ou sur l'axe */
+static void traf_entrer(traffic_t *t) {
+    t->mode = POUR_RESEAU; t->stuck = 0; t->k = 0;
+    if (t->wl) { t->lane = 0; t->ex = t->x; t->ez = t->z; rue_suivant(t, t->wi, t->wj, t->x, t->z, sinf(t->dir), cosf(t->dir)); }
+    else { t->lane = 1; t->road = t->wq; t->seg = t->ws; t->sgn = t->wg; t->k = t->wg > 0 ? t->wk : 1 - t->wk; }
 }
 
 /* Quelqu'un à moins de 1,6 case devant le véhicule (dans le sens de la marche, à moins de 0,7 de côté) */
 static int ahead(const traffic_t *t, float hx, float hz, float x, float z) {
     const float dx = x - t->x, dz = z - t->z, f = dx * hx + dz * hz;
     return f > 0 && f < 1.6f && fabsf(dx * hz - dz * hx) < 0.7f;
+}
+/* Véhicule en (x, z), cap dir, qui gêne t (cap hx, hz) : devant, dans la même voie (ahead) et dans le même sens (caps à
+   moins de 70°) ; un véhicule qui vient en face, dans l'autre voie, ne gêne jamais. Sera au volant (sera) : aussi en face
+   dans la même voie (moins de FACE_VOIE de côté), pour ne pas lui passer dessus */
+#define MEME_SENS 0.34f
+#define FACE_VOIE 0.35f
+static int gene_veh(const traffic_t *t, float hx, float hz, float x, float z, float dir, int sera) {
+    if (!ahead(t, hx, hz, x, z)) return 0;
+    if (sinf(dir) * hx + cosf(dir) * hz > MEME_SENS) return 1;
+    return sera && fabsf((x - t->x) * hz - (z - t->z) * hx) < FACE_VOIE;
+}
+/* Véhicule en (x, z), cap dir, qui vient en face de t : devant à moins de SERRE_DIST cases, à moins de 2 de côté */
+static int en_face(const traffic_t *t, float hx, float hz, float x, float z, float dir) {
+    const float dx = x - t->x, dz = z - t->z, f = dx * hx + dz * hz;
+    return f > 0 && f < SERRE_DIST && fabsf(dx * hz - dz * hx) < 2 && sinf(dir) * hx + cosf(dir) * hz < -0.5f;
 }
 /* Vitesse maxi (cases par seconde) et accélération (cases/s²) du véhicule p : celles de l'atelier (VEHI), sinon celles
    de son type (voiture, camion, mech, bateau, vaisseau) */
@@ -296,21 +554,34 @@ static int spawn_lane(int perso) {
     lane_place(t);
     return 1;
 }
-/* Nouveau véhicule sur une case de rue prise au hasard entre 10 et 18 cases de Sera */
+/* Segment de rue de départ de (i, j) vers (ni, nj), sur la voie de droite */
+static void rue_poser(traffic_t *t, int i, int j, int ni, int nj) {
+    t->ci = i; t->cj = j; t->ni = ni; t->nj = nj; t->k = 0;
+    voie_rue(i, j, (float)(ni - i), (float)(nj - j), &t->sx, &t->sz, NULL);
+    voie_rue(ni, nj, (float)(ni - i), (float)(nj - j), &t->ex, &t->ez, &t->etroit);
+    t->x = t->sx; t->z = t->sz; t->dir = atan2f((float)(ni - i), (float)(nj - j));
+}
+void traffic_rue_poser(traffic_t *t, int i, int j, int ni, int nj) { t->lane = 0; t->mode = POUR_RESEAU; rue_poser(t, i, j, ni, nj); }
+/* Nouveau véhicule sur une case de rue prise au hasard entre 10 et 18 cases de Sera, dans un sens de la rue (en biais au
+   besoin ; une case voisine quelconque faute de mieux) */
 static int spawn_cell(int perso) {
     const world_t *w = &E.w;
     for (int a = 0; a < 24; a++) {
         const float ang = frand() * 2 * PI_F, d = (10 + frand() * 8) / w->ech;
         const int i = (int)floorf(E.sera.x + cosf(ang) * d), j = (int)floorf(E.sera.z + sinf(ang) * d);
         if (!is_road(i, j) || traffic_near(i + 0.5f, j + 0.5f)) continue;
+        int ux, uz, R, L;
+        rue_axe(i, j, cosf(ang * 3), sinf(ang * 3), &ux, &uz, &R, &L);
         int ndi[8], ndj[8], nn = 0;
-        for (int dj = -1; dj <= 1; dj++) for (int di = -1; di <= 1; di++) if ((di || dj) && is_road(i + di, j + dj)) { ndi[nn] = di; ndj[nn] = dj; nn++; }
+        for (int passe = 0; passe < 2 && !nn; passe++)
+            for (int dj = -1; dj <= 1; dj++) for (int di = -1; di <= 1; di++)
+                if ((di || dj) && (passe || di * ux + dj * uz > 0) && is_road(i + di, j + dj)) { ndi[nn] = di; ndj[nn] = dj; nn++; }
         traffic_t *t = nn ? traffic_free() : NULL;
         if (!t) continue;
         const int o = (int)(frand() * nn) % nn;
         memset(t, 0, sizeof *t);
-        t->on = 1; t->perso = perso; t->var = (uint8_t)(frand() * (E.w.persos[perso].nvar + 1)); t->ci = i; t->cj = j; t->ni = i + ndi[o]; t->nj = j + ndj[o];
-        t->x = i + 0.5f; t->z = j + 0.5f; t->dir = atan2f((float)ndi[o], (float)ndj[o]);
+        t->on = 1; t->perso = perso; t->var = (uint8_t)(frand() * (E.w.persos[perso].nvar + 1));
+        rue_poser(t, i, j, i + ndi[o], j + ndj[o]);
         return 1;
     }
     return 0;
@@ -318,8 +589,7 @@ static int spawn_cell(int perso) {
 /* Trafic logique (comme TRAF_POIDS de l'émulateur) : fréquence de chaque véhicule selon son service (veh_service) ; les
    urgences (secours, pompiers, une voiture de police sur trois) roulent à 75 % de leur vitesse maxi au lieu de 45 % */
 static const float TRAF_POIDS[7] = { 1, 0.25f, 0.12f, 0.06f, 0.15f, 0.3f, 0.35f };
-/* En ville (rues, hors des axes de routes) : TRAF_RUE du nombre de véhicules au plus, à TRAF_LENT de l'allure des routes */
-#define TRAF_RUE 0.4f
+/* Dans les rues : à TRAF_LENT de l'allure des routes (plus de quota des rues, TRAF_RUE, depuis la circulation unique) */
 #define TRAF_LENT 0.6f
 static int traf_tirage(const int *kinds, int nk) {
     float tot = 0;
@@ -340,7 +610,7 @@ static int traf_tirage(const int *kinds, int nk) {
    point connu sans personne, elle rallie le réseau le plus proche (POUR_RALLIE). Pendant une arrestation, elles
    s'arrêtent ; semée, une voiture redevient du trafic (gyrophares allumés) dès qu'elle est sur le réseau. Comme pour* de
    l'émulateur. */
-#define POUR_ALLURE 0.85f     /* part de la vitesse maxi */
+#define POUR_ALLURE 0.8f      /* part de la vitesse maxi (0,85 avant le 01/11/2026 : on ne les distançait guère) */
 #define POUR_DIRECT 8.0f      /* cases */
 #define POUR_ARRET 1.6f
 #define POUR_DESCEND 4.0f     /* cases : Sera à pied, la voiture arrêtée à moins de tant d'elle se gare */
@@ -491,8 +761,8 @@ static void pour_case(traffic_t *t) {
             return;
         }
     }
-    if (!ok) { int a = t->ci, b = t->cj; t->ci = t->ni; t->cj = t->nj; t->ni = a; t->nj = b; return; }   /* cul-de-sac */
-    t->ci = t->ni; t->cj = t->nj; t->ni = ni; t->nj = nj;
+    if (!ok) { rue_demi(t, t->ex, t->ez); return; }   /* cul-de-sac */
+    rue_pas(t, ni, nj);
 }
 static void pour_lane_fin(traffic_t *t, float ex, float ez, const int *cr, const int *cs, const float *ck, int nc) {
     float cx, cz, px, pz;
@@ -568,7 +838,8 @@ static void pour_entrer(traffic_t *t) {
     if (t->wl) {
         int ni, nj;
         if (!pour_voisin(t->wi, t->wj, t->wi, t->wj, cx, cz, &ni, &nj, NULL)) { t->mode = POUR_DROIT; return; }
-        t->lane = 0; t->ci = t->wi; t->cj = t->wj; t->ni = ni; t->nj = nj; t->k = 0;
+        t->lane = 0; t->ci = t->wi; t->cj = t->wj; t->ni = ni; t->nj = nj; t->k = 0; t->sx = t->x; t->sz = t->z;
+        voie_rue(ni, nj, (float)(ni - t->wi), (float)(nj - t->wj), &t->ex, &t->ez, &t->etroit);
     } else {
         t->lane = 1; t->road = t->wq; t->seg = t->ws; t->sgn = t->wg; t->k = t->wg > 0 ? t->wk : 1 - t->wk;
         lane_place(t);
@@ -682,8 +953,7 @@ int traffic_poursuivant(int perso) {
     memset(t, 0, sizeof *t);
     t->on = 1; t->perso = perso; t->poursuite = 1; t->urgence = 1; t->v = vmax * 0.6f; t->demi = 1;   /* une seule livrée : palette 0 */
     if (rue) {
-        t->ci = ci; t->cj = cj; t->ni = ni; t->nj = nj;
-        t->x = ci + 0.5f; t->z = cj + 0.5f; t->dir = atan2f((float)(ni - ci), (float)(nj - cj));
+        rue_poser(t, ci, cj, ni, nj);
     } else {
         float ax, az, bx, bz;
         route_pt(&w->routes[br], bs, &ax, &az); route_pt(&w->routes[br], bs + 1, &bx, &bz);
@@ -695,7 +965,8 @@ int traffic_poursuivant(int perso) {
 
 static void traffic_update(float dt) {
     const world_t *w = &E.w;
-    int kinds[MAX_PERSOS], nk = 0;
+    static int kinds[MAX_PERSOS] ENG_FROID;   /* statique, en PSRAM : la pile du jeu fait 8 Ko sur l'ESP32 */
+    int nk = 0;
     for (int p = 0; p < w->npersos; p++) {
         const int f = w->persos[p].flags, ty = VEH_TYPE(f);
         if ((f & PERS_VEHICULE) && (f & PERS_TRAFIC) && ty != VEH_BATEAU && ty != VEH_VAISSEAU && w->persos[p].sheet >= 0) kinds[nk++] = p;
@@ -712,15 +983,13 @@ static void traffic_update(float dt) {
     if (pours) champ_maj(dt); else champ_ok = 0;   /* champ des poursuivants */
     E.traf_spawn_t -= dt;
     if (normal && count < w->traf_max && E.traf_spawn_t <= 0) {
-        /* Sur les axes des routes ou dans les rues des villes, une fois sur deux chacun ; l'autre si le premier échoue */
+        /* Sur un axe de route ou dans une rue (une seule circulation), une fois sur deux chacun ; l'autre si le premier
+           échoue */
         E.traf_spawn_t = 0.5f;
         const int perso = traf_tirage(kinds, nk), lane_first = w->nroutes && frand() < 0.5f;
-        int avant[TRAFFIC_MAX], en_rue = 0;
-        for (int k = 0; k < TRAFFIC_MAX; k++) { avant[k] = E.traffic[k].on; en_rue += E.traffic[k].on && !E.traffic[k].lane && !E.traffic[k].poursuite; }
-        int rue_max = (int)lroundf(w->traf_max * TRAF_RUE);
-        if (rue_max < 1) rue_max = 1;
-        if (en_rue >= rue_max) { if (w->nroutes) spawn_lane(perso); }
-        else if (!(lane_first && spawn_lane(perso)) && !spawn_cell(perso) && !lane_first) spawn_lane(perso);
+        int avant[TRAFFIC_MAX];
+        for (int k = 0; k < TRAFFIC_MAX; k++) avant[k] = E.traffic[k].on;
+        if (!(lane_first && spawn_lane(perso)) && !spawn_cell(perso) && !lane_first) spawn_lane(perso);
         const int sv = w->veh_service[perso];
         for (int k = 0; k < TRAFFIC_MAX; k++)
             if (E.traffic[k].on && !avant[k]) E.traffic[k].urgence = sv == 2 || sv == 3 || (sv == 1 && frand() < 1.0f / 3);
@@ -736,48 +1005,73 @@ static void traffic_update(float dt) {
         const float hx = sinf(t->dir), hz = cosf(t->dir);
         /* Arrêt : quelqu'un devant (Sera aussi en véhicule), ou Sera, sur la chaussée, s'adresse à lui (pour le voler) ; les
            poursuivants ne s'arrêtent pour personne */
-        int blocked = 0;
+        int blocked = 0, face = 0;
         if (!t->poursuite) {
-            blocked = sera_route && (E.talk == TALK_TRAF(k) || ahead(t, hx, hz, E.sera.x, E.sera.z));
-            for (int m = 0; m < E.nnpc && !blocked; m++)
-                if (m != E.ride && npc_present(&E.npcs[m]) && fabsf(E.npcs[m].x - t->x) < 2 && fabsf(E.npcs[m].z - t->z) < 2) blocked = ahead(t, hx, hz, E.npcs[m].x, E.npcs[m].z);
-            for (int m = 0; m < TRAFFIC_MAX && !blocked; m++) if (m != k && E.traffic[m].on) blocked = ahead(t, hx, hz, E.traffic[m].x, E.traffic[m].z);
+            /* Sera à pied devant ; au volant, devant dans le même sens, ou en face dans la même voie (gene_veh) */
+            const float sd = E.ride >= 0 ? E.npcs[E.ride].dir : 0;
+            blocked = sera_route && (E.talk == TALK_TRAF(k) || (E.ride < 0 ? ahead(t, hx, hz, E.sera.x, E.sera.z) : gene_veh(t, hx, hz, E.sera.x, E.sera.z, sd, 1)));
+            if (sera_route && E.ride >= 0) face = en_face(t, hx, hz, E.sera.x, E.sera.z, sd);
+            for (int m = 0; m < E.nnpc && !blocked; m++) {   /* piétons sur la chaussée (pas ceux du trottoir), véhicules garés */
+                const npc_t *q = &E.npcs[m];
+                if (m == E.ride || !npc_present(q) || fabsf(q->x - t->x) >= 2 || fabsf(q->z - t->z) >= 2) continue;
+                if ((E.w.persos[q->perso].flags & PERS_VEHICULE) || chaussee_at(q->x, q->z)) blocked = ahead(t, hx, hz, q->x, q->z);
+            }
+            for (int m = 0; m < TRAFFIC_MAX; m++)   /* trafic : devant dans le même sens ; en face (se serrer) */
+                if (m != k && E.traffic[m].on) {
+                    const traffic_t *o = &E.traffic[m];
+                    if (!blocked) blocked = gene_veh(t, hx, hz, o->x, o->z, o->dir, 0);
+                    if (!face) face = en_face(t, hx, hz, o->x, o->z, o->dir);
+                }
         }
+        /* Croisement : sur une voie trop étroite pour deux, rangé sur le bas-côté tant qu'un véhicule vient en face */
+        const int etroit = t->mode == POUR_RESEAU && (t->lane ? E.w.routes[t->road].hw * 0.5f < CROISE_DEMI : t->etroit);
+        const float sv = etroit && face ? 1.0f : 0.0f;
+        t->serre = t->serre < sv ? fminf(sv, t->serre + SERRE_VITE * dt) : fmaxf(sv, t->serre - SERRE_VITE * dt);
         /* Allure de croisière : 45 % de la vitesse maxi ; accélère au départ, freine (au double) devant un obstacle ; un
-           poursuivant à POUR_ALLURE, arrêté pendant une arrestation */
+           poursuivant à POUR_ALLURE, arrêté pendant une arrestation ; rangé sur le bas-côté : SERRE_ALLURE */
         float vmax, acc;
         veh_params(t->perso, &vmax, &acc);
-        const float cruise = blocked ? 0 : t->poursuite ? (POL.arr ? 0 : vmax * POUR_ALLURE) : vmax * (t->urgence ? 0.75f : 0.45f) * (t->lane ? 1 : TRAF_LENT);
+        const float cruise = blocked ? 0 : t->poursuite ? (POL.arr ? 0 : vmax * POUR_ALLURE)
+                           : vmax * (t->urgence ? 0.75f : 0.45f) * (t->lane ? 1 : TRAF_LENT) * (1 - (1 - SERRE_ALLURE) * t->serre);
         t->v = t->v < cruise ? fminf(cruise, t->v + acc * dt) : fmaxf(cruise, t->v - 2 * acc * dt);
         t->walking = t->v > 0.05f;
-        /* Bloqué plus de 2,5 s (un piéton immobile sur la chaussée) : demi-tour (sur un axe : voie d'en face) */
+        /* Bloqué plus de 2,5 s (un piéton immobile sur la chaussée) : demi-tour (sur un axe : voie d'en face) ; pendant
+           une liaison, il attend */
         t->stuck = blocked && E.talk != TALK_TRAF(k) ? t->stuck + dt : 0;
         if (t->stuck > 2.5f) {
-            if (t->lane) t->sgn = -t->sgn;
-            else { int a = t->ci, b = t->cj; t->ci = t->ni; t->cj = t->nj; t->ni = a; t->nj = b; }
-            t->k = 1 - t->k; t->stuck = 0; t->v = 0;
+            if (t->mode != POUR_RESEAU) t->stuck = 0;
+            else if (t->lane) { t->sgn = -t->sgn; t->k = 1 - t->k; }
+            else rue_demi(t, t->x, t->z);
+            t->stuck = 0; t->v = 0;
         }
-        if (t->v > 0) {
+        if (t->v > 0 && t->mode == POUR_RALLIE) {   /* liaison d'un réseau à l'autre, en ligne droite */
+            const float dx = t->wx - t->x, dz = t->wz - t->z, d = hypotf(dx, dz), s = dt * t->v;
+            if (d > 1e-3f) t->dir = atan2f(dx, dz);
+            if (s >= d) { t->x = t->wx; t->z = t->wz; traf_entrer(t); }
+            else { t->x += dx / d * s; t->z += dz / d * s; }
+            t->anim += dt * fminf(1, t->v / (vmax * 0.3f));
+            if (t->anim > 0.12f) { t->anim = 0; t->frame++; }
+        } else if (t->v > 0) {
             if (t->lane) {
                 t->k += dt * t->v / lane_len(t);
                 for (int it = 0; it < 4 && t->k >= 1 && t->mode == POUR_RESEAU; it++) {   /* un poursuivant peut quitter le réseau (ralliement) */
                     t->k -= 1; t->seg += t->sgn;
                     if (t->seg < 0 || t->seg > w->routes[t->road].n - 2) { t->seg -= t->sgn; lane_next(t); }
                 }
-            } else {
-                t->k += dt * t->v / hypotf((float)(t->ni - t->ci), (float)(t->nj - t->cj));
-                while (t->k >= 1 && t->mode == POUR_RESEAU) { t->k -= 1; traffic_next(t); }
+            } else {   /* rue : de point de voie en point de voie (segment d'au moins un quart de case pour la marche) */
+                t->k += dt * t->v / fmaxf(0.25f, hypotf(t->ex - t->sx, t->ez - t->sz));
+                for (int it = 0; it < 4 && t->k >= 1 && t->mode == POUR_RESEAU && t->on; it++) { t->k -= 1; traffic_next(t); }
             }
             t->anim += dt * fminf(1, t->v / (vmax * 0.3f));
             if (t->anim > 0.12f) { t->anim = 0; t->frame++; }
         }
-        if (t->mode != POUR_RESEAU) continue;   /* poursuivant parti vers le réseau voisin : il garde sa place */
+        if (!t->on || t->mode != POUR_RESEAU) continue;   /* liaison, poursuivant parti vers le réseau voisin : il garde sa place */
         if (t->lane) lane_place(t);
-        else {
-            const float len = hypotf((float)(t->ni - t->ci), (float)(t->nj - t->cj)), ux = (t->ni - t->ci) / len, uz = (t->nj - t->cj) / len;
-            t->x = t->ci + 0.5f + (t->ni - t->ci) * t->k + uz * 0.3f;   /* décalé à droite de la chaussée */
-            t->z = t->cj + 0.5f + (t->nj - t->cj) * t->k - ux * 0.3f;
-            t->dir = atan2f(ux, uz);
+        else {   /* sur la voie de droite de la rue ; rue étroite : rangé à droite (serre) */
+            const float dx = t->ex - t->sx, dz = t->ez - t->sz, kk = fminf(t->k, 1), s = t->serre * SERRE_RUE;
+            if (dx * dx + dz * dz > 0.0025f) t->dir = atan2f(dx, dz);
+            t->x = t->sx + dx * kk + cosf(t->dir) * s;
+            t->z = t->sz + dz * kk - sinf(t->dir) * s;
         }
         if (t->poursuite) pour_reseau(t, k, dt);   /* tout droit vers une cible proche, garée, demi-tour, ou plus de poursuite */
     }
@@ -793,7 +1087,7 @@ static int is_vehicle(int k) { return k >= 0 && (E.w.persos[E.npcs[k].perso].fla
    (drapeau 8) : explosion, éclats et poussière ; sinon (arbre) : craquement, feuilles, il tombe dans le sens du véhicule
    (dessin des plantes). Les CASSE_N derniers sont retenus par leur position (un chunk rechargé les retrouve). */
 #define CASSE_N 128
-static struct { float x, z, t0, dx, dz; } casses[CASSE_N];
+static struct { float x, z, t0, dx, dz; } casses[CASSE_N] ENG_FROID;
 static int ncasses, casse_k;
 static float casse_clock;
 int decor_casse(float x, float z, float *t, float *dx, float *dz) {
@@ -860,12 +1154,16 @@ float eau_prof(float x, float z) {
     const float s = c->water_h[cell_local(i, j)] > -1e8f ? c->water_h[cell_local(i, j)] : E.w.wl, a = s - ground_y(x, z);
     return a > 0 ? a : 0;
 }
+/* Hauteur de gué (m) du véhicule p de type t : gué renforcé sur celui de Sera */
+static float veh_gue(int p, int t) { return VEH_GUE[t] * (vk_monte(p, VK_GUE) ? VK_GUE_X : 1); }
+int veh_flotte(int p) { const int t = VEH_TYPE(E.w.persos[p].flags); return t >= VEH_VOITURE && t <= VEH_MECH && veh_rolls(p) && vk_monte(p, VK_FLOTTEURS); }
 /* Véhicule p noyé en (x, z) : il roule (voiture, camion, mech) et un lac ou la mer y dépasse sa hauteur de gué */
 int veh_noye(int p, float x, float z) {
     const int t = VEH_TYPE(E.w.persos[p].flags);
     if (t < VEH_VOITURE || t > VEH_MECH || !veh_rolls(p)) return 0;
     const uint8_t f = flags_at(x, z);
-    return !(f & (F_ROAD | F_RIVER)) && (f & F_WATER) && eau_prof(x, z) >= VEH_GUE[t] / E.w.ech;
+    if (vk_monte(p, VK_FLOTTEURS)) return 0;   /* (flotteurs : il ne coule plus) */
+    return !(f & (F_ROAD | F_RIVER)) && (f & F_WATER) && eau_prof(x, z) >= veh_gue(p, t) / E.w.ech;
 }
 
 /* ---------- Vol permanent : la carte du système solaire (CART, ASTR ; volEmbarquer de l'émulateur) ---------- */
@@ -945,9 +1243,11 @@ static int ride_ok(float x, float z) {
 static float ride_speed(float x, float z, float vmax) {
     const int t = ride_type();
     const uint8_t f = flags_at(x, z);
-    float k = (t == VEH_VOITURE || t == VEH_CAMION) && !(f & (F_ROAD | F_STREET)) ? 0.55f : 1;
-    if (t >= VEH_VOITURE && t <= VEH_MECH && veh_rolls(E.npcs[E.ride].perso) && water_kind(f))
-        k *= (f & F_RIVER) ? 0.5f : fmaxf(0.25f, 1 - 0.75f * eau_prof(x, z) * E.w.ech / VEH_GUE[t]);
+    const int p = E.npcs[E.ride].perso;
+    /* (à flot, il n'est plus « hors route » : sa vitesse sur l'eau n'est que celle des flotteurs) */
+    float k = (t == VEH_VOITURE || t == VEH_CAMION) && !(f & (F_ROAD | F_STREET)) && !(water_kind(f) && vk_monte(p, VK_FLOTTEURS)) ? (vk_monte(p, VK_CHENILLES) ? VK_CHENILLES_K : 0.55f) : 1;
+    if (t >= VEH_VOITURE && t <= VEH_MECH && veh_rolls(p) && water_kind(f))
+        k *= (f & F_RIVER) ? 0.5f : fmaxf(vk_monte(p, VK_FLOTTEURS) ? VK_FLOT_K : 0.25f, 1 - 0.75f * eau_prof(x, z) * E.w.ech / veh_gue(p, t));
     return vmax * k;
 }
 
@@ -995,13 +1295,20 @@ static void drive_input(const eng_input_t *in, float *th, float *st) {
     if (E.drive_touch) { *th = E.drive_th; *st = E.drive_st; }
 }
 static void encounter_step(float dist);   /* rencontres (plus bas) : en vol permanent aussi */
+/* Pas du mech conduit (01/11/2026) : un appui lourd (SON_PAS_MECH) toutes les MECH_FOULEE cases de chemin, foulée allongée
+   pour un mech rapide (au plus un pas par MECH_CADENCE s à sa vitesse maxi) ; ses planches n'ont pas toutes une marche
+   dont suivre les images. driveStep de l'émulateur */
+#define MECH_FOULEE 1.6f
+#define MECH_CADENCE 0.4f
 static void ride_drive(const eng_input_t *in, float dt) {
     actor_t *s = &E.sera;
     float vmax, acc, th, st;
     veh_params(E.npcs[E.ride].perso, &vmax, &acc);
     const int vol = vol_permanent();
     if (vol) { vmax *= VOL_VITESSE; acc *= VOL_VITESSE; }   /* vol permanent : orbites resserrées */
+    { const float mot = 1 + VK_MOTEUR_X * vk_monte(E.npcs[E.ride].perso, VK_MOTEUR); vmax *= mot; acc *= mot; }   /* son moteur (pièces du véhicule de Sera) */
     drive_input(in, &th, &st);
+    pilote_conduire(&th, &st, ride_speed(s->x, s->z, vmax), vmax, acc, dt);   /* conduite assistée, pilote automatique (pilote.c) */
     /* Vaisseau : décollage et atterrissage à la verticale (1,2 case/s, sans avancer) ; en vol, les boutons d'altitude
        (ou R / F) le font monter ou descendre entre 0,3 case et son altitude maxi. Vol permanent : toujours à l'altitude de
        croisière de la carte */
@@ -1026,7 +1333,7 @@ static void ride_drive(const eng_input_t *in, float dt) {
     if (E.ride_coule > 0 || veh_noye(E.npcs[E.ride].perso, s->x, s->z)) {
         if (E.ride_coule <= 0) { son_jouer(SON_PLOUF, 0.8f, 0.7f); son_jouer(SON_CHOC, 0.35f, 0.5f); }
         E.ride_coule += dt; th = st = 0;
-        E.ride_alt = fmaxf(0, eau_prof(s->x, s->z) - 0.6f * VEH_GUE[ride_type()] / E.w.ech) * fmaxf(0, 1 - E.ride_coule / COULE_T);
+        E.ride_alt = fmaxf(0, eau_prof(s->x, s->z) - 0.6f * veh_gue(E.npcs[E.ride].perso, ride_type()) / E.w.ech) * fmaxf(0, 1 - E.ride_coule / COULE_T);
         if (E.ride_coule > COULE_T + 0.6f) { vehicle_noye(); return; }
     }
     const float brk = acc * 2, top = ride_speed(s->x, s->z, vmax);
@@ -1042,7 +1349,10 @@ static void ride_drive(const eng_input_t *in, float dt) {
     s->dir = atan2f(sinf(s->dir), cosf(s->dir));
     if (*v != 0) {
         const float hx = sinf(s->dir), hz = cosf(s->dir), nx = s->x + hx * *v * dt, nz = s->z + hz * *v * dt;
-        const int mx = ride_ok(nx, s->z), mz = ride_ok(s->x, nz);
+        int mx = ride_ok(nx, s->z), mz = ride_ok(s->x, nz);
+        /* En biais contre le coin d'un obstacle : chaque axe passe, pas les deux ensemble ; un seul (sinon le véhicule
+           entrait dans la marge du décor et y restait coincé, chaque pas refusé ; 01/11/2026, driveStep de l'émulateur) */
+        if (mx && mz && !ride_ok(nx, nz)) { if (fabsf(hx) >= fabsf(hz)) mz = 0; else mx = 0; }
         const float v0 = fabsf(*v), ox = s->x, oz = s->z;
         if (mx) s->x = nx;
         if (mz) s->z = nz;
@@ -1052,6 +1362,11 @@ static void ride_drive(const eng_input_t *in, float dt) {
         ride_choc(v0 - fabsf(*v), vmax);
         if (mx != mz && fabsf(*v) > 0.8f) E.frotte = fminf(1, fabsf(*v) / vmax);   /* il glisse le long de l'obstacle */
         if (vol && (mx || mz)) encounter_step(hypotf(s->x - ox, s->z - oz) * E.w.ech);   /* rencontres de l'espace, en vol */
+        const float foulee = fmaxf(MECH_FOULEE, MECH_CADENCE * vmax);
+        if (ride_type() == VEH_MECH && E.ride_coule <= 0 && (E.mech_pas += hypotf(s->x - ox, s->z - oz)) >= foulee) {
+            E.mech_pas = fmodf(E.mech_pas, foulee);
+            son_jouer(SON_PAS_MECH, 0.55f + 0.3f * fminf(1, v0 / vmax), 0.92f + 0.1f * frand());
+        }
     }
     /* Caméra derrière le véhicule */
     const float dy = atan2f(sinf(s->dir - E.yaw), cosf(s->dir - E.yaw));
@@ -1084,7 +1399,7 @@ int vehicle_spawn(int perso, float x, float z, float dir) {
         float far = -1;
         for (int m = E.nnpc_base; m < E.nnpc; m++) {
             const float d = hypotf(E.npcs[m].x - E.sera.x, E.npcs[m].z - E.sera.z);
-            if (m != E.ride && d > far) { far = d; s = m; }
+            if (m != E.ride && !E.npcs[m].mien && d > far) { far = d; s = m; }   /* jamais le véhicule de Sera (garage.c) */
         }
     }
     if (s < 0) return -1;
@@ -1102,7 +1417,8 @@ static const char *const CRIS[] = { "« Au voleur ! »", "« Hé ! Ma voiture ! 
 static void ejecter(const traffic_t *t) {
     const world_t *w = &E.w;
     const int sv = w->veh_service[t->perso];
-    int cand[MAX_PERSOS], nc = 0, pref[MAX_PERSOS], np = 0;
+    static int cand[MAX_PERSOS] ENG_FROID, pref[MAX_PERSOS] ENG_FROID;   /* statiques, en PSRAM : la pile du jeu */
+    int nc = 0, np = 0;
     for (int p = 0; p < w->npersos; p++) {
         const perso_t *pe = &w->persos[p];
         if (!(pe->flags & PERS_FLANE) || (pe->flags & PERS_VEHICULE) || pe->sheet < 0 || !perso_present(p) || !pe->nom) continue;
@@ -1225,6 +1541,11 @@ static void vehicle_noye(void) {
 }
 
 /* Interlocuteur : l'exemplaire présent le plus proche de Sera à moins de 2,4 m (-2 : personne), ou un véhicule du trafic */
+/* Personnage p : un ennemi (fiche de combat de ENNE) ? */
+static int perso_ennemi(int p) {
+    for (int e = 0; e < E.w.nenemies; e++) if (E.w.enemies[e].perso == p) return 1;
+    return 0;
+}
 static int talk_target(void) {
     float bd = 2.4f / E.w.ech;
     int best = -2;
@@ -1232,6 +1553,7 @@ static int talk_target(void) {
         const npc_t *n = &E.npcs[k];
         if (!npc_present(n) || fabsf(n->x - E.sera.x) >= bd || fabsf(n->z - E.sera.z) >= bd) continue;
         if (acteur_de(n->perso) >= 0) continue;   /* remplacé par son acteur, le temps d'une scène */
+        if (perso_ennemi(n->perso)) continue;     /* ennemi de l'histoire posé sur la carte (Glaneur blanc, Sentinelle…) : on ne lui parle pas, sa zone lance la scène (02/11/2026 ; talkTarget de l'émulateur) */
         if (E.in.on && is_vehicle(k)) continue;   /* voiture garée d'un garage : ni dialogue ni conduite */
         if (is_vehicle(k) && veh_noye(n->perso, n->x, n->z)) continue;   /* au fond d'un lac : perdu */
         float d = hypotf(n->x - E.sera.x, n->z - E.sera.z);
@@ -1248,19 +1570,54 @@ static int talk_target(void) {
 
 /* Promeneurs : trois flâneurs sur cinq (d'après leur graine, comme l'émulateur : promeneur) marchent le long des
    trottoirs : un cap tenu (souvent le même, sinon un quart de tour, rarement un huitième ou un demi-tour), une cible 3 à
-   7 cases plus loin, atteinte par des cases praticables hors des chaussées (une fois sur cinq, ils traversent) ; au-delà
-   de PROM_RAYON cases de leur place, ils prennent un cap qui les en rapproche. Les autres flânent autour de leur place. */
+   7 cases plus loin, atteinte par des cases praticables hors des chaussées (PROM_TRAVERSE du temps, ils traversent :
+   jusqu'au trottoir d'en face, près d'un carrefour de préférence) ; au-delà de PROM_RAYON cases de leur place, ils
+   prennent un cap qui les en rapproche. Les autres flânent autour de leur place, jamais sur la chaussée. */
 #define PROM_RAYON 30.0f
 #define PROM_TRAVERSE 0.06f   /* part des promeneurs qui traversent la chaussée (promCible de l'émulateur) */
+#define PROM_TRAVERSE_L 9.0f  /* cases : une traversée va jusqu'au trottoir d'en face (artère de 5 cases comprise) */
 static int promeneur(const npc_t *n) { return n->meneur || ((n->graine * 2654435761u) >> 16) % 5 < 3; }   /* meneur d'une patrouille : toujours */
 /* Suiveur d'une patrouille (comme suivreChef de l'émulateur) : un point derrière son meneur, 0,9 case par rang, dans la
    direction où il regarde ; il presse le pas s'il traîne, le rejoint s'il s'est perdu ; arrêté, il regarde où regarde
    son meneur */
+/* Chaussée (route ou rue) en (x, z) : les piétons n'y marchent que pour traverser */
+static int chaussee_at(float x, float z) { return (flags_at(x, z) & (F_ROAD | F_STREET)) != 0; }
+/* Exemplaire posé sur la chaussée (passant semé sur une rue, personnage de l'histoire, garde d'une porte : le trafic s'y
+   arrêtait et faisait demi-tour) : sa place passe sur la case praticable hors de la chaussée la plus proche (HORS_CHAUSSEE
+   cases au plus), une fois, quand il arrive à moins de deux fois le rayon d'activité de Sera (avant d'être vu) ; les
+   véhicules, les objets (épaves), le starter et un conducteur qui s'enfuit restent (horsChaussee de l'émulateur, à garder
+   identiques) */
+#define HORS_CHAUSSEE 4.0f
+static void hors_chaussee(npc_t *n) {
+    const perso_t *pe = &E.w.persos[n->perso];
+    if ((pe->flags & PERS_VEHICULE) || PERS_EST_OBJET(pe->flags) || n->depart || n->fuit) return;
+    for (int c = 0; c < 4; c++)   /* chunks autour pas encore chargés : plus tard */
+        if (!chunk_of_cell((int)floorf(n->hx + (c & 1 ? HORS_CHAUSSEE : -HORS_CHAUSSEE)), (int)floorf(n->hz + (c & 2 ? HORS_CHAUSSEE : -HORS_CHAUSSEE)))) return;
+    n->place_ok = 1;
+    if (!chaussee_at(n->hx, n->hz)) return;
+    for (float r = 0.5f; r <= HORS_CHAUSSEE; r += 0.5f)
+        for (int a = 0; a < 16; a++) {
+            const float x = n->hx + cosf(a * PI_F / 8) * r, z = n->hz + sinf(a * PI_F / 8) * r;
+            if (chaussee_at(x, z) || !walkable_for(x, z, n, 0)) continue;
+            n->hx = n->x = n->tx = x; n->hz = n->z = n->tz = z; n->walking = 0;
+            return;
+        }
+}
 static void suivre_chef(npc_t *n, float dt) {
     const npc_t *c = &E.npcs[n->chef - 1];
-    const float d0 = 0.9f * n->rang, tx = c->x - sinf(c->dir) * d0, tz = c->z - cosf(c->dir) * d0;
+    const float d0 = 0.9f * n->rang;
+    float tx = c->x - sinf(c->dir) * d0, tz = c->z - cosf(c->dir) * d0;
+    const int sur = chaussee_at(tx, tz) && !chaussee_at(c->x, c->z);
+    if (sur) { tx = c->x; tz = c->z; }   /* sa place derrière tombe sur la chaussée : vers son meneur */
     const float dx = tx - n->x, dz = tz - n->z, d = hypotf(dx, dz);
-    if (d > 10) { if (walkable_for(tx, tz, n, 0)) { n->x = tx; n->z = tz; } return; }
+    if (d > 10) {   /* perdu : posé à sa place, ou près de son meneur, hors de la chaussée */
+        for (float r = sur ? 0.5f : 0; r <= 2; r += 0.5f)
+            for (int a = 0; a < (r > 0 ? 8 : 1); a++) {
+                const float x = tx + cosf(a * PI_F / 4) * r, z = tz + sinf(a * PI_F / 4) * r;
+                if (walkable_for(x, z, n, 0) && !chaussee_at(x, z)) { n->x = x; n->z = z; return; }
+            }
+        return;
+    }
     if (d < 0.25f) {
         n->walking = 0; n->dir = c->dir; n->anim += dt;
         if (n->anim > 0.22f) { n->anim = 0; n->frame++; }
@@ -1269,34 +1626,59 @@ static void suivre_chef(npc_t *n, float dt) {
     float sp = (d > 1.5f ? 2.0f : 1.3f) / E.w.ech * dt;
     if (sp > d) sp = d;
     const float nx = n->x + dx / d * sp, nz = n->z + dz / d * sp;
-    if (!walkable_for(nx, nz, n, 0)) return;
+    if (!walkable_for(nx, nz, n, 0) && !(chaussee_at(n->x, n->z) && sol_libre(nx, nz, 0))) { n->walking = 0; return; }   /* gêné (sur la chaussée : il en sort quand même) */
+    /* pas sur la chaussée tant que son meneur n'y est pas (il traverse) : il attend au bord */
+    if (chaussee_at(nx, nz) && !chaussee_at(n->x, n->z) && !chaussee_at(c->x, c->z)) { n->walking = 0; return; }
     n->x = nx; n->z = nz; n->dir = atan2f(dx, dz); n->walking = 1; n->anim += dt;
     if (n->anim > 0.16f) { n->anim = 0; n->frame++; }
+}
+/* Près d'un carrefour (une case de rue à moins de 2 cases plus large que RUE_LARGE en travers) : là où les passages
+   piétons sont peints (WorldExport.passagesPietons de l'Atelier : juste avant un carrefour) */
+static int pres_carrefour(float x, float z) {
+    for (int dj = -2; dj <= 2; dj++) for (int di = -2; di <= 2; di++) {
+        const int i = (int)floorf(x) + di, j = (int)floorf(z) + dj;
+        int ux, uz, R, L;
+        if (rue_case(i, j) && rue_axe(i, j, 1, 0, &ux, &uz, &R, &L) > RUE_LARGE && rue_axe(i, j, 0, 1, &ux, &uz, &R, &L) > RUE_LARGE) return 1;
+    }
+    return 0;
 }
 static int prom_cible(npc_t *n) {
     static const signed char ORDRE[8] = { 0, 2, -2, 1, -1, 3, -3, 4 };   /* écarts au cap actuel, en huitièmes de tour */
     const int h0 = (int)lroundf(n->dir / (PI_F / 4)) & 7, garde = frand() < 0.7f;
     const float ox = n->hx - n->x, oz = n->hz - n->z, loin = hypotf(ox, oz) > PROM_RAYON;
-    const int traverse = frand() < PROM_TRAVERSE;
-    for (int t = 0; t < 8; t++) {
-        int e = ORDRE[t];
-        if (!garde && t == 0) continue;                                   /* tourner cette fois-ci */
-        if (!garde && t < 3 && frand() < 0.5f) e = -e;                    /* à gauche ou à droite */
-        const int h = (h0 + e + 8) & 7;
-        const float sx = sinf(h * PI_F / 4), sz = cosf(h * PI_F / 4);
-        if (loin && sx * ox + sz * oz <= 0) continue;                     /* trop loin : un cap qui rapproche */
-        const float L = 3 + frand() * 4;
-        float ok = 0;
-        for (float s = 0.5f; s <= L; s += 0.5f) {
-            const float px = n->x + sx * s, pz = n->z + sz * s;
-            if (!walkable_for(px, pz, n, 0) || (!traverse && (flags_at(px, pz) & (F_ROAD | F_STREET)))) break;
-            ok = s;
+    const int sur = chaussee_at(n->x, n->z), traverse = frand() < PROM_TRAVERSE || sur;   /* déjà sur la chaussée : il en sort */
+    /* Traversée : jusqu'au trottoir d'en face (PROM_TRAVERSE_L cases au plus), près d'un carrefour (passages piétons) de
+       préférence (première passe), ailleurs sinon ; jamais d'arrêt sur la chaussée (la cible recule jusqu'au trottoir) */
+    for (int passe = 0; passe < (traverse ? 2 : 1); passe++)
+        for (int t = 0; t < 8; t++) {
+            int e = ORDRE[t];
+            if (!garde && t == 0) continue;                                   /* tourner cette fois-ci */
+            if (!garde && t < 3 && frand() < 0.5f) e = -e;                    /* à gauche ou à droite */
+            const int h = (h0 + e + 8) & 7;
+            const float sx = sinf(h * PI_F / 4), sz = cosf(h * PI_F / 4);
+            if (loin && sx * ox + sz * oz <= 0) continue;                     /* trop loin : un cap qui rapproche */
+            const float L = traverse ? PROM_TRAVERSE_L : 3 + frand() * 4;
+            float ok = 0, cx = 0, cz = 0, run = 0, run_max = 0;
+            int pave = 0;
+            for (float s = 0.25f; s <= L; s += 0.25f) {   /* au quart de case : une clôture mince n'est pas sautée */
+                const float px = n->x + sx * s, pz = n->z + sz * s;
+                if (!walkable_for(px, pz, n, 0)) break;
+                if (chaussee_at(px, pz)) {
+                    if (!traverse) break;
+                    if (!pave) {   /* au plus une fois et demie la largeur de la rue (en biais, pas le long) ; route : 3 cases */
+                        int ux, uz, R, Lc;
+                        const int i = (int)floorf(px), j = (int)floorf(pz), W = rue_case(i, j) ? rue_axe(i, j, sx, sz, &ux, &uz, &R, &Lc) : 2;
+                        pave = 1; cx = px; cz = pz; run_max = W > RUE_LARGE ? 6.0f : W * 1.5f;
+                    }
+                    if ((run += 0.25f) > run_max) break;
+                }
+                ok = s;
+            }
+            while (ok >= 0.25f && chaussee_at(n->x + sx * ok, n->z + sz * ok)) ok -= 0.25f;   /* pas d'arrêt sur la chaussée */
+            if (ok < (sur ? 0.5f : 1.5f) || (pave && !passe && !sur && !pres_carrefour(cx, cz))) continue;   /* sur la chaussée : le plus court pour en sortir */
+            n->tx = n->x + sx * ok; n->tz = n->z + sz * ok; n->walking = 1;
+            return 1;
         }
-        if (ok < 1.5f) continue;
-        while (ok > 1.5f && (flags_at(n->x + sx * ok, n->z + sz * ok) & (F_ROAD | F_STREET))) ok -= 0.5f;   /* pas d'arrêt sur la chaussée */
-        n->tx = n->x + sx * ok; n->tz = n->z + sz * ok; n->walking = 1;
-        return 1;
-    }
     return 0;
 }
 
@@ -1317,22 +1699,58 @@ static int prom_cible(npc_t *n) {
 #define CENDRE_PLANCHER 0.25f
 #define CENDRE_RENC 0.6f
 #define CENDRE_GLANEUR 3.0f
-float cendre_dehors(void) { return !E.w.ciel && (!E.in.on || BT.on) ? E.rain : 0; }
+float cendre_dehors(void) { return !E.w.ciel && (!E.in.on || BT.on) && !neige_ici() ? E.rain : 0; }
+/* Neige (01/11/2026, demande de l'utilisateur) : sur la planète, dehors, dans la classe « neige » (LAND_NEIGE, rang de
+   Continent.LAND) de la grille des zones sous Sera, la pluie tombe en neige : flocons (render.c), ni cendre (toux,
+   brouillard gris, rencontres) ni éclairs (neigeIci de l'émulateur) */
+#define LAND_NEIGE 14
+#define LAND_MONTAGNE 6    /* (rangs de Continent.LAND de l'atelier) */
+#define LAND_CAVERNE 18
+int neige_ici(void) {
+    const world_t *w = &E.w;
+    if (w->carte || w->ciel || !w->zone || w->n <= 0 || (E.in.on && !BT.on)) return 0;
+    const int i = (int)floorf(E.sera.x) * w->zone_n / w->n, j = (int)floorf(E.sera.z) * w->zone_n / w->n;
+    return i >= 0 && j >= 0 && i < w->zone_n && j < w->zone_n && w->zone[j * w->zone_n + i] == LAND_NEIGE;
+}
 /* Brouillard en ville (31/10/2026) : dans les rues, les bâtiments bornent déjà la vue, le brouillard ne faisait que griser
    les façades. Sera sur une zone urbaine de la planète (urbain, industriel, rue : rangs 8, 10, 11 de Continent.LAND,
    bloc de la grille des rencontres) : E.ville_v tend vers 1 en VILLE_FONDU s, et render.c fait commencer le brouillard aux
    VILLE_RECUL de sa profondeur ; la pluie de cendre le rend (ambiance) en proportion de son intensité (villeMaj de
    l'émulateur) */
 #define VILLE_FONDU 1.5f
-static void ville_maj(float dt) {
+#define ZOOM_FONDU 1.2f
+/* (x, z) sur une zone urbaine de la planète (bloc de la grille des rencontres) ; aussi pour les lieux visités du téléport
+   (hud.c) et le pilote automatique (pilote.c) */
+int zone_urbaine(float x, float z) {
     const world_t *w = &E.w;
-    int ville = 0;
-    if (!w->carte && w->zone && w->n > 0) {
-        const int i = (int)floorf(E.sera.x) * w->zone_n / w->n, j = (int)floorf(E.sera.z) * w->zone_n / w->n;
-        if (i >= 0 && j >= 0 && i < w->zone_n && j < w->zone_n) { const int t = w->zone[j * w->zone_n + i]; ville = t == 8 || t == 10 || t == 11; }
-    }
+    const int zn = w->c0.zone_n, n = w->cartes[0].n;   /* la grille de la planète, même depuis une autre carte */
+    if (!w->c0.zone || n <= 0) return 0;
+    const int i = (int)floorf(x) * zn / n, j = (int)floorf(z) * zn / n;
+    if (i < 0 || j < 0 || i >= zn || j >= zn) return 0;
+    const int t = w->c0.zone[j * zn + i];
+    return t == 8 || t == 10 || t == 11;
+}
+static void ville_maj(float dt) {
+    const int ville = !E.w.carte && zone_urbaine(E.sera.x, E.sera.z);
     const float cible = ville ? fmaxf(0, 1 - 2 * cendre_dehors()) : 0;
     E.ville_v += (cible - E.ville_v) * fminf(1, dt / VILLE_FONDU * 3);
+    /* Zoom fixe selon le lieu (01/11/2026, demande de l'utilisateur) : ZOOM_VILLE (300 %) en ville, ZOOM_DEHORS (300 % depuis le 07/11/2026, 200 % avant)
+       ailleurs, ZOOM_INTERIEUR (350 %) dans un intérieur, quel que soit le zoom du paquet ; au changement de lieu, le zoom
+       y va en ZOOM_FONDU s, sans annonce (hud.c), et il y revient après tout autre changement (sauvegarde chargée,
+       molette de la page web) : ni pincement ni réglage du menu, sauf avec le code CODE_ZOOM. Pas pendant une caméra de
+       scène, une course ni le vol permanent (villeMaj de l'émulateur) */
+    /* Intérieur (02/11/2026) : ZOOM_INTERIEUR, pris d'un coup au passage de la porte (le fondu le cache) ; code CODE_ZOOM :
+       zoom manuel, le lieu ne l'impose plus */
+    const int lieu = E.in.on ? 3 : ville ? 2 : 1, porte = (lieu == 3) != (E.zoom_lieu == 3) && E.zoom_lieu;
+    if (lieu != E.zoom_lieu) { E.zoom_lieu = lieu; E.zoom_cible = lieu == 3 ? ZOOM_INTERIEUR : ville ? ZOOM_VILLE : ZOOM_DEHORS; }
+    E.zoom_auto = !E.zoom_libre;
+    if (E.zoom_libre) return;
+    if (porte && !MISE.cam_on && !carte_plein()) eng_set_zoom(E.zoom_cible);
+    if (E.zoom != E.zoom_cible && !MISE.cam_on && !CR.on && !vol_permanent() && !carte_plein()) {   /* carte du menu : eng_set_zoom la zoomerait */
+        float z = E.zoom + (E.zoom_cible - E.zoom) * fminf(1, dt * 3 / ZOOM_FONDU);
+        if (fabsf(z - E.zoom_cible) < 0.005f) z = E.zoom_cible;
+        eng_set_zoom(z);
+    }
 }
 /* Passants à l'abri : un flâneur dont le nom est tiré (générique ou métier ; ni meneur ni suiveur d'une patrouille, ni
    starter, ni conducteur en fuite) se met à l'abri si sa graine le place sous ABRI_PART × l'intensité ; il ne disparaît
@@ -1354,18 +1772,21 @@ static void update_npcs(float dt) {
     const float act = 24.0f / E.w.ech, cendre = cendre_dehors();
     for (int k = 0; k < E.nnpc; k++) {
         npc_t *n = &E.npcs[k];
-        if (fabsf(n->x - E.sera.x) > act || fabsf(n->z - E.sera.z) > act) continue;
+        const float ax = fabsf(n->x - E.sera.x), az = fabsf(n->z - E.sera.z);
+        if (!n->place_ok && !E.in.on && ax < 2 * act && az < 2 * act) hors_chaussee(n);   /* pas posé sur la chaussée (avant d'être vu) */
+        if (ax > act || az > act) continue;
         if (cendre > 0 || n->abri) abri_maj(n, cendre);
         if (!npc_present(n)) continue;
         const perso_t *pe = &E.w.persos[n->perso];
         if (pe->flags & PERS_VEHICULE) continue;
+        if (PERS_EST_OBJET(pe->flags)) continue;   /* objet inanimé (épave) : il ne se tourne pas vers Sera, ne bouge pas */
         if (k == E.talk) { n->dir = atan2f(E.sera.x - n->x, E.sera.z - n->z); n->frame = 0; n->walking = 0; n->wait = 2; continue; }
         if (n->chef && n->chef <= E.nnpc) { suivre_chef(n, dt); continue; }
         if (n->fuit) {   /* conducteur éjecté : il court (2,6 m/s à l'échelle) vers son point de fuite, puis redevient passant */
             const float fx = n->tx - n->x, fz = n->tz - n->z, fd = hypotf(fx, fz);
             float sp = 2.6f / E.w.ech * dt;
             if (sp > fd) sp = fd;
-            if (fd < 0.1f || !walkable_for(n->x + fx / fd * sp, n->z + fz / fd * sp, n, 0)) { n->fuit = 0; n->walking = 0; n->hx = n->x; n->hz = n->z; n->wait = 1 + frand() * 2; continue; }
+            if (fd < 0.1f || !walkable_for(n->x + fx / fd * sp, n->z + fz / fd * sp, n, 0)) { n->fuit = 0; n->walking = 0; n->hx = n->x; n->hz = n->z; n->wait = 1 + frand() * 2; n->place_ok = 0; continue; }   /* sa place : hors de la chaussée (hors_chaussee) */
             n->x += fx / fd * sp; n->z += fz / fd * sp; n->dir = atan2f(fx, fz); n->anim += dt;
             if (n->anim > 0.1f) { n->anim = 0; n->frame++; }
             continue;
@@ -1380,7 +1801,8 @@ static void update_npcs(float dt) {
                 else {
                     float a = frand() * 2 * PI_F, r = (0.6f + frand() * 1.6f) / E.w.ech;
                     n->tx = n->hx + cosf(a) * r; n->tz = n->hz + sinf(a) * r; n->walking = 1;
-                    if (flags_at(n->tx, n->tz) & (F_ROAD | F_STREET)) { n->walking = 0; n->wait = 1 + frand() * 2; }   /* pas de flânerie sur la chaussée */
+                    if (chaussee_at(n->x, n->z)) { n->tx = n->hx; n->tz = n->hz; }   /* sur la chaussée : il revient à sa place */
+                    else if (chaussee_at(n->tx, n->tz) || chaussee_at((n->x + n->tx) / 2, (n->z + n->tz) / 2)) { n->walking = 0; n->wait = 1 + frand() * 2; }   /* pas de flânerie sur la chaussée, ni à travers */
                 }
             }
             continue;
@@ -1391,17 +1813,60 @@ static void update_npcs(float dt) {
         float sp = 1.3f / E.w.ech * dt;
         if (sp > d) sp = d;
         float nx = n->x + dx / d * sp, nz = n->z + dz / d * sp;
-        if (walkable_for(nx, nz, n, 0)) {
+        /* sur la chaussée (une traversée), il finit de traverser même gêné par quelqu'un : pas d'arrêt au milieu */
+        if (walkable_for(nx, nz, n, 0) || (chaussee_at(n->x, n->z) && sol_libre(nx, nz, 0))) {
             n->x = nx; n->z = nz; n->dir = atan2f(dx, dz); n->anim += dt;
             if (n->anim > 0.16f) { n->anim = 0; n->frame++; }
         } else { n->walking = 0; n->wait = promeneur(n) ? 0.3f + frand() : 1 + frand() * 2; }
     }
 }
 
+/* Éclairs (01/11/2026, demande de l'utilisateur) : sous une forte pluie (au moins ECLAIR_PLUIE d'intensité), dehors,
+   sur la planète, hors combat et hors neige, un éclair toutes les ECLAIR_MIN à ECLAIR_MIN + ECLAIR_ECART secondes :
+   voile de lumière blanche dessiné par hud.c (draw_eclair, d'après eclair_age), tonnerre (le son de la foudre, grave)
+   de ECLAIR_SON à 4 × ECLAIR_SON s après (eclairMaj de l'émulateur) */
+#define ECLAIR_PLUIE 0.45f
+#define ECLAIR_MIN 7.0f
+#define ECLAIR_ECART 18.0f
+#define ECLAIR_SON 0.4f
+static float eclair_t = -1, eclair_prochain = ECLAIR_MIN, tonnerre_t = -1;
+float eclair_age(void) { return eclair_t; }
+static void eclair_maj(float dt) {
+    if (eclair_t >= 0 && (eclair_t += dt) > 1) eclair_t = -1;
+    if (tonnerre_t >= 0 && (tonnerre_t -= dt) < 0) son_jouer(SON_FOUDRE, 0.55f, 0.45f);
+    if (E.rain < ECLAIR_PLUIE || E.w.ciel || E.w.carte || E.in.on || BT.on || neige_ici()) return;
+    if ((eclair_prochain -= dt) > 0) return;
+    eclair_prochain = ECLAIR_MIN + frand() * ECLAIR_ECART;
+    eclair_t = 0;
+    tonnerre_t = ECLAIR_SON * (1 + frand() * 3);
+}
+
+/* Boîte de nuit (E.in.club, 03/11/2026, demande de l'utilisateur : « des effets de lumière, comme les éclairs ») : un
+   éclair de couleur toutes les CLUB_MIN à CLUB_MIN + CLUB_ECART secondes, parfois une salve de deux ou trois à
+   CLUB_SALVE d'écart, chacun d'une autre couleur que le précédent ; dessinés par hud.c (draw_club, d'après club_age) ;
+   clubMaj de l'émulateur */
+#define CLUB_MIN 0.35f
+#define CLUB_ECART 1.1f
+#define CLUB_SALVE 0.12f
+static float club_t = -1, club_prochain = CLUB_MIN;
+static int club_salve, club_c;
+float club_age(int *couleur) { *couleur = club_c; return club_t; }
+static void club_maj(float dt) {
+    if (club_t >= 0 && (club_t += dt) > 0.3f) club_t = -1;
+    if (!E.in.on || !E.in.club || BT.on) { club_t = -1; return; }
+    if ((club_prochain -= dt) > 0) return;
+    club_t = 0; club_c = (club_c + 1 + (int)(frand() * 3)) % 4;
+    if (club_salve > 0) club_salve--;
+    else club_salve = frand() < 0.35f ? 1 + (int)(frand() * 2) : 0;
+    club_prochain = club_salve > 0 ? CLUB_SALVE : CLUB_MIN + frand() * CLUB_ECART;
+}
+
 /* Météo : en automatique, des phases de 40 à 120 s, pluvieuses avec la probabilité rain_freq ; l'intensité suit la
    cible en RAIN_FADE secondes (la pluie s'installe et s'arrête en douceur) */
 #define RAIN_FADE 6.0f
 static void weather_update(float dt) {
+    eclair_maj(dt);
+    club_maj(dt);
     const world_t *w = &E.w;
     if (E.weather == 0) {
         E.phase_left -= dt;
@@ -1431,7 +1896,7 @@ static int masque_filtre(void) {
 }
 static uint8_t cendre_dit, cendre_averse;
 static void cendre_update(float dt) {
-    if (E.w.ciel || E.rain < CENDRE_SEUIL) { cendre_averse = 0; E.cendre_t = 0; return; }   /* temps sec, sous terre, ailleurs */
+    if (E.w.ciel || E.rain < CENDRE_SEUIL || neige_ici()) { cendre_averse = 0; E.cendre_t = 0; return; }   /* temps sec, sous terre, ailleurs, neige */
     if (E.in.on || E.ui_block || script_running() || CR.on) return;   /* à l'abri, ou le temps de la cendre arrêté */
     if (E.ride >= 0 && son_moteur(E.npcs[E.ride].perso) != SON_MOTEUR_MOTO) return;   /* habitacle fermé */
     if (masque_filtre()) {
@@ -1443,7 +1908,7 @@ static void cendre_update(float dt) {
     if (E.cendre_t < CENDRE_PAS) return;
     E.cendre_t -= CENDRE_PAS;
     int membres = 0, bas = 0, touche = 0;
-    for (int m = 0; m < 4; m++) {
+    for (int m = 0; m < NMEMB; m++) {
         member_t *p = &PARTY[m];
         if (!in_team(m) || p->max <= 0) continue;
         const int plancher = p->max * CENDRE_PLANCHER > 1 ? (int)(p->max * CENDRE_PLANCHER) : 1;
@@ -1477,25 +1942,43 @@ static int enc_ok(const enemy_t *en, int histoire, int membres) {
     if ((en->sorts || en->hp > ELITE_PV * (en->lvl + 6)) && membres < ELITE_EQUIPE) return 0;
     return 1;
 }
+/* Un terrain qui a des ennemis n'est jamais vide (06/11/2026, retour de jeu : les fiches les plus faibles passées au niveau 8, plus une seule
+   rencontre tant que le niveau de l'histoire restait sous 6, tout le prologue) : personne sous le plafond, il monte jusqu'à l'ennemi le moins
+   fort du terrain, ramené au niveau du combat comme les autres (encounter_level ; encHistoire de l'émulateur, table de monde.js) */
+static int enc_histoire(int t, int histoire, int membres) {
+    const world_t *w = &E.w;
+    if (histoire <= 0) return histoire;
+    int bas = -1;
+    for (int k = 0; k < w->nenemies; k++)
+        if ((w->enemies[k].zones >> t) & 1 && enc_ok(&w->enemies[k], 0, membres) && (bas < 0 || w->enemies[k].lvl < bas)) bas = w->enemies[k].lvl;
+    return bas - RENC_ECART > histoire ? bas - RENC_ECART : histoire;
+}
 /* Poids d'un ennemi au tirage : sous la pluie de cendre, les Glaneurs sortent la ramasser (poidsRenc de l'émulateur) */
 static float enc_poids(const enemy_t *en, float cendre) {
     const char *nom = en->perso >= 0 && en->perso < E.w.npersos ? E.w.persos[en->perso].nom : NULL;
     return en->poids * (cendre > 0 && nom && strstr(nom, "GLANEUR") ? 1 + CENDRE_GLANEUR * cendre : 1);
 }
-int encounter_pick(void) {
+/* Terrain des rencontres sous (x, z) (rang de Continent.LAND), -1 : aucun. Bloc de la zone à l'échelle de la carte : 2 × 2
+   cases d'ordinaire, 64 × 64 sur le système solaire (zoneOctets de l'émulateur) */
+int encounter_zone(float x, float z) {
     const world_t *w = &E.w;
     if (!w->zone || !w->nenemies) return -1;
-    /* Bloc de la zone à l'échelle de la carte : 2 × 2 cases d'ordinaire, 64 × 64 sur le système solaire (zoneOctets de
-       l'émulateur) */
-    const int i = (int)floorf(E.sera.x) * w->zone_n / (w->n > 0 ? w->n : 1), j = (int)floorf(E.sera.z) * w->zone_n / (w->n > 0 ? w->n : 1);
+    const int i = (int)floorf(x) * w->zone_n / (w->n > 0 ? w->n : 1), j = (int)floorf(z) * w->zone_n / (w->n > 0 ? w->n : 1);
     if (i < 0 || j < 0 || i >= w->zone_n || j >= w->zone_n) return -1;
     const int t = w->zone[j * w->zone_n + i];
-    if (t >= 32) return -1;   /* 255 : terrain inconnu */
-    const int histoire = script_niveau(E.sera.x, E.sera.z);
+    if (t == LAND_MONTAGNE && w->ciel == 1) return LAND_CAVERNE;   /* sous terre, la roche des parois (praticable) : la caverne (08/11/2026 ; sinon les oiseaux des montagnes de la planète) */
+    return t >= 32 ? -1 : t;   /* 255 : terrain inconnu */
+}
+static int membres_equipe(void) { return equipe_nombre(); }
+int encounter_pick(void) { return encounter_pick_at(E.sera.x, E.sera.z); }
+int encounter_pick_at(float x, float z) {
+    const world_t *w = &E.w;
+    const int t = encounter_zone(x, z);
+    if (t < 0) return -1;
+    int membres = membres_equipe(), last = -1;
+    const int histoire = enc_histoire(t, script_niveau(x, z), membres);
     const float cendre = cendre_dehors();
-    int membres = 0, last = -1;
     float total = 0;
-    for (int m = 0; m < 4; m++) membres += in_team(m);
     for (int k = 0; k < w->nenemies; k++) if ((w->enemies[k].zones >> t) & 1 && enc_ok(&w->enemies[k], histoire, membres)) total += enc_poids(&w->enemies[k], cendre);
     if (total <= 0) return -1;
     float r = erand() * total;
@@ -1506,6 +1989,53 @@ int encounter_pick(void) {
     }
     return last;
 }
+/* Groupes de rencontre (encounterTaille, encounterGroupe de l'émulateur, à garder identiques). Taille : seul tant que le
+   niveau de l'histoire (sinon celui de l'équipe) est sous GROUPE_NIV, avec Sera seule, ou pour une élite (sorts, PV d'un
+   boss de zone) ; ensuite un groupe de deux avec la chance (niveau - GROUPE_NIV) / GROUPE_PENTE (GROUPE_P2 au plus), et
+   de trois (trois membres au moins) pour une part de ces groupes, (niveau - GROUPE_NIV3) / GROUPE_PENTE3 (GROUPE_P3 au
+   plus) : les groupes viennent plus souvent à mesure que l'histoire avance. La fiche peut borner la taille (ENNE : 1 seul).
+   Compagnons : le même ennemi que le chef (GROUPE_MEME), sinon un autre de la zone, de même nature (machine ou vivant),
+   possible ici et pas une élite, au poids */
+#define GROUPE_NIV 8
+#define GROUPE_PENTE 40.0f
+#define GROUPE_P2 0.5f
+#define GROUPE_NIV3 20
+#define GROUPE_PENTE3 50.0f
+#define GROUPE_P3 0.5f
+#define GROUPE_MEME 0.6f
+static int enc_elite(const enemy_t *en) { return en->sorts || en->hp > ELITE_PV * (en->lvl + 6); }
+int encounter_taille(int k, int histoire, int membres) {
+    const enemy_t *en = &E.w.enemies[k];
+    const int h = histoire > 0 ? histoire : E.level;
+    if (h < GROUPE_NIV || membres < 2 || enc_elite(en) || en->groupe == 1) return 1;
+    int n = erand() < fminf(GROUPE_P2, (h - GROUPE_NIV) / GROUPE_PENTE) ? 2 : 1;
+    if (n == 2 && membres >= 3 && erand() < fminf(GROUPE_P3, (h - GROUPE_NIV3) / GROUPE_PENTE3)) n = 3;
+    return en->groupe > 1 && n > en->groupe ? en->groupe : n;
+}
+int encounter_groupe(int k, float x, float z, int n, int *out) {
+    const world_t *w = &E.w;
+    const int t = encounter_zone(x, z), membres = membres_equipe(), histoire = t >= 0 ? enc_histoire(t, script_niveau(x, z), membres) : script_niveau(x, z);
+    const float cendre = cendre_dehors();
+    if (n > BT_EMAX) n = BT_EMAX;
+    if (n < 1) n = 1;
+    out[0] = k;
+    for (int i = 1; i < n; i++) {
+        int c = k;
+        if (t >= 0 && erand() >= GROUPE_MEME) {
+            float tot = 0;
+#define COMPAGNON(q) ((q) != k && ((w->enemies[q].zones >> t) & 1) && enc_ok(&w->enemies[q], histoire, membres) && !enc_elite(&w->enemies[q]) \
+                      && w->enemies[q].coeur == w->enemies[k].coeur && w->enemies[q].groupe != 1)
+            for (int q = 0; q < w->nenemies; q++) if (COMPAGNON(q)) tot += enc_poids(&w->enemies[q], cendre);
+            float r = erand() * tot;
+            for (int q = 0; tot > 0 && q < w->nenemies; q++)
+                if (COMPAGNON(q)) { c = q; r -= enc_poids(&w->enemies[q], cendre); if (r <= 0) break; }
+#undef COMPAGNON
+        }
+        out[i] = c;
+    }
+    return n;
+}
+int sol_marchable(float x, float z) { return sol_libre(x, z, 0); }
 
 /* Une rencontre en moyenne tous les RENC unités de marche (loi exponentielle, distance × ech comme l'émulateur) ;
    jamais en véhicule, ni sur un terrain sans ennemi (la distance est alors retirée au pas suivant). Son niveau suit
@@ -1519,19 +2049,31 @@ int encounter_level(void) {
 }
 /* Réglage RENCONTRES du menu SYSTÈME : distance moyenne du paquet × RENC_FOIS (0 : aucune) ; la distance tirée vaut au moins
    la moitié de la moyenne (un peu de liberté après chaque combat) ; sous la pluie de cendre, les machines sont de sortie :
-   la marche compte 1 + CENDRE_RENC × l'intensité fois plus ; encounterStep de l'émulateur */
-static const float RENC_FOIS[5] = { 3, 6, 12, 0, 1.5f };
+   la marche compte 1 + CENDRE_RENC × l'intensité fois plus ; encounterStep de l'émulateur. Deux fois plus de rencontres
+   depuis le 03/11/2026 (demande de l'utilisateur, pour rééquilibrer l'aventure ; avant : 3, 6, 12, 0, 1,5), et encore le
+   04/11/2026 (demande de l'utilisateur : le réglage le plus fort, 0,75, devient NORMALES, celui par défaut, et FRÉQUENTES un
+   seuil au-dessus ; mêmes rangs, les sauvegardes gardent leur nom de réglage ; avant : 1,5, 3, 6, 0, 0,75) */
+/* 06/11/2026, demande de l'utilisateur (on marche beaucoup plus depuis « Le prix du passage » : trop de combats) : NORMALES prend la valeur de RARES ;
+   FRÉQUENTES, celle d'avant */
+static const float RENC_FOIS[5] = { 1.5f, 3, 6, 0, 0.75f };
 static float enc_left;
 static void encounter_step(float dist) {
     const world_t *w = &E.w;
     const float pas = w->renc * RENC_FOIS[E.renc_mode % 5];
     if (pas <= 0 || !w->zone || (E.ride >= 0 && !vol_permanent()) || BT.on || E.ui_block || script_running()) return;   /* en véhicule, jamais, sauf en vol permanent */
+    if (zone_sure(E.sera.x, E.sera.z)) return;   /* zone sûre (battle.c) : le chemin n'y compte pas */
     if (enc_left <= 0) enc_left = pas * (0.5f - 0.5f * logf(1 - erand()));
     enc_left -= dist * (1 + CENDRE_RENC * cendre_dehors());
     if (enc_left > 0) return;
     enc_left = 0;
+    /* À pied : les ennemis se voient (06/11/2026, demande de l'utilisateur) : un groupe paraît devant elle, hors de l'écran, et rôde (patrouille_poser de
+       battle.c). En vol permanent : pas de sprites dans le vide, le combat tout de suite, comme avant */
+    if (!vol_permanent()) { if (patrouille_poser(0) < 0) enc_left = PATR_REESSAI; return; }   /* pas de place devant elle : un peu plus loin (08/11/2026) */
     const int k = encounter_pick();
-    if (k >= 0) battle_start(k, encounter_level(), 0);
+    if (k < 0) return;
+    int g[BT_EMAX];   /* le chef et ses compagnons (groupe de rencontre) */
+    const int n = encounter_groupe(k, E.sera.x, E.sera.z, encounter_taille(k, script_niveau(E.sera.x, E.sera.z), membres_equipe()), g);
+    battle_start_groupe(g, n, encounter_level(), 0, GROUPE_PARTS, NULL);
 }
 
 /* Passages (PASS) : Sera entre dans la zone d'un passage de sa carte (à pied, hors combat, script et intérieur), condition
@@ -1601,13 +2143,127 @@ static void sons_update(void) {
 }
 
 /* ---------- Mise en scène du scénario (mise de l'émulateur) ---------- */
-mise_t MISE;
+mise_t MISE ENG_FROID;
 static float ecart_angle(float a) { while (a > PI_F) a -= 2 * PI_F; while (a < -PI_F) a += 2 * PI_F; return a; }
 int acteur_de(int perso) {
     for (int k = 0; k < ACT_MAX; k++) if (MISE.act[k].on && !MISE.act[k].chasse && MISE.act[k].perso == perso) return k;
     return -1;
 }
 /* Acteur du personnage perso en (x, z) : le sien s'il est déjà là, sinon une place libre ; -1 sans planche ou sans place */
+static int cam_dedans(float x, float z, float yaw, float zoom, float h);
+/* Place libre pour un personnage de scène (perso : le sien, acteur : sa place dans MISE.act, -1 : Sera) : ni obstacle, ni un autre personnage de la scène, ni un passant ; le monde
+   pas encore chargé : on ne sait pas, libre. sceneLibre de l'émulateur */
+static int scene_libre_r(float x, float z, int perso, int acteur, float R) {
+    if (E.in.on) return int_libre(x, z);
+    if (x < 2 || z < 2 || x > E.w.n - 2 || z > E.w.n - 2 || !chunk_of_cell((int)floorf(x), (int)floorf(z))) return 1;
+    if (!sol_libre(x, z, 0)) return 0;
+    if (acteur >= 0 && E.ride < 0 && hypotf(x - E.sera.x, z - E.sera.z) < R) return 0;
+    for (int k = 0; k < ACT_MAX; k++) {
+        const acteur_t *a = &MISE.act[k];
+        if (k == acteur || !a->on || a->chasse) continue;
+        if (hypotf(x - a->x, z - a->z) < R || (a->walking && hypotf(x - a->tx, z - a->tz) < R)) return 0;   /* (ni là où il va) */
+    }
+    for (int k = 0; k < E.nnpc; k++) {
+        const npc_t *n = &E.npcs[k];
+        if (n->perso == perso || fabsf(n->x - x) >= R || fabsf(n->z - z) >= R || !npc_present(n)) continue;
+        if (hypotf(n->x - x, n->z - z) < R) return 0;
+    }
+    return 1;
+}
+static int scene_libre(float x, float z, int perso, int acteur) { return scene_libre_r(x, z, perso, acteur, SCENE_R); }
+/* La place libre la plus proche de (x, z), à rmax cases au plus ; 0 : aucune, rien ne change */
+static int scene_place(float *x, float *z, float rmax, int perso, int acteur) {
+    for (float r = 0; r <= rmax; r += 0.5f)
+        for (int a = 0; a < (r > 0 ? 16 : 1); a++) {
+            const float qx = *x + cosf(a * PI_F / 8) * r, qz = *z + sinf(a * PI_F / 8) * r;
+            if (scene_libre_r(qx, qz, perso, acteur, SCENE_POSE_R)) { *x = qx; *z = qz; return 1; }
+        }
+    return 0;
+}
+/* Un pas vers (tx, tz) en contournant ce qui gêne : tout droit, sinon de plus en plus de biais, du côté déjà pris d'abord ; 1 : arrivé, ou trop long (lim), il s'arrête où il est.
+   pasEvite de l'émulateur */
+static int pas_evite(float *x, float *z, float *dir, float tx, float tz, float sp, int perso, int acteur, int *cote, float *t, float lim, float dt) {
+    static const float BIAIS[4] = { 0, 0.6f, 1.2f, 1.8f };
+    const float dx = tx - *x, dz = tz - *z, d = hypotf(dx, dz);
+    if (d <= sp || d < 0.02f) { *x = tx; *z = tz; return 1; }
+    if ((*t += dt) > lim) return 1;
+    const float base = atan2f(dx, dz);
+    if (!*cote) *cote = 1;
+    for (int i = 0; i < 4; i++) for (int s = 0; s < (i ? 2 : 1); s++) {
+        const int c = s ? -*cote : *cote;
+        const float a = base + c * BIAIS[i], nx = *x + sinf(a) * sp, nz = *z + cosf(a) * sp;
+        if (!scene_libre(nx, nz, perso, acteur)) continue;
+        *x = nx; *z = nz; *dir = a;
+        if (i) *cote = c;
+        return 0;
+    }
+    *dir = base;
+    return 0;
+}
+/* Temps au bout duquel une marche renonce : le double du trajet tout droit, et une seconde */
+static float marche_limite(float x, float z, float tx, float tz, float v) { return hypotf(tx - x, tz - z) / (MARCHE_MS * fmaxf(0.1f, v) / E.w.ech) * 2 + 1; }
+void mise_marcher_acteur(int k, float x, float z, float v) {
+    acteur_t *a = &MISE.act[k];
+    if (!scene_place(&x, &z, 4, a->perso, k)) { x = a->x; z = a->z; }
+    a->tx = x; a->tz = z; a->v = v; a->walking = 1; a->court = v > 1.5f; a->marche_t = 0; a->marche_lim = marche_limite(a->x, a->z, x, z, v);
+    if (!chunk_of_cell((int)floorf(x), (int)floorf(z))) a->place_att = 1;
+}
+void mise_marcher_sera(float x, float z, float v) {
+    if (!scene_place(&x, &z, 4, -1, -1)) { x = E.sera.x; z = E.sera.z; }
+    MISE.sera_on = 1; MISE.sera_tx = x; MISE.sera_tz = z; MISE.sera_v = v; MISE.sera_mt = 0; MISE.sera_cote = 1;
+    MISE.sera_lim = marche_limite(E.sera.x, E.sera.z, x, z, v);
+}
+/* Celui qui dit la réplique (Sera : celui à qui elle parle, l'acteur le plus proche, sinon son interlocuteur), à PARLE_R cases d'elle au plus ; npc : son rang s'il n'est pas un acteur */
+#define SCENE_PARLE_R 20.0f
+static int scene_parle_pos(const char *who, float *x, float *z, int *npc) {
+    *npc = -1;
+    if (!strcmp(who, E.w.sc_player)) {
+        float bd = SCENE_PARLE_R; int ok = 0;
+        for (int k = 0; k < ACT_MAX; k++) if (MISE.act[k].on && !MISE.act[k].chasse && MISE.act[k].carte == E.w.carte) { const float d = hypotf(MISE.act[k].x - E.sera.x, MISE.act[k].z - E.sera.z); if (d < bd) { bd = d; *x = MISE.act[k].x; *z = MISE.act[k].z; ok = 1; } }
+        if (E.talk >= 0 && E.talk < E.nnpc) { const npc_t *n = &E.npcs[E.talk]; const float d = hypotf(n->x - E.sera.x, n->z - E.sera.z); if (d < bd) { *x = n->x; *z = n->z; *npc = E.talk; ok = 1; } }
+        return ok;
+    }
+    for (int k = 0; k < ACT_MAX; k++) if (MISE.act[k].on && !MISE.act[k].chasse && MISE.act[k].carte == E.w.carte && MISE.act[k].perso < E.w.npersos && !strcmp(E.w.persos[MISE.act[k].perso].nom, who)) { *x = MISE.act[k].x; *z = MISE.act[k].z; return hypotf(*x - E.sera.x, *z - E.sera.z) < SCENE_PARLE_R; }
+    if (E.talk >= 0 && E.talk < E.nnpc && !strcmp(E.w.persos[E.npcs[E.talk].perso].nom, who)) { *x = E.npcs[E.talk].x; *z = E.npcs[E.talk].z; *npc = E.talk; return 1; }
+    float bd = SCENE_PARLE_R; int ok = 0;
+    for (int q = 0; q < E.nnpc; q++) {
+        const npc_t *n = &E.npcs[q];
+        const float d = hypotf(n->x - E.sera.x, n->z - E.sera.z);
+        if (d < bd && npc_present(n) && n->perso < E.w.npersos && !strcmp(E.w.persos[n->perso].nom, who)) { bd = d; *x = n->x; *z = n->z; *npc = q; ok = 1; }
+    }
+    return ok;
+}
+/* Personnes trop loin pour se parler (146 scènes de l'audit du 07/11/2026) : Sera va vers celui qui parle. Une voix (personne dans les parages) ne fait rien. sceneApproche de l'émulateur */
+int scene_approche(const char *who) {
+    float x, z; int npc;
+    if (E.ride >= 0 || CR.on || BT.on || E.in.on || E.nage || MISE.sera_on || MISE.fondu >= 0.9f || !scene_parle_pos(who, &x, &z, &npc)) return 0;
+    const float d = hypotf(x - E.sera.x, z - E.sera.z);
+    if (d <= DLG_LOIN || (!strcmp(who, E.w.sc_player) && d > DLG_SERA_LOIN)) return 0;
+    mise_marcher_sera(x + (E.sera.x - x) / d * DLG_PROCHE, z + (E.sera.z - z) / d * DLG_PROCHE, d > DLG_COURT ? 3 : 1.5f);
+    return 1;
+}
+/* À chaque réplique (780 répliques de l'audit où Sera tournait le dos) : Sera se tourne vers celui qui parle, sinon vers celui à qui elle parle ; celui qui parle vers elle ; les autres acteurs vers
+   celui qui parle ; une caméra qui suit Sera et serait dans un bâtiment en sort. sceneRegards de l'émulateur */
+void scene_cam_sortir(void) {
+    if (!MISE.cam_on && !E.in.on && !BT.on && !CR.on && E.ride < 0 && cam_dedans(E.sera.x, E.sera.z, E.yaw, E.zoom, 1.0f / E.w.ech)) mise_camera(0, E.sera.x, E.sera.z, E.yaw, 0, FIN_CAM);
+}
+void scene_regards(const char *who) {
+    float x = 0, z = 0; int npc = -1;
+    const int elle = !strcmp(who, E.w.sc_player);
+    int ok = scene_parle_pos(who, &x, &z, &npc);
+    if (!ok && scene_parle_pos(E.w.sc_player, &x, &z, &npc)) { ok = 1; who = E.w.sc_player; }   /* un membre de l'équipe, sans sprite, parle : Sera regarde qui est là */
+    const float dse = hypotf(x - E.sera.x, z - E.sera.z);
+    if (ok && dse > 0.05f && E.ride < 0 && !MISE.sera_on && !E.nage && !CR.on && E.sera.state != 3) E.sera.dir = atan2f(x - E.sera.x, z - E.sera.z);
+    for (int k = 0; k < ACT_MAX; k++) {
+        acteur_t *a = &MISE.act[k];
+        if (!a->on || a->chasse || a->walking || a->carte != E.w.carte) continue;
+        const int parle = !elle && a->perso < E.w.npersos && !strcmp(E.w.persos[a->perso].nom, who);
+        const float tx = elle || parle || !ok ? E.sera.x : x, tz = elle || parle || !ok ? E.sera.z : z;
+        if (hypotf(tx - a->x, tz - a->z) > 0.05f) a->dir = atan2f(tx - a->x, tz - a->z);
+    }
+    if (!elle && npc >= 0 && !PERS_EST_OBJET(E.w.persos[E.npcs[npc].perso].flags) && !(E.w.persos[E.npcs[npc].perso].flags & PERS_VEHICULE) && dse > 0.05f) E.npcs[npc].dir = atan2f(E.sera.x - x, E.sera.z - z);
+    scene_cam_sortir();
+}
 int acteur_poser(int perso, float x, float z, float dir) {
     if (perso < 0 || perso >= E.w.npersos || E.w.persos[perso].sheet < 0) return -1;
     int s = acteur_de(perso);
@@ -1615,7 +2271,9 @@ int acteur_poser(int perso, float x, float z, float dir) {
     if (s < 0) return -1;
     acteur_t *a = &MISE.act[s];
     memset(a, 0, sizeof *a);
-    a->on = 1; a->perso = (uint8_t)perso; a->x = a->tx = x; a->z = a->tz = z; a->dir = dir; a->v = 1; a->carte = (uint8_t)E.w.carte;
+    a->on = 1; a->perso = (uint8_t)perso; a->dir = dir; a->v = 1; a->carte = (uint8_t)E.w.carte; a->cote = 1;
+    a->place_att = !chunk_of_cell((int)floorf(x), (int)floorf(z));
+    { float px = x, pz = z; scene_place(&px, &pz, 4, perso, s); a->x = a->tx = px; a->z = a->tz = pz; }   /* jamais dans un obstacle ni dans quelqu'un */
     /* palette de l'exemplaire posé qu'il remplace (le plus proche à moins de PAL_VUE cases) : pas de changement de couleurs
        quand l'acteur prend sa place (acteurPoser de l'émulateur) */
     float bd = PAL_VUE;
@@ -1633,18 +2291,83 @@ int mise_marche(int qui) {
     return 0;
 }
 int mise_bloque(void) { return MISE.cam_on || MISE.sera_on || police_bloque(); }   /* arrestation (police.c) aussi */
+/* Lacet de la caméra au multiple de 45° le plus proche */
+float cam_pas(float yaw) { const float p = PI_F / 4; return roundf(yaw / p) * p; }
+/* Le point est-il dans la boîte d'un bâtiment (d'après ses polygones) ? Un bâtiment est rangé dans le chunk de son centre : les 3 × 3 autour du point. pointDansBat de l'émulateur */
+int point_dans_bat(float x, float y, float z) {
+    const int ci = (int)floorf(x), cj = (int)floorf(z);
+    {   /* pas de mur ni de toit ici (une cour, un renfoncement, la boîte d'un bâtiment tourné) : non */
+        const chunk_t *c0 = chunk_of_cell(ci, cj);
+        int sol = 0;
+        if (c0) for (uint32_t k = 0; k < c0->nsolid && !sol; k++) { const float *r = c0->solids + k * 4; sol = x > r[0] && x < r[2] && z > r[1] && z < r[3]; }
+        if (!sol) return 0;
+    }
+    for (int dj = -1; dj <= 1; dj++) for (int di = -1; di <= 1; di++) {
+        const int i = ci + di * CS, j = cj + dj * CS;
+        if (i < 0 || j < 0 || i >= E.w.n || j >= E.w.n) continue;
+        const chunk_t *c = chunk_of_cell(i, j);
+        if (!c) continue;
+        for (uint32_t b = 0; b < c->nbld; b++) {
+            const pak_building_t *pb = &c->bld[b];
+            if (hypotf(x - pb->cx, z - pb->cz) > pb->r + 1) continue;
+            float x0 = 1e9f, x1 = -1e9f, z0 = 1e9f, z1 = -1e9f, y1 = -1e9f;
+            for (uint32_t m = 0; m < pb->count; m++) {
+                const pak_poly_t *pp = chunk_poly(c, pb->first + m);
+                for (int v = 0; v < pp->nv; v++) {
+                    if (pp->v[v].x < x0) x0 = pp->v[v].x;
+                    if (pp->v[v].x > x1) x1 = pp->v[v].x;
+                    if (pp->v[v].z < z0) z0 = pp->v[v].z;
+                    if (pp->v[v].z > z1) z1 = pp->v[v].z;
+                    if (pp->v[v].y > y1) y1 = pp->v[v].y;
+                }
+            }
+            if (x > x0 && x < x1 && z > z0 && z < z1 && y < y1) return 1;
+        }
+    }
+    return 0;
+}
+/* Caméra de scène qui visant (x, z) au lacet et au zoom donnés serait dans un bâtiment (même calcul que setup_camera) */
+static int cam_dedans(float x, float z, float yaw, float zoom, float h) {
+    const float dist = 12.5f / E.w.ech / zoom, cp = cosf(E.pitch), sp = sinf(E.pitch);
+    return point_dans_bat(x - sinf(yaw) * cp * dist, ground_y(x, z) + h + sp * dist, z - cosf(yaw) * cp * dist);
+}
+/* Plan qui tomberait dans un bâtiment : un peu plus près, sinon un autre angle, le plus proche possible de celui demandé, sinon plus près encore (camHorsBat de l'émulateur) */
+static void cam_hors_bat(void) {
+    float *b = MISE.cam_b;
+    if (E.in.on || !cam_dedans(b[0], b[1], b[2], b[3], b[4])) return;
+    for (float z = b[3] * 1.25f; z <= b[3] * 1.6f && z <= ZOOM_MAX; z *= 1.25f) if (!cam_dedans(b[0], b[1], b[2], z, b[4])) { b[3] = z; return; }
+    for (int i = 1; i <= 4; i++) for (int s = -1; s <= 1; s += 2) {
+        const float y = b[2] + s * i * PI_F / 4;
+        if (!cam_dedans(b[0], b[1], y, b[3], b[4])) { b[2] = MISE.cam_a[2] + ecart_angle(y - MISE.cam_a[2]); return; }
+    }
+    for (float z = b[3] * 1.25f; z <= ZOOM_MAX; z *= 1.25f) if (!cam_dedans(b[0], b[1], b[2], z, b[4])) { b[3] = z; return; }
+}
 /* Caméra de script : de la caméra du moment (celle qui suit Sera, ou la caméra de script en cours) vers un point, un lacet
    (radians ; < -9 : celui du moment) et un zoom (0 : celui du moment) ; retour : vers Sera, avec le lacet et le zoom d'avant
-   la première caméra de script, puis la caméra normale reprend */
+   la première caméra de script, puis la caméra normale reprend. Point visé à une case du sol (1 / ech, comme la caméra du
+   jeu) ; « hauteur » de l'instruction (05/11/2026) : MISE.cam_b[4], posé par le script après cet appel */
 void mise_camera(int retour, float x, float z, float lacet, float zoom, float d) {
     if (retour && !MISE.cam_on) return;
-    const float cur[4] = { MISE.cam_on ? MISE.cam[0] : E.sera.x, MISE.cam_on ? MISE.cam[1] : E.sera.z, MISE.cam_on ? MISE.cam[2] : E.yaw, MISE.cam_on ? MISE.cam[3] : E.zoom };
+    const float cur[5] = { MISE.cam_on ? MISE.cam[0] : E.sera.x, MISE.cam_on ? MISE.cam[1] : E.sera.z, MISE.cam_on ? MISE.cam[2] : E.yaw, MISE.cam_on ? MISE.cam[3] : E.zoom,
+                           MISE.cam_on ? MISE.cam[4] : 1.0f / E.w.ech };
     if (!MISE.cam_on) { MISE.yaw0 = E.yaw; MISE.zoom0 = E.zoom; }
-    const float yb = retour ? MISE.yaw0 : lacet < -9 ? cur[2] : lacet, zb = retour ? MISE.zoom0 : zoom > 0 ? zoom : cur[3];
-    for (int i = 0; i < 4; i++) MISE.cam_a[i] = MISE.cam[i] = cur[i];
-    MISE.cam_b[0] = retour ? E.sera.x : x; MISE.cam_b[1] = retour ? E.sera.z : z;
+    /* lacet au pas de 45° le plus proche (cam_pas : les 8 directions des planches tombent juste) */
+    const float yb = cam_pas(retour ? MISE.yaw0 : lacet < -9 ? cur[2] : lacet), zb = retour ? MISE.zoom0 : zoom > 0 ? zoom * SCENE_ZOOM : cur[3];
+    for (int i = 0; i < 5; i++) MISE.cam_a[i] = MISE.cam[i] = cur[i];
+    MISE.cam_b[0] = retour ? E.sera.x : x; MISE.cam_b[1] = retour ? E.sera.z : z; MISE.cam_b[4] = 1.0f / E.w.ech;
     MISE.cam_b[2] = cur[2] + ecart_angle(yb - cur[2]);   /* par le plus court chemin */
     MISE.cam_b[3] = zb < E.w.zoom_min ? E.w.zoom_min : zb > ZOOM_MAX ? ZOOM_MAX : zb;
+    if (!retour) cam_hors_bat();
+    /* Vitesse bornée : un trajet ou un demi-tour trop grand passe par le noir, le monde se charge pendant ce temps ; déjà au noir (fondu du script) : tout de suite */
+    const float dist = hypotf(MISE.cam_b[0] - cur[0], MISE.cam_b[1] - cur[1]), dy = fabsf(MISE.cam_b[2] - cur[2]);
+    MISE.coupe = 0; MISE.cam_auto = 0;
+    if (MISE.fondu >= 0.9f) { d = 0.01f; if (!E.in.on && !BT.on) world_stream(MISE.cam_b[0], MISE.cam_b[1], 1); }
+    else if (dist > (retour ? CAM_COUPE_RETOUR : CAM_COUPE) || dy > CAM_COUPE_A) { MISE.coupe = 1; MISE.coupe_f = MISE.fondu; d = 2 * COUPE_T; }
+    else {
+        const int bouge = dist > 0.05f || dy > 0.02f || fabsf(MISE.cam_b[3] - cur[3]) > 0.02f;
+        d = fmaxf(d, fmaxf(dist / CAM_V, dy / CAM_A));
+        if (bouge) d = fmaxf(d, CAM_MIN_D);   /* jamais un coup de fouet */
+    }
     MISE.cam_on = 1; MISE.cam_retour = retour; MISE.cam_t = 0; MISE.cam_d = d > 0.01f ? d : 0.01f;
 }
 /* Fuite : cercle (x, z, r) à atteindre en t s ; n poursuivants du personnage perso partent à FUITE_RECUL cases derrière
@@ -1675,29 +2398,53 @@ void mise_fuite(float x, float z, float r, float t, int perso, int n) {
         a->x = a->tx = px; a->z = a->tz = pz; a->dir = atan2f(E.sera.x - px, E.sera.z - pz);
     }
 }
+void mise_cam_stop(void) {
+    if (MISE.cam_on) { E.yaw = MISE.yaw0; eng_set_zoom(MISE.zoom0); }
+    MISE.cam_on = MISE.coupe = 0;
+}
 void mise_fin(int tout) {
     for (int k = 0; k < ACT_MAX; k++) if (tout || !MISE.act[k].garder || MISE.act[k].chasse) MISE.act[k].on = 0;
-    if (MISE.cam_on) { E.yaw = MISE.yaw0; eng_set_zoom(MISE.zoom0); }
-    MISE.cam_on = MISE.sera_on = MISE.fuite_on = 0;
+    MISE.sera_on = MISE.fuite_on = 0;
     MISE.fondu = MISE.fondu_t = MISE.fondu_d = 0; MISE.sec_t = 0;
-}
-/* Un pas de sp vers (tx, tz) en ligne droite ; 1 : arrivé */
-static int pas_vers(float *x, float *z, float *dir, float tx, float tz, float sp) {
-    const float dx = tx - *x, dz = tz - *z, d = hypotf(dx, dz);
-    if (d > 1e-4f) *dir = atan2f(dx, dz);
-    if (d <= sp || d < 0.02f) { *x = tx; *z = tz; return 1; }
-    *x += dx / d * sp; *z += dz / d * sp;
-    return 0;
+    if (tout) mise_cam_stop();
+    else if (MISE.cam_on && !MISE.cam_retour) mise_camera(1, 0, 0, -10, 0, FIN_CAM);   /* fin d'une scène : la caméra revient vers Sera, sans saut */
 }
 void mise_update(float dt) {
-    if (MISE.cam_on) {   /* glissement doux (smoothstep) ; au retour, le but suit Sera */
+    /* Personnage qui parle, trop loin pour que l'image glisse jusqu'à lui (render.c) : la caméra de la scène va le chercher, une fois posée ; mise_fin la rend à la fin du script */
+    if (eng_dlg_hors && script_running() && (!MISE.cam_on || (!MISE.cam_retour && MISE.cam_t >= MISE.cam_d))) {
+        eng_dlg_hors = 0;
+        /* Au milieu d'elle et de celui à qui elle a affaire, s'il est tout près : tous les deux restent à l'écran, la caméra ne va pas de l'un à l'autre à chaque réplique */
+        float tx = eng_dlg_x, tz = eng_dlg_z, ox = tx, oz = tz; int npc;
+        if (hypotf(tx - E.sera.x, tz - E.sera.z) < 0.05f && !scene_parle_pos(E.w.sc_player, &ox, &oz, &npc)) { ox = tx; oz = tz; }
+        if (E.ride < 0 && hypotf(ox - E.sera.x, oz - E.sera.z) < DLG_MILIEU) { tx = (ox + E.sera.x) / 2; tz = (oz + E.sera.z) / 2; }
+        mise_camera(0, tx, tz, -10, 0, DLG_CHERCHE);
+        MISE.cam_auto = 1;
+        if (!MISE.coupe && MISE.fondu < 0.9f && hypotf(MISE.cam_b[0] - MISE.cam_a[0], MISE.cam_b[1] - MISE.cam_a[1]) > CAM_COUPE_AUTO) { MISE.coupe = 1; MISE.coupe_f = MISE.fondu; MISE.cam_d = 2 * COUPE_T; }
+    }
+    if (MISE.cam_on) {   /* glissement doux (courbe du cinquième degré : départ et arrivée sans à-coup) ; au retour, le but suit Sera ; coupe : le noir, le monde chargé, le plan posé, le retour */
         MISE.cam_t += dt;
-        float k = MISE.cam_t / MISE.cam_d;
-        if (k > 1) k = 1;
-        k = k * k * (3 - 2 * k);
         if (MISE.cam_retour) { MISE.cam_b[0] = E.sera.x; MISE.cam_b[1] = E.sera.z; }
-        for (int i = 0; i < 4; i++) MISE.cam[i] = MISE.cam_a[i] + (MISE.cam_b[i] - MISE.cam_a[i]) * k;
-        if (MISE.cam_retour && MISE.cam_t >= MISE.cam_d) { MISE.cam_on = 0; E.yaw = MISE.yaw0; eng_set_zoom(MISE.zoom0); }
+        if (MISE.coupe) {
+            const float kc = fminf(1, MISE.cam_t / COUPE_T);
+            if (MISE.coupe == 1) {
+                MISE.fondu = MISE.coupe_f + (1 - MISE.coupe_f) * kc;
+                if (kc >= 1) {
+                    if (!E.in.on && !BT.on) world_stream(MISE.cam_b[0], MISE.cam_b[1], 1);
+                    if (!MISE.cam_retour) cam_hors_bat();   /* (le monde d'arrivée n'était peut-être pas chargé) */
+                    for (int i = 0; i < 5; i++) MISE.cam[i] = MISE.cam_a[i] = MISE.cam_b[i];
+                    MISE.coupe = 2; MISE.cam_t = 0;
+                }
+            } else {
+                MISE.fondu = MISE.coupe_f + (1 - MISE.coupe_f) * (1 - kc);
+                if (kc >= 1) { MISE.fondu = MISE.coupe_f; MISE.coupe = 0; MISE.cam_t = MISE.cam_d; }
+            }
+        } else {
+            float k = MISE.cam_t / MISE.cam_d;
+            if (k > 1) k = 1;
+            k = k * k * k * (k * (k * 6 - 15) + 10);
+            for (int i = 0; i < 5; i++) MISE.cam[i] = MISE.cam_a[i] + (MISE.cam_b[i] - MISE.cam_a[i]) * k;
+        }
+        if (MISE.cam_retour && !MISE.coupe && MISE.cam_t >= MISE.cam_d) { MISE.cam_on = 0; E.yaw = MISE.yaw0; eng_set_zoom(MISE.zoom0); }
     }
     if (MISE.fondu_t < MISE.fondu_d) {
         MISE.fondu_t += dt;
@@ -1711,7 +2458,7 @@ void mise_update(float dt) {
         actor_t *s = &E.sera;
         const int st = MISE.sera_v > 1.5f ? 2 : 1;
         if (s->state != st) { s->state = st; s->frame = 0; s->anim = 0; }
-        if (pas_vers(&s->x, &s->z, &s->dir, MISE.sera_tx, MISE.sera_tz, MARCHE_MS * MISE.sera_v / E.w.ech * dt)) { MISE.sera_on = 0; s->state = 0; s->frame = 0; s->anim = 0; }
+        if (pas_evite(&s->x, &s->z, &s->dir, MISE.sera_tx, MISE.sera_tz, MARCHE_MS * MISE.sera_v / E.w.ech * dt, -1, -1, &MISE.sera_cote, &MISE.sera_mt, MISE.sera_lim, dt)) { MISE.sera_on = 0; s->state = 0; s->frame = 0; s->anim = 0; }
         else {
             s->anim += dt;
             if (s->anim > (st == 2 ? 0.09f : 0.13f)) { s->anim = 0; s->frame = (s->frame + 1) & 1023; }
@@ -1722,6 +2469,11 @@ void mise_update(float dt) {
         acteur_t *a = &MISE.act[k];
         if (!a->on) continue;
         if (a->carte != E.w.carte) { a->on = 0; continue; }
+        if (a->place_att && chunk_of_cell((int)floorf(a->x), (int)floorf(a->z)) && chunk_of_cell((int)floorf(a->tx), (int)floorf(a->tz))) {   /* le monde est là : sa place libre, ou celle où il va */
+            a->place_att = 0;
+            if (a->walking) scene_place(&a->tx, &a->tz, 4, a->perso, k);
+            else { scene_place(&a->x, &a->z, 4, a->perso, k); a->tx = a->x; a->tz = a->z; }
+        }
         if (a->chasse) {
             if (!MISE.fuite_on) { a->on = 0; continue; }
             const float dx = E.sera.x - a->x, dz = E.sera.z - a->z, d = hypotf(dx, dz), sp = FUITE_VITESSE / E.w.ech * dt;
@@ -1732,7 +2484,12 @@ void mise_update(float dt) {
                 else if (sol_libre(a->x, nz, 0)) a->z = nz;
                 a->dir = atan2f(dx, dz);
             }
-        } else if (a->walking && pas_vers(&a->x, &a->z, &a->dir, a->tx, a->tz, MARCHE_MS * a->v / E.w.ech * dt)) { a->walking = 0; a->frame = 0; a->anim = 0; }
+        } else if (a->walking) {
+            int cote = a->cote ? a->cote : 1;
+            const int fini = pas_evite(&a->x, &a->z, &a->dir, a->tx, a->tz, MARCHE_MS * a->v / E.w.ech * dt, a->perso, k, &cote, &a->marche_t, a->marche_lim, dt);
+            a->cote = (int8_t)cote;
+            if (fini) { a->walking = 0; a->frame = 0; a->anim = 0; }
+        }
         a->anim += dt;
         if (a->anim > (a->walking ? (a->court ? 0.1f : 0.16f) : 0.22f)) { a->anim = 0; a->frame++; }
     }
@@ -1751,7 +2508,75 @@ void mise_update(float dt) {
 /* Destination hors d'atteinte : Sera s'arrête si elle a fait moins de BLOQUE_PAS unités de chemin en BLOQUE_S s */
 #define BLOQUE_S 0.5f
 #define BLOQUE_PAS 0.3f
+/* Profilage du jeu (ENG_PROFILE) : cycles de chaque étape de eng_update, voir eng_profile_update */
+#ifdef ENG_PROFILE
+#include "esp_cpu.h"
+static uint32_t uprof[UPROF_N], uprof_t;
+#define UP0() (uprof_t = esp_cpu_get_cycle_count())
+#define UP(k) do { const uint32_t t_ = esp_cpu_get_cycle_count(); uprof[k] += t_ - uprof_t; uprof_t = t_; } while (0)
+void eng_profile_update(uint32_t *out) { for (int k = 0; k < UPROF_N; k++) { if (out) out[k] = uprof[k]; uprof[k] = 0; } }
+#else
+#define UP0() ((void)0)
+#define UP(k) ((void)0)
+void eng_profile_update(uint32_t *out) { if (out) memset(out, 0, UPROF_N * sizeof *out); }
+#endif
+
+/* Bandeaux défilants des enseignes (DEFI ; enseignesTextures et defileMaj de l'émulateur, mêmes règles) : le message avance
+   de defi_v colonnes par seconde, d'une colonne à la fois ; la texture d'un bandeau n'est réécrite que quand il bouge */
+static float defi_t;
+static void defi_maj(float dt) {
+    world_t *w = &E.w;
+    defi_t += dt;
+    for (int i = 0; i < w->defi_n; i++) {
+        const int off = (int)((uint32_t)(defi_t * (float)w->defi_v) % w->defi[i].len);
+        if (off == w->defi[i].last) continue;
+        w->defi[i].last = off;
+        uint8_t *b = w->defi_buf + (size_t)i * (size_t)(w->defi_w * w->defi_h);
+        for (int x = 0; x < w->defi_w; x++) {
+            const uint8_t c = w->defi[i].cols[(off + x) % w->defi[i].len];
+            for (int y = 0; y < w->defi_h; y++) b[y * w->defi_w + x] = (c >> y & 1) ? w->defi[i].lit : w->defi[i].dim;
+        }
+    }
+}
+/* Essai de fluidité (07/11/2026 ; SDX ESSAI de platform/esp32/main/sdx.c, capture_montre.py essai, rendu_test essai:…) : Sera posée en
+   (x, z) sur la planète, à pied, pluie (1) ou ciel clair (0) tout de suite, à l'heure donnée (0 à 1 ; < 0 : celle du moment), sans rencontre,
+   puis elle court vers le cap (degrés) pendant s secondes : les mêmes conditions à chaque mesure ; 0 : refusé (combat, course, scène,
+   véhicule, autre carte) */
+static struct { int on, renc, weather; float cap, fin, px, pz, pt, x0, z0, heure, rain; } ESM;   /* x0 … rain : l'état d'avant l'essai, rendu à la fin */   /* px, pz, pt : position il y a une seconde (bloquée : elle tourne) */
+int eng_essai_monde(float x, float z, float cap, int pluie, float heure, float s) {
+    if (BT.on || CR.on || script_running() || E.ride >= 0 || E.w.carte || accueil_on()) return 0;
+    if (E.in.on) int_reset();
+    if (!ESM.on) { ESM.renc = E.renc_mode; ESM.x0 = E.sera.x; ESM.z0 = E.sera.z; ESM.heure = E.heure; ESM.weather = E.weather; ESM.rain = E.rain; }
+    E.essai_mesure = 1;   /* l'état de l'essai n'ira pas dans la partie : plus de sauvegarde automatique avant un chargement */
+    world_stream(x, z, 1);
+    sera_placer(x, z, 4.0f);
+    E.weather = pluie ? 2 : 1; E.rain = pluie ? E.w.rain_int / 100.0f : 0;
+    if (heure >= 0) E.heure = heure;
+    E.renc_mode = 3;   /* aucune rencontre : un combat couperait la mesure */
+    ESM.on = 1; ESM.cap = cap * PI_F / 180; ESM.fin = E.clock + s; ESM.px = E.sera.x; ESM.pz = E.sera.z; ESM.pt = E.clock;
+    return 1;
+}
+int eng_essai_actif(void) { return ESM.on; }   /* un essai en cours : la montre ne s'endort pas (main.c, veille_image) */
+static void essai_monde_maj(void) {
+    if (!ESM.on) return;
+    if (E.clock > ESM.fin || BT.on || CR.on || script_running() || E.ride >= 0) {
+        /* Fin de l'essai : Sera remise à sa place, avec l'heure et la météo d'avant, et la partie de nouveau sauvegardée
+           (08/11/2026 : la sauvegarde de la veille, eng_sauvegarder, ne regarde pas essai_mesure, et la position d'essai
+           était restée dans la partie) ; interrompu (combat, course, scène) : rien de rendu, ni sauvegarde automatique */
+        const int fini = E.clock > ESM.fin && !BT.on && !CR.on && !script_running() && E.ride < 0;
+        ESM.on = 0; E.has_dest = 0; E.renc_mode = ESM.renc;
+        if (fini) { world_stream(ESM.x0, ESM.z0, 1); sera_placer(ESM.x0, ESM.z0, 4.0f); E.heure = ESM.heure; E.weather = ESM.weather; E.rain = ESM.rain; E.essai_mesure = 0; }
+        else E.weather = 0;
+        return;
+    }
+    if (E.clock - ESM.pt > 1) {   /* bloquée depuis une seconde : un quart de tour et un peu plus */
+        if (hypotf(E.sera.x - ESM.px, E.sera.z - ESM.pz) < 0.5f) ESM.cap += 1.75f;
+        ESM.px = E.sera.x; ESM.pz = E.sera.z; ESM.pt = E.clock;
+    }
+    E.has_dest = 1; E.dest_court = 1; E.dest_x = E.sera.x + sinf(ESM.cap) * 8; E.dest_z = E.sera.z + cosf(ESM.cap) * 8;
+}
 void eng_update(float dt, const eng_input_t *in) {
+    UP0();
 #if ENG_DYN
     /* Plein écran : touchers dans le repère de l'interface (cadre de 466 × 466 centré dans l'image) */
     eng_input_t loc = *in;
@@ -1761,6 +2586,7 @@ void eng_update(float dt, const eng_input_t *in) {
     if (dt > 0.05f) dt = 0.05f;
     E.clock += dt;
     E.manette = in->manette;
+    defi_maj(dt);   /* bandeaux défilants des enseignes (même à l'écran titre : le monde se voit derrière) */
     /* Montre verrouillée (réveil de la veille) : le monde est arrêté, seul le glissement qui déverrouille compte */
     if (hud_verrou(dt, in)) { sons_update(); music_update(dt); return; }
     /* Ouverture (écran titre, introduction, choix de l'héroïne) : le monde est arrêté, la lumière est celle du lieu
@@ -1773,6 +2599,7 @@ void eng_update(float dt, const eng_input_t *in) {
         return;
     }
     E.temps_jeu += dt;
+    essai_monde_maj();
     /* Cycle jour / nuit : l'heure avance (sauf jour ou nuit fixés dans le menu Système), l'ambiance suit */
     /* Cycle « RÉEL » : l'heure de l'horloge de la montre (sans elle, comme le cycle automatique) */
     if (E.cycle == 3 && E.horloge >= 0) E.heure = E.horloge / 86400.0f;
@@ -1780,6 +2607,7 @@ void eng_update(float dt, const eng_input_t *in) {
     render_ambiance(E.cycle == 1 ? 0.5f : E.cycle == 2 ? 0.0f : E.heure);
     sons_update();
     music_update(dt);    /* piste selon la situation (combat compris), lecture sur la carte SD */
+    UP(UPROF_DEBUT);
     /* Fenêtre recentrée (début ou fin de combat) : l'image préparée depuis n'avait pas de 3D, plus rien ne lit les
        textures de l'ancienne fenêtre */
     if (E.stream_hold) {
@@ -1789,6 +2617,7 @@ void eng_update(float dt, const eng_input_t *in) {
     /* Combat fini pendant une visite : l'intérieur avait rendu le bloc de la fenêtre à l'arène, il est relu */
     if (E.in.on && !BT.on) int_pret();
     hud_update(dt, in);   /* gestes, menus, dialogue, combat : peut fixer une destination ou bloquer Sera */
+    UP(UPROF_HUD);
     /* Combat : le monde s'arrête (personnages, météo), seule l'eau continue de couler */
     if (BT.on) { battle_update(dt); water_cycle(dt); return; }
     /* Menu ouvert ou course en pause : le monde s'arrête (personnages, trafic, course, heure, scénario) */
@@ -1797,6 +2626,11 @@ void eng_update(float dt, const eng_input_t *in) {
     if (!CR.on) course_fx_maj(dt);   /* éclats, feuilles et poussière des décors cassés */
     if ((in->keys & ENG_KEY_ROT_L) && !mise_bloque()) E.yaw -= dt * 1.6f;
     if ((in->keys & ENG_KEY_ROT_R) && !mise_bloque()) E.yaw += dt * 1.6f;
+    /* Pas magnétiques (01/11/2026, demande de l'utilisateur) : à pied, caméra lâchée, elle glisse vers le multiple de 45°
+       le plus proche, où les 8 directions des planches tombent juste (en véhicule, elle reste derrière lui ; caméras de
+       scène : mise_camera) */
+    if (E.ride < 0 && !CR.on && !mise_bloque() && !(in->keys & (ENG_KEY_ROT_L | ENG_KEY_ROT_R)) && !hud_camera_tourne())
+        E.yaw += (cam_pas(E.yaw) - E.yaw) * fminf(1, dt * CAM_PAS_VIF);
 
     /* Direction voulue : croix (relative à la caméra), sinon la destination touchée */
     float mx = 0, mz = 0, vx = 0, vz = 0;
@@ -1826,6 +2660,8 @@ void eng_update(float dt, const eng_input_t *in) {
     }
     /* Pose du scénario (instruction « pose ») : Sera reste sur place le temps de son animation */
     if (E.pose_t > 0) { E.pose_t -= dt; if (E.ride >= 0 || CR.on) E.pose_t = 0; else { vx = vz = 0; E.has_dest = 0; } }
+    UP(UPROF_FIN);
+    if (PIL.on && (E.ride < 0 || CR.on)) pilote_arreter(NULL);   /* descendue du véhicule, course : pilote automatique coupé */
     if (E.ride >= 0 && CR.on) { float th, st; drive_input(in, &th, &st); course_update(th, st, dt); }
     else if (E.ride >= 0) ride_drive(in, dt);
     else if (E.pose_t > 0) {   /* son animation, à la cadence des danseuses */
@@ -1838,11 +2674,11 @@ void eng_update(float dt, const eng_input_t *in) {
         /* À pied : course si la destination a été touchée loin de Sera à l'écran (E.dest_court, hud.c : toucher loin, doigt
            maintenu loin d'elle) ou si le stick de la manette est poussé à fond (MANETTE_COURSE), marche sinon ; avec les
            deux animations, 3,0 et 5,2 unités par seconde, avec une seule l'allure d'origine de 4,2 */
-        const int ps = member_sheet(0), both = !E.nage && has_anim(ps, ANIM_WALK) && has_anim(ps, ANIM_RUN);
+        const int ps = member_sheet_mouv(0), both = !E.nage && has_anim(ps, ANIM_WALK) && has_anim(ps, ANIM_RUN);   /* (tenue de pose : sa planche de base) */
         const int far = (E.has_dest && E.dest_court) || (in->manette && hypotf(in->stick_x, in->stick_y) >= MANETTE_COURSE);
         const int st = both && far ? 2 : 1;
         if (s->state != st) { s->state = st; s->frame = 0; s->anim = 0; }
-        float sp = (E.nage ? 2.2f : both ? (far ? 5.2f : 3.0f) : 4.2f) / E.w.ech * dt, nx = s->x + vx * sp, nz = s->z + vz * sp;
+        float sp = (E.nage ? 2.2f : both ? (far ? 5.2f : 3.0f) : 4.2f) / E.w.ech * dt * (E.in.on && int_pente(s->x, s->z) ? INT_MARCHE_ESC : 1), nx = s->x + vx * sp, nz = s->z + vz * sp;   /* (escalier : plus lentement) */
         const float ox = s->x, oz = s->z;
         int moved = 0;
         if (sera_pas(nx, s->z)) { s->x = nx; moved = 1; }
@@ -1876,24 +2712,36 @@ void eng_update(float dt, const eng_input_t *in) {
         v->frame = (uint8_t)s->frame; v->walking = s->state != 0;   /* roule (marche) ou à l'arrêt (attente) */
         E.talk = -2;
     } else if (!E.ui_block) E.talk = talk_target();   /* gardé pendant un dialogue ; dedans, les personnages de l'intérieur */
-    if (E.in.on && E.talk >= 0) { npc_t *n = &E.npcs[E.talk]; n->dir = atan2f(E.sera.x - n->x, E.sera.z - n->z); }   /* il regarde Sera */
+    if (E.in.on && E.talk >= 0) { npc_t *n = &E.npcs[E.talk]; if (!PERS_EST_OBJET(E.w.persos[n->perso].flags)) n->dir = atan2f(E.sera.x - n->x, E.sera.z - n->z); }   /* il regarde Sera (pas un objet) */
     E.sera_y = ground_y(E.sera.x, E.sera.z); E.sera_y_ok = 1;   /* hauteur suivie (pont) */
+    UP(UPROF_COURSE);
     /* Dans un intérieur, le monde ne bouge pas autour de lui (personnages, fenêtre de chunks, trafic) */
     if (!E.in.on) update_npcs(dt);
+    if (!E.in.on) patrouille_maj(dt);   /* patrouilles hostiles (battle.c) : elles rôdent, chassent Sera, engagent le combat */
+    UP(UPROF_PNJ);
     mise_update(dt);   /* mise en scène du scénario : caméra, acteurs, fondu, fuite */
     passage_step();   /* passage vers une autre carte (puits, égout, ascenseur…) */
     /* Chunks qui entrent dans la fenêtre : autour de ce que vise la caméra d'une scène (travelling vers un lieu lointain :
        sans cela, il n'y avait rien à montrer là-bas ; les 3 × 3 autour du point visé se chargent tout de suite, le reste
        un par image), sinon autour de Sera */
     if (!E.stream_hold && !E.in.on) world_stream(MISE.cam_on ? MISE.cam[0] : s->x, MISE.cam_on ? MISE.cam[1] : s->z, 0);
+    UP(UPROF_CHUNKS);
     weather_update(dt);
     cendre_update(dt);   /* pluie de cendre : l'équipe tousse dehors sans masque */
     ville_maj(dt);       /* brouillard reculé en ville */
+    repl_maj();          /* répliques : le lot de la zone de Sera, lu quand elle en change (repliques.c) */
     script_update(dt);   /* scénario : déclencheurs, script en cours */
+    UP(UPROF_SCRIPT);
     if (!E.in.on) traffic_update(dt);
+    UP(UPROF_TRAFIC);
     int_update(dt);      /* porte devant Sera, sortie d'un intérieur, alarme */
     police_update(dt);   /* recherche, poursuite, arrestation (après la porte et l'interlocuteur : elle les retire pendant la scène) */
+    hud_sauve_maj(dt);   /* sauvegarde automatique aux points clés, quand rien n'est en cours (hud.c) */
+    coffre_update();     /* coffre à portée (coffres.c) */
+    panneau_maj();       /* panneau de quêtes à portée, guidage d'un panneau (panneaux.c) */
+    garage_maj();        /* véhicule de Sera : suivi, ou reposé à sa place (garage.c) */
     water_cycle(dt);
+    UP(UPROF_FIN);
 }
 
 /* Outil de banc d'essai : place Sera et la caméra */
@@ -1902,6 +2750,7 @@ void eng_move_to(float x, float z) { E.sera.x = x; E.sera.z = z; E.has_dest = 0;
 int eng_world_size(void) { return E.w.n; }
 /* Zoom de la caméra, du zoom mini du paquet (1 par défaut depuis le 31/10/2026 ; 0,8 avant : plus loin qu'à l'origine) à ZOOM_MAX */
 void eng_set_zoom(float z) {
+    if (carte_plein() && E.zoom > 0) { carte_molette(z / E.zoom); return; }   /* molette, lunette : la carte du menu ouverte */
     const float lo = E.w.zoom_min;
     E.zoom = z < lo ? lo : z > ZOOM_MAX ? ZOOM_MAX : z;
     E.cam_dist = 12.5f / E.w.ech / E.zoom;

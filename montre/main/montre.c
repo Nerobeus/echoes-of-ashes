@@ -6,7 +6,8 @@
  * Énergie : fréquence dynamique 40 à 160 MHz (240 écran allumé), veille légère automatique écran
  * éteint ; le cadran est redessiné à chaque seconde, les gestes et les glissés sans limite, les autres pages seulement
  * quand quelque chose change ; thème des menus d'Echoes (theme.c) ; écran éteint (veille) par
- * PWR, BOOT ou l'inactivité ; seuls PWR et BOOT le rallument (pas le doigt), ou une notification, ou un appel.
+ * PWR, BOOT ou l'inactivité ; seuls PWR et BOOT, tenus 0,1 s, le rallument (ni le doigt, ni une notification, ni un
+ * appel) ; rallumé ainsi et pas touché, il se rendort après 5 s (le temps de lire l'heure).
  * Écran éteint, sans « BT EN VEILLE » (réglage, non par défaut) : Bluetooth coupé et veille profonde (réveil par PWR,
  * puis redémarrage sur le cadran) ; avec lui, veille légère et notifications du téléphone écran éteint. Après la mise en
  * veille d'Echoes ou du PC DOS (app_drapeau « veille »), l'app démarre écran éteint, sans rien afficher.
@@ -14,6 +15,7 @@
  */
 #include <dirent.h>
 #include <math.h>
+#include <stdarg.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -28,6 +30,7 @@
 #include "esp_heap_caps.h"
 #include "esp_log.h"
 #include "esp_pm.h"
+#include "esp_rom_sys.h"
 #include "esp_system.h"
 #include "esp_timer.h"
 #include "esp_sleep.h"
@@ -167,7 +170,8 @@ static void r_heure(int64_t utc, int fuseau) {
 }
 static void r_notif(const char *id, const char *app, const char *titre, const char *texte, int64_t heure) {
     xSemaphoreTake(verrou, portMAX_DELAY);
-    for (int k = 0; k < nnotifs; k++) if (!strcmp(notifs[k].id, id)) { notif_retirer(k); break; }   /* même id : remplacée */
+    bool remplacee = false;
+    for (int k = 0; k < nnotifs; k++) if (!strcmp(notifs[k].id, id)) { notif_retirer(k); remplacee = true; break; }   /* même id : remplacée */
     if (nnotifs == NOTIFS) nnotifs--;
     memmove(&notifs[1], &notifs[0], nnotifs * sizeof notifs[0]);
     notif_t *n = &notifs[0];
@@ -175,10 +179,13 @@ static void r_notif(const char *id, const char *app, const char *titre, const ch
     copie_utf8(n->titre, sizeof n->titre, titre); copie_utf8(n->texte, sizeof n->texte, texte);
     n->heure = heure;
     nnotifs++;
-    bandeau = 0;
+    if (!remplacee) bandeau = 0;
     notifs_ecrire();
     xSemaphoreGive(verrou);
-    reveil_demande = true; a_dessiner = true;
+    /* Bandeau seulement pour une nouvelle notification, et seulement écran allumé : une mise à jour (même id : musique,
+       progression, minuteur, navigation) ne fait que changer son texte (01/11/2026 : elle rallumait la montre sans cesse) */
+    if (!remplacee) reveil_demande = true;
+    a_dessiner = true;
     xTaskNotifyGive(tache);
 }
 static void r_effacer(const char *id) {
@@ -251,7 +258,7 @@ static void dessiner_notifs(int det) {
 }
 
 #define APPS_N 5
-static const char *APPS_NOMS[APPS_N] = { "ECHOES OF ASHES", "PC DOS", "CONSOLES", "STOCKAGE USB", "RÉGLAGES" };
+static const char *APPS_NOMS[APPS_N] = { "LE CHŒUR DES CENDRES", "PC DOS", "CONSOLES", "STOCKAGE USB", "RÉGLAGES" };
 static const char *APPS_INFOS[APPS_N] = { "JEU", "DOS 6", "GB · NES · DOOM", "CARTE SD", "" };
 /* Rangées de la page APPS : cinq, serrées comme les listes */
 #define APPS_Y0 140
@@ -507,11 +514,41 @@ static void dessiner(void) {
     if (t2 - t0 > mes.dessin_max) mes.dessin_max = t2 - t0;
 }
 
+/* Journal des réveils (diagnostic du 02/11/2026, à retirer quand les reconnexions du téléphone ne rallument plus la
+   montre) : démarrages et leur raison, allumages de l'écran, liens du téléphone ; /sd/montre/journal.txt, recommencé
+   au-delà de 32 Ko */
+#define JOURNAL "/sd/montre/journal.txt"
+static void journal(const char *fmt, ...) {
+    struct stat st;
+    mkdir("/sd/montre", 0775);
+    FILE *f = fopen(JOURNAL, stat(JOURNAL, &st) == 0 && st.st_size > 32768 ? "w" : "a");
+    if (!f) return;
+    const time_t t = time(NULL);
+    struct tm l;
+    localtime_r(&t, &l);
+    fprintf(f, "%02d/%02d %02d:%02d:%02d ", l.tm_mday, l.tm_mon + 1, l.tm_hour, l.tm_min, l.tm_sec);
+    va_list a;
+    va_start(a, fmt);
+    vfprintf(f, fmt, a);
+    va_end(a);
+    fputc('\n', f);
+    fclose(f);
+}
+static const char *raison_demarrage(void) {
+    static const char *N[] = { "inconnue", "mise sous tension", "broche RESET", "logiciel", "PANIQUE", "chien de garde (interruptions)",
+                               "chien de garde (tâches)", "chien de garde", "veille profonde", "BAISSE DE TENSION", "SDIO", "USB", "JTAG" };
+    const int r = esp_reset_reason();
+    return r >= 0 && r < (int)(sizeof N / sizeof N[0]) ? N[r] : "autre";
+}
+
 /* ---------- Écran, veille, lancement ---------- */
 static bool ecran = true;
 static bool lcd_pret;        /* écran initialisé (pas avant le premier allumage après une mise en veille) */
 static int64_t derniere;     /* dernière action (doigt, bouton) */
-static bool allume_par_notif;
+/* Réveil par un bouton sans toucher l'écran : il se rendort après REVEIL_BREF_S, le temps de lire l'heure ; le premier
+   toucher rend la veille réglée (02/11/2026, demande de l'utilisateur) */
+#define REVEIL_BREF_S 5
+static bool bref;
 
 static void ecran_eteindre(void) {
     if (!ecran) return;
@@ -525,18 +562,28 @@ static void ecran_eteindre(void) {
     if (reglages_changes) reglages_ecrire();
     ESP_LOGI(TAG, "écran éteint");
 }
+static void p_page_changee(void);
 static void ecran_allumer(void) {
     if (ecran) return;
     ecran = true;
     if (pm_eveil) esp_pm_lock_acquire(pm_eveil);
     if (pm_max) esp_pm_lock_acquire(pm_max);
     gpio_intr_enable(PIN_TP_INT);
-    if (!lcd_pret) { lcd_init(); lcd_pret = true; d_tout(); } else lcd_reveiller();
+    pg_page = P_CADRAN;   /* chaque réveil revient au cadran (02/11/2026, demande de l'utilisateur) */
+    p_page_changee();
+    message = NULL;
+    /* Le cadran à l'heure est dessiné et envoyé avant l'affichage (avant : l'image d'avant la veille, puis le cadran) */
+    const bool deja = lcd_pret;
+    if (!lcd_pret) { lcd_init(); lcd_pret = true; } else lcd_sortir_veille();
+    d_tout();
+    dessiner();
+    lcd_wait_all();
+    a_dessiner = false;
+    if (deja) lcd_afficher();
     lcd_set_brightness((uint8_t)lum_cmd(lum));
     derniere = esp_timer_get_time();
     if (bt_on && bt_veille) ble_diffusion_rapide(true);
     else if (bt_on) ble_demarrer(&RAPPELS);
-    a_dessiner = true;
 }
 static void dire(const char *m) { message = m; message_fin = esp_timer_get_time() + 2500000; a_dessiner = true; }
 
@@ -643,7 +690,7 @@ static void toucher(int x, int y) {
 }
 /* Rappels des pages (commun/ui_montre/pages.c) */
 static void p_redessiner(void) { a_dessiner = true; }
-static void p_activite(int64_t now) { derniere = now; allume_par_notif = false; }
+static void p_activite(int64_t now) { derniere = now; bref = false; }
 static void p_page_changee(void) { detail = -1; bandeau = -1; dos_ouvert = false; gb_ouvert = false; }
 /* Glissé vertical : la liste des jeux du Game Boy, cinq rangées de plus ou de moins */
 static void p_vertical(int sens) {
@@ -691,6 +738,11 @@ static void dormir_profond(void) {
     gpio_hold_en(PIN_LCD_RST);
     gpio_hold_en(PIN_TP_RST);
     gpio_deep_sleep_hold_en();
+    /* La veille légère automatique laisse armé le réveil par minuterie de sa dernière attente : sans ce retrait, la
+       montre se réveillait quelques secondes après chaque mise en veille profonde, écran allumé pour toute la veille
+       réglée, puis recommençait (02/11/2026 : toutes les 2 min avec la veille à 120 s, Bluetooth reconnecté et
+       notifications renvoyées à chaque fois) */
+    esp_sleep_disable_wakeup_source(ESP_SLEEP_WAKEUP_ALL);
     esp_sleep_enable_ext0_wakeup(PIN_PWR, 1);
     esp_deep_sleep_start();
 }
@@ -703,6 +755,28 @@ static bool bouton(bool appuye, int64_t now, bouton_t *b) {
     if (b->bas) b->calme = now;
     b->bas = false;
     return false;
+}
+/* Début d'appui confirmé : la broche tient sur 4 lectures en 40 ms. Sur batterie, écran éteint, une seule lecture haute
+   de PWR au réveil de la veille légère par un évènement du téléphone (connexion, déconnexion) passait pour un appui et
+   rallumait l'écran (02/11/2026 ; pas avec l'USB branché, sans veille légère). L'AXP2101 seul rend un appui une fois :
+   pas de relecture */
+static bool pwr_bas(void) { return alim_bouton_pwr(); }
+static bool boot_bas(void) { return !gpio_get_level(PIN_BOOT); }
+static bool tenu(bool (*lire)(void)) {
+    for (int i = 0; i < 4; i++) { if (!lire()) return false; esp_rom_delay_us(10000); }
+    return true;
+}
+#if CARTE_TCA9554 || defined(PIN_PWR)
+#define PWR_TENU() tenu(pwr_bas)
+#else
+#define PWR_TENU() true
+#endif
+/* Réveil (écran éteint) : le bouton doit rester tenu REVEIL_TENU_MS depuis qu'il a été vu ; un effleurement ne rallume
+   plus la montre (02/11/2026, demande de l'utilisateur : PWR trop sensible). Pas de 10 ms (veille légère entre deux) */
+#define REVEIL_TENU_MS 100   /* 0,3 s jugé trop long */
+static bool reveil_tenu(bool (*lire)(void)) {
+    for (int t = 40; t < REVEIL_TENU_MS; t += 10) { vTaskDelay(pdMS_TO_TICKS(10)); if (!lire()) return false; }
+    return true;
 }
 
 void app_main(void) {
@@ -726,6 +800,11 @@ void app_main(void) {
     gpio_config(&pa);
     gpio_set_level(CONFIG_ECHOES_PA_GPIO, 0);
 #endif
+    /* Réveil de la veille profonde par PWR : écran allumé pour 5 s (le démarrage prend environ 0,4 s, plus long que
+       l'appui de REVEIL_TENU_MS : pas de contrôle de l'appui ici) */
+    bref = esp_sleep_get_wakeup_cause() == ESP_SLEEP_WAKEUP_EXT0;
+    /* Tout autre réveil de la veille profonde (minuterie restée armée) : retour en veille sans allumer l'écran */
+    if (esp_reset_reason() == ESP_RST_DEEPSLEEP && !bref && !usb_serial_jtag_is_connected()) dormir_profond();
     /* Mise en veille d'Echoes ou du PC DOS : démarrage écran éteint, sans rien afficher (l'écran n'est initialisé
        qu'au premier allumage) */
     const bool apres_veille = app_drapeau("veille");
@@ -735,6 +814,7 @@ void app_main(void) {
     usb_console();
     if (usb_demande()) { lcd_set_brightness(0xD0); usb_mode(); return; }   /* stockage USB : ne revient pas */
     sd_init();
+    journal("démarrage : %s (réveil %d)%s", raison_demarrage(), (int)esp_sleep_get_wakeup_cause(), apres_veille ? ", après la veille d'une app" : "");
     reglages_lire();
     teinte_choisir(teinte);
     notifs_lire();
@@ -788,20 +868,30 @@ void app_main(void) {
             }
         }
         /* boutons */
-        const bool p = bouton(alim_bouton_pwr(), now, &pwr), b = bouton(!gpio_get_level(PIN_BOOT), now, &boot);
+        const bool p = bouton(pwr_bas() && (pwr.bas || PWR_TENU()), now, &pwr), b = bouton(boot_bas() && (boot.bas || tenu(boot_bas)), now, &boot);
         if (p || b) {
             pg_annuler();
             if (ecran) { ecran_eteindre(); if (!bt_veille && !usb_serial_jtag_is_connected()) dormir_profond(); }
-            else ecran_allumer();
+            else if (reveil_tenu(p ? pwr_bas : boot_bas)) { journal("écran allumé par %s", p ? "PWR" : "BOOT"); ecran_allumer(); bref = true; }
             derniere = now;
         }
-        if (reveil_demande) { reveil_demande = false; if (!ecran) { ecran_allumer(); allume_par_notif = true; } bandeau_fin = now + 6000000; derniere = now; }
+        {
+            static bool lien_vu;
+            if (bt_lien != lien_vu) {
+                lien_vu = bt_lien;
+                if (lien_vu) journal("téléphone relié (écran %s)", ecran ? "allumé" : "éteint");
+                else journal("téléphone absent, raison 0x%x (écran %s)", ble_raison(), ecran ? "allumé" : "éteint");
+            }
+        }
+        /* Notification ou appel : bandeau si l'écran est allumé ; seuls les boutons sortent la montre de veille
+           (01/11/2026, demande de l'utilisateur : chaque reconnexion du téléphone renvoyait ses notifications) */
+        if (reveil_demande) { reveil_demande = false; if (ecran) { bandeau_fin = now + 6000000; derniere = now; } }
         if (ecran) {
             if (pg_doigt() || tp_irq || touch_int_bas()) { tp_irq = false; pg_tactile(now); }
             if (bandeau >= 0 && now > bandeau_fin) { bandeau = -1; a_dessiner = true; }
             if (message && now > message_fin) { message = NULL; a_dessiner = true; }
-            const int lim = allume_par_notif ? 6 : veille_s;
-            if (lim > 0 && !appel.etat && now - derniere > (int64_t)lim * 1000000) {
+            const int lim = bref ? REVEIL_BREF_S : veille_s;
+            if (lim > 0 && !appel.etat && bandeau < 0 && now - derniere > (int64_t)lim * 1000000) {
                 ecran_eteindre();
                 if (!bt_veille && !usb_serial_jtag_is_connected()) dormir_profond();
             }

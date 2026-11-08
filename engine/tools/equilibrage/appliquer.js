@@ -1,49 +1,84 @@
-// Reporte le plan dans js/histoire.js de l'Atelier : niveau des étapes (niv), fiches des ennemis de l'histoire
-// (fiches.json de calibrer.js), récompenses « experience » (en combats du niveau de l'étape), table EQUILIBRE des
-// ennemis de la bibliothèque. node appliquer.js [chemin de histoire.js]
-const fs = require('fs'), R = require('./regles.js'), { ETAPES } = require('./plan.js');
-const P = process.argv[2] || 'D:/Documents/Stellar Exodus/tileset-generator-v4/js/histoire.js';
+// Reporte l'étalonnage dans js/histoire.js de l'Atelier (01/11/2026) : fiches des ennemis de PERSOS (PV, ATQ et, depuis le
+// 02/11/2026, le niveau de fiche de fiches.json ; avant, le niveau
+// de la fiche reste le sien), niveau des étapes corrigé par plan.js (NIV ; une étape absente du plan garde le sien, rien
+// n'est effacé), récompenses « experience » des annexes de la table XP (en combats du niveau de leur étape ; seulement les
+// lignes qui existent), table EQUILIBRE des ennemis de la bibliothèque (fiches.json de calibrer.js).
+//   node appliquer.js [chemin de histoire.js] [--essai]   (--essai : écrit à côté, histoire.essai.js, et montre le bilan)
+const fs = require('fs'), R = require('./regles.js'), PL = require('./plan.js');
+const args = process.argv.slice(2), essai = args.includes('--essai');
+const P = args.find(a => !a.startsWith('--')) || 'D:/Documents/Stellar Exodus/tileset-generator-v4/js/histoire.js';
 const F = JSON.parse(fs.readFileSync(__dirname + '/fiches.json', 'utf8'));
 let s = fs.readFileSync(P, 'utf8'); const crlf = s.includes('\r\n'); s = s.replace(/\r\n/g, '\n');
+const avant = s;
 const esc = t => t.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), jsName = n => n.replace(/'/g, "\\'");
 
-// 1. Fiches des ennemis de PERSOS : lvl, hp, atk (les autres champs restent)
-const persos = s.slice(s.indexOf('TilesetGen.Histoire.PERSOS = ['), s.indexOf('TilesetGen.Histoire.OBJETS'));
-let np = persos, nf = 0;
+// 1. Fiches des ennemis de PERSOS : hp, atk (lvl et les autres champs restent)
+const p0 = s.indexOf('TilesetGen.Histoire.PERSOS = ['), p1 = s.indexOf('TilesetGen.Histoire.OBJETS');
+const persos = s.slice(p0, p1);
+let np = persos, nf = 0, nl = 0;
 for (const [nom, f] of Object.entries(F)) {
-  const re = new RegExp(`(\\{ nom: '${esc(jsName(nom))}',[^\\n]*\\n?[^\\n]*?ennemi: \\{ )lvl: \\d+, hp: \\d+, atk: \\d+`);
-  if (re.test(np)) { np = np.replace(re, `$1lvl: ${f.lvl}, hp: ${f.hp}, atk: ${f.atk}`); nf++; }
+  // la fiche de ce personnage : la première « ennemi: { lvl: » après son nom et avant le personnage suivant (avant le
+  // 01/11/2026, une expression trop gourmande pouvait prendre celle de la ligne suivante)
+  const a = np.indexOf(`{ nom: '${jsName(nom)}',`); if (a < 0) continue;
+  let b = np.indexOf('{ nom: \'', a + 8); if (b < 0) b = np.length;
+  const re = /ennemi: \{ lvl: (\d+), hp: \d+, atk: \d+/, bloc = np.slice(a, b), m = re.exec(bloc);
+  if (!m) continue;
+  // niveau de fiche : celui de fiches.json (02/11/2026 : la nouvelle échelle, calibrer.js REMAP=1 ; avant, gardé)
+  if (+m[1] !== f.lvl) nl++;
+  np = np.slice(0, a) + bloc.replace(re, `ennemi: { lvl: ${f.lvl}, hp: ${f.hp}, atk: ${f.atk}`) + np.slice(b); nf++;
 }
-s = s.replace(persos, np);
+s = s.slice(0, p0) + np + s.slice(p1);
 
-// 2. Niveau des étapes : « niv: N » dans chaque étape des quêtes du plan
+// 2. Niveau des étapes : seulement celles que plan.js corrige (NIV), « niv: N » de l'étape remplacé ; les autres restent
 const qs = s.indexOf('TilesetGen.Histoire.QUETES = ['), qe = s.indexOf('\n];', qs);
-let quetes = s.slice(qs, qe), ne = 0;
-for (const [id, niv] of Object.entries(ETAPES)) {
-  const a = quetes.indexOf(`{ id: '${id}',`); if (a < 0) continue;
-  let b = quetes.indexOf("{ id: '", a + 5); if (b < 0) b = quetes.length;
+let quetes = s.slice(qs, qe), ne = 0, nt = 0;
+for (const [id, corr] of Object.entries(PL.NIV)) {
+  const a = quetes.search(new RegExp(`\\{ id: ['"]${esc(id)}['"],`)); if (a < 0) { console.log('  quête ' + id + ' introuvable'); continue; }
+  let b = quetes.indexOf('{ id: ', a + 5); if (b < 0) b = quetes.length;
   let bloc = quetes.slice(a, b), k = 0;
-  bloc = bloc.replace(/\{ texte: '((?:[^'\\]|\\.)*)'((?:, (?:perso|lieu): '[^']*')?)(?:, niv: \d+)? \}/g, (m, t, c) => `{ texte: '${t}'${c}${niv[k] ? `, niv: ${niv[k++]}` : (k++, '')} }`);
-  quetes = quetes.slice(0, a) + bloc + quetes.slice(b); ne += k;
+  const re2 = /\{ texte: '((?:[^'\\]|\\.)*)'((?:, (?:perso|lieu): '[^']*')?)(?:, niv: (\d+))?( ?)\}/g;
+  // garde-fou (02/11/2026) : les étapes reconnues doivent être toutes celles de la quête, sinon la k-ième ne serait pas la bonne
+  const vues = (bloc.match(re2) || []).length, attendues = PL.QUETE[id] ? PL.QUETE[id].etapes.length : -1;
+  if (vues !== attendues) { console.log(`  quête ${id} : ${vues} étapes reconnues sur ${attendues}, laissée telle quelle`); continue; }
+  // le niveau écrit dans les textes : « (niv 92) » d'une étape, « Niveau 66 conseillé » de la description (celui de la
+  // première étape)
+  bloc = bloc.replace(re2, (m, t, c, n, sp) => {
+    k++;
+    if (!corr[k]) return m;
+    if (+n !== +corr[k]) ne++;
+    return `{ texte: '${t.replace(/\(niv \d+\)/, '(niv ' + corr[k] + ')')}'${c}, niv: ${corr[k]}${sp}}`;
+  });
+  if (corr[1]) bloc = bloc.replace(/Niveau \d+ conseillé/g, () => { nt++; return `Niveau ${corr[1]} conseillé`; });
+  quetes = quetes.slice(0, a) + bloc + quetes.slice(b);
 }
 s = s.slice(0, qs) + quetes + s.slice(qe);
 
-// 3. Récompenses : experience = combats × XP d'un ennemi du niveau de l'étape
-const XP = { 'odric-coeur': [5, 6], 'egouts': [18, 10], 'h01-prime': [3, 4], 'h02-prime': [7, 4], 'h04-prime': [19, 6], 'e04-fin': [8, 6],
-  'v01-fin': [12, 4], 'v02-fin': [12, 5], 'v04-fin': [14, 5], 'v07-fin': [11, 3], 'v09-horloge': [11, 4],
-  'k04-essai': [8, 3], 'k05-course': [13, 5], 'k06-finale': [16, 8], 'k07-fin': [12, 4], 'k08-course': [25, 6],
-  'h10-prime': [90, 8], 'h11-prime': [96, 8], 'r05-colosse': [99, 8] };
+// 3. Récompenses des annexes : experience = combats × XP d'un ennemi du niveau de l'étape (lignes existantes seulement) ;
+//    depuis le 02/11/2026, le nombre de combats vient de plan.js (XP_ANNEXES) et le niveau de l'étape de l'événement (les
+//    courses, sans niveau : celui de l'étape principale après laquelle elles s'ouvrent, ouverture.json)
+const OUV = JSON.parse(fs.readFileSync(__dirname + '/ouverture.json', 'utf8')).etapes;
+const nivEv = id => { const ev = PL.H.EVENTS.find(e => e.id === id); if (!ev) return 0;
+  const n = PL.niveauEtape(ev.quete, Math.max(1, ev.etape || 0)); if (n) return n;
+  const o = (OUV[ev.quete] || [])[Math.max(0, (ev.etape || 1) - 1)]; if (!o) return 0; const [q, st] = o.split('#'); return PL.niveauEtape(q, +st); };
+const XP = Object.fromEntries(Object.entries(PL.XP_ANNEXES).map(([id, n]) => [id, [nivEv(id), n]]).filter(([, [niv]]) => niv > 0));
 let nx = 0;
 for (const [id, [niv, n]] of Object.entries(XP)) {
-  const a = s.indexOf(`{ id: '${id}',`); if (a < 0) continue;
-  const b = s.indexOf('] },', a), v = Math.min(65535, n * R.expOf(niv));
+  const a = s.search(new RegExp(`\\{ id: ['"]${esc(id)}['"],`)); if (a < 0) continue;
+  const b = s.indexOf('] },', a), v = Math.min(65535, Math.round(n * R.expOf(niv) / 10) * 10);
   s = s.slice(0, a) + s.slice(a, b).replace(/'(\s*)experience \d+'/g, (m, sp) => { nx++; return `'${sp}experience ${v}'`; }) + s.slice(b);
 }
 
-// 4. Table EQUILIBRE : fiches des ennemis de la bibliothèque qui ne sont pas dans PERSOS
+// 4. Table EQUILIBRE : fiches des ennemis de la bibliothèque qui ne sont pas dans PERSOS ; true : légende de l'après-jeu
+//    (sans zone, retirée des rencontres)
 const dans = new Set([...np.matchAll(/\{ nom: '((?:[^'\\]|\\.)*)'/g)].map(m => m[1].replace(/\\'/g, "'")));
-const lignes = Object.entries(F).filter(([nom]) => !dans.has(nom)).map(([nom, f]) => `    '${jsName(nom)}': [${f.lvl}, ${f.hp}, ${f.atk}${f.rang === 'hardcore' ? ', true' : ''}],   // ${f.rang}`);
+const lignes = Object.entries(F).filter(([nom]) => !dans.has(nom)).map(([nom, f]) => `    '${jsName(nom)}': [${f.lvl}, ${f.hp}, ${f.atk}${f.rang === 'hardcore' ? ', true' : ''}],   // ${f.rang}${f.niv && f.niv !== f.lvl ? ', étalonné au niveau ' + f.niv : ''}`);
 const table = `TilesetGen.Histoire.EQUILIBRE = {\n${lignes.join('\n').replace(/,(\s*\/\/[^\n]*)$/, '$1')}\n};`;
+if (!/TilesetGen\.Histoire\.EQUILIBRE = \{[\s\S]*?\n\};/.test(s)) throw new Error('EQUILIBRE introuvable');
 s = s.replace(/TilesetGen\.Histoire\.EQUILIBRE = \{[\s\S]*?\n\};/, table);
-fs.writeFileSync(P, crlf ? s.replace(/\n/g, '\r\n') : s);
-console.log(`${nf} fiches, ${ne} étapes, ${nx} récompenses, ${lignes.length} fiches de la bibliothèque`);
+
+// Bilan : rien d'autre ne doit changer que les lignes des fiches, des niveaux corrigés, des récompenses et de la table
+const la = avant.split('\n'), lb = s.split('\n');
+let diff = 0; for (let i = 0; i < Math.max(la.length, lb.length); i++) if (la[i] !== lb[i]) diff++;
+const sortie = essai ? P.replace(/\.js$/, '.essai.js') : P;
+fs.writeFileSync(sortie, crlf ? s.replace(/\n/g, '\r\n') : s);
+console.log(`${nf} fiches de PERSOS (${nl} niveaux de fiche changés), ${ne} niveaux d'étape changés (${nt} « Niveau N conseillé »), ${nx} récompenses, ${lignes.length} fiches de la bibliothèque (EQUILIBRE) ; ${diff} lignes changées (${la.length} → ${lb.length}) → ${sortie}`);

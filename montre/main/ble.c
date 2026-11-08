@@ -20,6 +20,7 @@ static const ble_rappels_t *R;
 static uint16_t conn = BLE_HS_CONN_HANDLE_NONE;
 static uint16_t h_action, h_etat, h_batt;
 static bool rapide = true, demarre;
+static int raison;   /* de la dernière déconnexion (journal de diagnostic de montre.c) */
 static uint8_t batt = 100;
 static char etat_txt[32] = "100\x1f" "0\x1f" "1";
 static uint8_t own_addr_type;
@@ -117,6 +118,7 @@ static int evenement_gap(struct ble_gap_event *e, void *arg) {
         break;
     case BLE_GAP_EVENT_DISCONNECT:
         ESP_LOGI(TAG, "téléphone déconnecté (%d)", e->disconnect.reason);
+        raison = e->disconnect.reason;
         conn = BLE_HS_CONN_HANDLE_NONE;
         if (R && R->connexion) R->connexion(false);
         diffuser();
@@ -182,6 +184,7 @@ void ble_arreter(void) {
 }
 
 bool ble_connecte(void) { return conn != BLE_HS_CONN_HANDLE_NONE; }
+int ble_raison(void) { return raison; }
 
 void ble_diffusion_rapide(bool oui) {
     if (oui == rapide) return;

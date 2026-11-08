@@ -38,10 +38,13 @@ static int mus_read_web(uint32_t off, void *dst, uint32_t len) {
 }
 EXPORT("web_music") void web_music(const uint8_t *p, int len) { mus = p; mus_n = (uint32_t)len; eng_music_attach(mus_n, mus_read_web); }
 
-EXPORT("web_init") int web_init(const uint8_t *pak, int len) {
+/* joystick : 1 pour les commandes de conduite d'un seul doigt au départ (page pour PC : la souris n'a qu'un pointeur ;
+   eng_config_t.joystick) ; la page de la montre ne le passe pas (0) */
+EXPORT("web_init") int web_init(const uint8_t *pak, int len, int joystick) {
     fb = malloc(sizeof(uint32_t) * S * S);
     if (!fb) return -1;
     eng_config_t cfg = { 0, alloc_web, js_save_write, js_save_read, NULL, NULL, NULL };
+    cfg.joystick = joystick;
     return eng_init(pak, (size_t)len, &cfg);
 }
 

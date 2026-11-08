@@ -17,6 +17,7 @@ typedef struct {
 void ble_demarrer(const ble_rappels_t *r);
 void ble_arreter(void);
 bool ble_connecte(void);
+int ble_raison(void);   /* raison de la dernière déconnexion (0x208 : supervision, le lien perdu ; 0x213 : le téléphone) */
 /* Diffusion : rapide (100 ms) après un réveil, lente (1 s) en veille */
 void ble_diffusion_rapide(bool oui);
 /* Montre → téléphone : ACTION (appel:repondre, notif:effacer:<id>, trouver...) ; ETAT et batterie à jour */

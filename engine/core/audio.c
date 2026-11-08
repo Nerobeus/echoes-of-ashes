@@ -48,14 +48,25 @@ void audio_load(const uint8_t *p, uint32_t size) {
     }
 }
 static int son_ok(int son) { return son >= 0 && (son < nsons || son == SON_SIRENE) && S[son].pcm; }
-/* Paquet d'avant les sons de SON_TIR à SON_MOTEUR_REACTEUR : le son le plus proche parmi les anciens */
+/* Paquet d'avant les sons de SON_TIR à SON_PAS_MECH : le son le plus proche parmi les anciens */
 static const uint8_t REPLI[SON_N - SON_TIR] = { SON_EXPLOSION, SON_TECHNIQUE, SON_COUP, SON_EXPLOSION, SON_EXPLOSION, SON_COUP,
     SON_TECHNIQUE, SON_TECHNIQUE, SON_COUP, SON_EXPLOSION, SON_COUP, SON_ATTAQUE, SON_TECHNIQUE, SON_CHOC, SON_MENU, SON_MENU,
-    SON_PORTIERE, SON_MOTEUR_VOITURE, SON_MOTEUR_VOITURE, SON_MOTEUR_CAMION, SON_MOTEUR_VAISSEAU, SON_MOTEUR_VAISSEAU };
+    SON_PORTIERE, SON_MOTEUR_VOITURE, SON_MOTEUR_VOITURE, SON_MOTEUR_CAMION, SON_MOTEUR_VAISSEAU, SON_MOTEUR_VAISSEAU, SON_CHOC };
 static int repli(int son) { return son >= SON_TIR && son < SON_N && !son_ok(son) ? REPLI[son - SON_TIR] : son; }
 
 void eng_set_volume(float v) { general = v < 0 ? 0 : v > 1 ? 1 : v; }
 float eng_volume(void) { return general; }
+
+/* Mixage : niveau de chaque canal (audio.h), réglé dans SYSTÈME › SON et gardé dans la sauvegarde ; un son est rangé
+   dans son canal d'après son numéro (canalDe de l'émulateur) */
+static float canal[CANAUX] = { 1, 1, 1, 1 };
+void audio_canal(int c, float v) { if (c >= 0 && c < CANAUX) canal[c] = v < 0 ? 0 : v > 1 ? 1 : v; }
+float audio_canal_niveau(int c) { return c >= 0 && c < CANAUX ? canal[c] : 1; }
+static int canal_de(int son) {
+    if (son <= SON_MOTEUR_VAISSEAU || (son >= SON_MOTEUR_MOTO && son <= SON_MOTEUR_REACTEUR)) return CANAL_MOTEURS;
+    if (son == SON_BIP || son == SON_MENU || son == SON_VALIDER || son == SON_ANNULER) return CANAL_INTERFACE;
+    return CANAL_EFFETS;
+}
 
 /* Une voix libre, sinon la plus faible des voix ponctuelles */
 static voix_t *libre(void) {
@@ -114,6 +125,7 @@ void eng_audio_mix(int16_t *out, int n, int rate) {
         const son_t *s = &S[v->son];
         if (!s->pcm) { v->actif = 0; continue; }
         const uint32_t fin = s->n << 16, pas = (uint32_t)(v->hauteur * (float)s->rate / (float)rate * 65536.0f);
+        const float g = general * canal[canal_de(v->son)];
         float vol = v->vol;
         for (int k = 0; k < n; k++) {
             const float c = v->cible;
@@ -122,7 +134,7 @@ void eng_audio_mix(int16_t *out, int n, int rate) {
             const int a = s->pcm[v->pos >> 16];
             const int b = s->pcm[(v->pos >> 16) + 1 < s->n ? (v->pos >> 16) + 1 : (s->boucle ? 0 : v->pos >> 16)];
             const float x = a + (b - a) * (float)(v->pos & 0xFFFF) / 65536.0f;
-            int m = out[k] + (int)(x * vol * general);
+            int m = out[k] + (int)(x * vol * g);
             out[k] = (int16_t)(m > 32767 ? 32767 : m < -32768 ? -32768 : m);
             v->pos += pas;
             if (v->pos >= fin) {
@@ -132,5 +144,5 @@ void eng_audio_mix(int16_t *out, int n, int rate) {
         }
         v->vol = vol;
     }
-    music_mix(out, n, rate, general);
+    music_mix(out, n, rate, general * canal[CANAL_MUSIQUE]);
 }

@@ -1,7 +1,7 @@
 // Rythme sur la trame du document : heures par acte → combats (part du temps en combat, ~45 s par combat), niveau de
 // l'équipe à la fin de chaque acte, avec la règle des rencontres (min(N, L + 1) − 0..2) et l'XP des boss (× 4)
 const R = require('./regles.js');
-const A = +(process.env.A || 14), B = +(process.env.B || 0.12), exp_next = L => Math.round((A + B * L) * R.expOf(L));
+const A = +(process.env.A || 15), B = +(process.env.B || 0.1), exp_next = L => Math.round((A + B * L) * R.expOf(L));   // exp_next de battle.c par défaut
 const ACTES = [['Prologue', 2, 5], ['Acte I', 8, 18], ['Acte II', 9, 32], ['Acte III', 8, 45], ['Acte IV', 7, 54], ['Acte V', 6, 60]];
 function partie(parHeure, annexes, farm) {
   let L = 1, xp = 0, t = 0; const out = [];

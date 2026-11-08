@@ -23,8 +23,11 @@ MONTRE du menu SYSTÈME, rangée MONTRE du menu des applications), le PC DOS (to
 ## Pages et gestes
 
 Glisser à gauche ou à droite : NOTIFICATIONS · CADRAN · APPS · RÉGLAGES. Toucher : agir. Le doigt ne rallume pas
-l'écran : PWR ou BOOT (appui court) l'allument ou l'éteignent ; une notification ou un appel le rallument (avec BT EN
-VEILLE). Interface commune avec le menu du PC DOS : `commun/ui_montre/` (dessin, polices, thème, et `pages.c` : pages
+l'écran ni une notification ni un appel (bandeau seulement écran allumé). PWR ou BOOT l'éteignent d'un appui court ; pour
+l'allumer, il faut les tenir 0,1 s (`REVEIL_TENU_MS` ; 0,3 s jugé trop long ; la veille profonde, elle, se réveille à
+tout appui de PWR). Chaque réveil revient au cadran, dessiné à l'heure et envoyé avant l'affichage (`lcd_sortir_veille`, puis
+`lcd_afficher` : plus d'image d'avant la veille). Rallumée par un bouton et pas touchée, elle se rendort après
+5 s (`REVEIL_BREF_S`, le temps de lire l'heure) ; le premier toucher rend la veille des RÉGLAGES. Interface commune avec le menu du PC DOS : `commun/ui_montre/` (dessin, polices, thème, et `pages.c` : pages
 glissées, toucher, appui long, glissé vertical des listes), compilée dans les deux projets. Pendant un glissé, chaque
 page est dessinée une fois dans une image en PSRAM puis recopiée décalée à chaque pas (redessiner une page coûtait
 24 ms par image : glissés saccadés) ; doigt posé, lu toutes les 2 ms.
@@ -53,7 +56,10 @@ PSRAM, appairage « just works » avec liaison gardée ; diffusion lente (1 s) �
 **Veille** (écran éteint par PWR, BOOT ou l'inactivité) : sans BT EN VEILLE, Bluetooth coupé puis **veille profonde**
 (`dormir_profond`) : réglages écrits, AMOLED en SLPIN avec son reset tenu, reset du tactile tenu, amplificateur tenu
 coupé (GPIO46), réveil par **PWR seulement** (BOOT est une broche d'amorçage : tenu au réveil, il mettrait la puce en
-mode téléchargement), puis redémarrage sur le cadran (environ une demi-seconde). Restent alimentés : la puce en veille
+mode téléchargement), puis redémarrage sur le cadran (environ une demi-seconde). Toutes les autres sources de réveil sont
+retirées avant (`esp_sleep_disable_wakeup_source`) : la veille légère automatique laissait armée la minuterie de sa
+dernière attente, et jusqu'au 02/11/2026 la montre se réveillait quelques secondes après chaque veille profonde, écran
+allumé pour toute la veille réglée, en boucle ; un réveil qui ne vient pas de PWR la rendort sans allumer l'écran. Restent alimentés : la puce en veille
 profonde (RTC et ext0), l'AMOLED en veille, le tactile CST9217 (pas de commande de veille envoyée), la carte microSD au
 repos, le codec ES8311 non initialisé, l'IMU non initialisée, l'AXP2101. Câble USB d'un PC branché : pas de veille
 profonde (le port série reste), écran éteint et Bluetooth coupé. Avec BT EN VEILLE : l'ancienne veille légère
@@ -66,7 +72,10 @@ profonde (ou veille légère avec BT EN VEILLE) ; l'écran n'est initialisé qu'
 Fréquence dynamique 40 à 160 MHz et veille légère automatique (`CONFIG_PM_ENABLE`, tickless idle) : la tâche attend
 40 ms (écran allumé) ou 250 ms (éteint) entre deux tours ; le cadran est redessiné une fois par seconde, les autres
 pages seulement quand quelque chose change ; Bluetooth en veille de modem, horloge lente sur l'oscillateur interne (pas
-de quartz 32 kHz sur la 1,75" C). Consommation à mesurer.
+de quartz 32 kHz sur la 1,75" C ; Espressif le dit trop imprécis pour une connexion, mais le quartz principal gardé
+allumé en veille légère consomme davantage : écarté le 02/11/2026, l'économie d'énergie passe d'abord). Journal de
+diagnostic provisoire : `/sd/montre/journal.txt` (démarrages et leur raison, allumages de l'écran, liens du téléphone
+et raison de chaque déconnexion). Consommation à mesurer.
 
 ## Stockage USB
 

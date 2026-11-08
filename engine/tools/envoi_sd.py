@@ -53,6 +53,18 @@ def ouvrir(port, attente=30):
             time.sleep(0.5)
 
 
+def lancer_echoes(port):
+    """--echoes : démarrage sur Echoes (l'app montre ne lit pas le protocole : l'envoi resterait bloqué sur l'écriture). Juste
+    avant d'ouvrir le lien : un Echoes qui ne peut pas démarrer n'attend la copie que 10 s (echec_demarrage de main.c)"""
+    import subprocess
+    espressif = os.path.join(os.environ.get('ECHOES_IDF', r'D:\Documents\Tuxdroid\esp32-dos-project'))
+    idf = os.environ.get('IDF_PATH') or os.path.join(espressif, 'esp-idf')
+    py = os.path.join(espressif, '.espressif', 'python_env', 'idf5.2_py3.10_env', 'Scripts', 'python.exe')
+    subprocess.run([py, os.path.join(idf, 'components', 'app_update', 'otatool.py'), '-p', port, 'switch_ota_partition', '--name', 'echoes'],
+                   env=dict(os.environ, IDF_PATH=idf), check=True, stdout=subprocess.DEVNULL)
+    print('Echoes lancé sur la montre', flush=True)
+
+
 class Lien:
     journal = False   # -v : lignes du journal de la carte affichées
 
@@ -98,6 +110,10 @@ class Lien:
                     if m.startswith('SDX M '):
                         _, _, nom, taille, emp = m.split()
                         man[nom] = (int(taille), emp)
+                # Les SDX? envoyés pendant que la carte démarrait ont chacun leur réponse : ces doublons sont lus ici
+                # (avant le 03/11/2026, une ligne « SDX M » en trop passait pour la réponse au SDX PUT qui suivait)
+                while self.ligne(0.5) is not None:
+                    pass
                 return dossier, int(libre), man
         sys.exit("la carte ne répond pas (firmware sans la copie par USB ? idf.cmd -p COMx flash)")
 
@@ -129,7 +145,17 @@ def flasher(port, chemin):
         sys.exit('flash du paquet léger impossible')
 
 
+EMPREINTES = {}
+
+
 def empreinte(chemin):
+    """Empreinte d'un fichier, calculée une fois (main la calcule avant d'ouvrir le lien, voir plus bas)"""
+    if chemin not in EMPREINTES:
+        EMPREINTES[chemin] = calculer_empreinte(chemin)
+    return EMPREINTES[chemin]
+
+
+def calculer_empreinte(chemin):
     h = hashlib.sha1()
     with open(chemin, 'rb') as f:
         for b in iter(lambda: f.read(1 << 20), b''):
@@ -147,6 +173,8 @@ def echec(lien, texte):
 def envoyer_fichier(lien, chemin, nom, taille, emp):
     lien.envoyer(f'SDX PUT {nom} {taille} {emp}')
     r = lien.ligne(20)
+    while r and (r.startswith(('SDX M ', 'SDX OK ')) or r == 'SDX .'):   # réponse en retard à un SDX? du bonjour
+        r = lien.ligne(20)
     if r != 'SDX PRET':
         echec(lien, f'{nom} : la carte refuse ({r})')
     t0 = t_aff = time.time()
@@ -190,6 +218,7 @@ def main():
     ap.add_argument('-v', action='store_true', help='afficher le journal de la carte et les temps')
     ap.add_argument('--flash', action='store_true', help='flasher le paquet léger même avec une liste de fichiers')
     ap.add_argument('--sans-flash', action='store_true', help='ne pas flasher le paquet léger')
+    ap.add_argument('--echoes', action='store_true', help="lancer Echoes sur la montre, une fois les empreintes calculées (l'app montre ne lit pas le protocole)")
     ap.add_argument('--heure', action='store_true', help="régler l'horloge de la montre seulement (elle l'est aussi à chaque envoi)")
     ap.add_argument('--wifi', nargs=2, metavar=('RESEAU', 'MOT_DE_PASSE'), help='réseau Wi-Fi du mode Transfert, gardé dans la montre')
     ap.add_argument('--transfert', action='store_true', help='redémarrer la montre en mode Transfert (Wi-Fi : heure et fichiers)')
@@ -199,6 +228,17 @@ def main():
     Lien.journal = a.v
 
     port = a.port or trouver_port()
+    # Empreintes des fichiers du dossier par défaut calculées avant d'ouvrir le lien (03/11/2026) : un Echoes qui ne
+    # peut pas démarrer (paquet léger flashé avant la copie du monde) n'attend la copie que 10 s (echec_demarrage de
+    # main.c) ; les empreintes de 420 Mo calculées après la réponse de la carte les dépassaient
+    if not (a.wifi or a.transfert or a.heure or a.pcdos):
+        avance = a.dossier or os.path.join(RACINE, 'data')
+        for nom in (a.fichiers or FICHIERS) + [LEGER]:
+            chemin = nom if os.path.isabs(nom) else os.path.join(avance, nom)
+            if os.path.isfile(chemin):
+                empreinte(chemin)
+    if a.echoes:
+        lancer_echoes(port)
     lien = Lien(ouvrir(port))
     if a.wifi or a.transfert:   # sans la carte SD : réglages du mode Transfert
         if a.wifi:

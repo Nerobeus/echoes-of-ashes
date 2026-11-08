@@ -71,7 +71,7 @@ if (autonome) {
 }
 
 // 1. Bibliothèques natives, deux par ABI : 3D doublée et 3D native
-const src = ['core/world.c', 'core/game.c', 'core/render.c', 'core/ui.c', 'core/hud.c', 'core/battle.c', 'core/script.c', 'core/audio.c', 'core/course.c', 'core/music.c', 'core/interieur.c', 'core/accueil.c', 'core/police.c', 'platform/android/main_android.c', 'platform/android/maj_android.c']
+const src = ['core/world.c', 'core/game.c', 'core/render.c', 'core/ui.c', 'core/hud.c', 'core/battle.c', 'core/script.c', 'core/audio.c', 'core/course.c', 'core/music.c', 'core/interieur.c', 'core/accueil.c', 'core/police.c', 'core/coffres.c', 'core/pilote.c', 'core/carte.c', 'core/carriere.c', 'core/garage.c', 'core/panneaux.c', 'core/repliques.c', 'core/arene.c', 'platform/android/main_android.c', 'platform/android/maj_android.c']
     .map(f => path.join(root, f)).concat(path.join(glue, 'android_native_app_glue.c'));
 const ABI = { 'arm64-v8a': 'aarch64-linux-android', 'armeabi-v7a': 'armv7a-linux-androideabi', ...(x86 ? { 'x86_64': 'x86_64-linux-android' } : {}) };
 for (const [abi, triple] of Object.entries(ABI)) {
@@ -137,6 +137,9 @@ run(path.join(java, 'bin', 'java.exe'), ['--enable-native-access=ALL-UNNAMED', '
     '--ks-key-alias', 'androiddebugkey', '--out', apk, aligne], { stdio: ['ignore', 'inherit', 'inherit'], timeout: 120000 });
 fs.rmSync(apk + '.idsig', { force: true });
 console.log(path.relative(root, apk) + ' ' + (fs.statSync(apk).size / 1048576).toFixed(1) + ' Mo' + (enfant ? ' (édition enfant)' : '') + (autonome ? ' (autonome)' : ''));
+// Dossier de travail effacé : il gardait le monde en trois copies de plus (assets/monde.pak, brut.apk, aligne.apk), soit
+// 5 Go pour cinq versions de l'app ; la construction suivante le refait de toute façon entièrement (début de ce script)
+fs.rmSync(out, { recursive: true, force: true });
 
 // Installation : l'appareil de ANDROID_SERIAL, sinon le premier qui n'est pas un émulateur (un émulateur ouvert à côté
 // d'un téléphone branché ne gêne pas), sinon le seul branché

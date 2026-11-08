@@ -6,7 +6,8 @@
  * et quartet haut de l'octet 2 (32 à 192), Y = octet 4 (36 à 180, petit en haut).
  *
  * État brut (boutons, stick ramené à -100..100), rangé dans un seul mot (lu par les autres tâches sans verrou) ; chaque
- * application en fait ses boutons (Game Boy : haut = A, clic = B, stick = croix). NimBLE en central (rôles central et observateur seulement, pile en PSRAM) :
+ * application en fait ses boutons (OK et RETOUR, A et B des consoles : clic du stick et bouton du haut, ou l'inverse
+ * selon manette_inverse ; stick = croix). NimBLE en central (rôles central et observateur seulement, pile en PSRAM) :
  * recherche active jusqu'à la balle (nom annoncé, ou appareil déjà appairé ; sans filtre des doublons, par tranches de 10 s), connexion, service, caractéristique et son
  * descripteur 0x2902, abonnement ; si la balle exige le chiffrement, appairage « just works » (liaison gardée en NVS),
  * puis abonnement refait. Ensuite, la batterie (service standard 0x180F, niveau en % 0x2A19) : lue, puis suivie en
@@ -24,6 +25,8 @@
  * commande 0b, réponse sur …e8 ; sans eux (autre balle), la légère vibration de la balle (activité 13, sans lumière ; rien pour le soin et le niveau).
  */
 #include <string.h>
+#include "esp_bt.h"
+#include "esp_heap_caps.h"
 #include "esp_log.h"
 #include "esp_timer.h"
 #include "freertos/FreeRTOS.h"
@@ -395,10 +398,48 @@ static void tache_hote(void *arg) {
 
 void ble_store_config_init(void);   /* store/config (pas d'en-tête public) */
 
+/* SRAM interne voulue par le contrôleur Bluetooth : 37 Ko pris dans Echoes, dont un bloc de 30 Ko (0x7800). S'il ne
+   les trouve pas, il ne rend pas d'erreur : « BLE_INIT: Malloc failed », assertion emi.c 164, puis chien de garde
+   (consoles, manette activée en jeu : la ROM avait pris la SRAM) ; on refuse donc avant, l'application redémarre et
+   démarre la manette avant la ROM. Marge : ce que la carte SD et l'écran prennent ensuite pour leur DMA */
+#define BT_SRAM_LIBRE (52 * 1024)
+#define BT_SRAM_BLOC (31 * 1024)
+
+/* Contrôleur gardé pendant une veille sur place (manette_veille, 08/11/2026) : initialisé mais désactivé, radio coupée,
+   sa SRAM reste à lui. Rendue puis redemandée au réveil, elle ne retrouvait plus son bloc de 30 Ko d'un seul tenant
+   depuis que le moteur prend de la SRAM après le Bluetooth (masque, profondeur et bande du cœur 1) : la balle ne
+   revenait pas après une veille à l'écran titre, en combat, en dialogue ou en course (pas de sauvegarde, donc pas de
+   retour à l'app montre) */
+static bool garde;
+
 bool manette_demarrer(void) {
     if (demarre) return true;
-    if (nimble_port_init() != ESP_OK) { ESP_LOGE(TAG, "NimBLE impossible (mémoire)"); return false; }
+#ifdef ENG_PROFILE
+    unsigned sram0 = 0, sram1 = 0;   /* mesure (firmware de profilage) : SRAM de chaque étape */
+#endif
+    bool repris = false;
+    if (garde) {   /* après une veille sur place : le contrôleur a gardé sa mémoire */
+        garde = false;
+        if (esp_bt_controller_enable(ESP_BT_MODE_BLE) != ESP_OK) { ESP_LOGE(TAG, "contrôleur Bluetooth : réactivation impossible"); esp_bt_controller_deinit(); }
+        else if (esp_nimble_init() != ESP_OK) { ESP_LOGE(TAG, "NimBLE : reprise impossible"); esp_bt_controller_disable(); esp_bt_controller_deinit(); }
+        else repris = true;
+    }
+    if (!repris) {
+        const size_t libre = heap_caps_get_free_size(MALLOC_CAP_INTERNAL), bloc = heap_caps_get_largest_free_block(MALLOC_CAP_INTERNAL);
+        if (libre < BT_SRAM_LIBRE || bloc < BT_SRAM_BLOC) {
+            ESP_LOGW(TAG, "SRAM interne insuffisante pour le Bluetooth : %u Ko libres, plus grand bloc %u Ko", (unsigned)(libre / 1024), (unsigned)(bloc / 1024));
+            return false;
+        }
+#ifdef ENG_PROFILE
+        sram0 = (unsigned)heap_caps_get_free_size(MALLOC_CAP_INTERNAL);
+#endif
+        if (nimble_port_init() != ESP_OK) { ESP_LOGE(TAG, "NimBLE impossible (mémoire)"); return false; }
+#ifdef ENG_PROFILE
+        sram1 = (unsigned)heap_caps_get_free_size(MALLOC_CAP_INTERNAL);
+#endif
+    }
     balle_lire();
+    manette_inverse();
     ble_hs_cfg.sync_cb = synchro;
     ble_hs_cfg.store_status_cb = ble_store_util_status_rr;
     ble_hs_cfg.sm_io_cap = BLE_HS_IO_NO_INPUT_OUTPUT;
@@ -412,28 +453,69 @@ bool manette_demarrer(void) {
     ble_store_config_init();
     demarre = true;
     nimble_port_freertos_init(tache_hote);
+#ifdef ENG_PROFILE
+    const unsigned sram2 = (unsigned)heap_caps_get_free_size(MALLOC_CAP_INTERNAL);
+    ESP_LOGI(TAG, "SRAM du Bluetooth : contrôleur et hôte %u octets, tâche de l'hôte et service %u octets", sram0 - sram1, sram1 - sram2);
+#endif
     ESP_LOGI(TAG, "recherche de la Poké Ball Plus (bouton du haut : elle clignote en blanc)");
     return true;
 }
 
-void manette_arreter(void) {
-    if (!demarre) return;
+/* Hôte arrêté (balle prévenue, LED éteinte) ; garder : contrôleur seulement désactivé, sinon rendu avec sa mémoire */
+static void arreter(bool garder) {
     demarre = false;
     if (connectee && perso && h_cmd) { jouer(ACT_ETEINT); vTaskDelay(pdMS_TO_TICKS(150)); }   /* LED éteinte avant de partir */
     if (conn != BLE_HS_CONN_HANDLE_NONE) ble_gap_terminate(conn, BLE_ERR_REM_USER_CONN_TERM);
     ble_gap_disc_cancel();
     nimble_port_stop();
-    nimble_port_deinit();
+    if (garder && esp_nimble_deinit() == ESP_OK && esp_bt_controller_disable() == ESP_OK) garde = true;
+    else if (garder) { ESP_LOGE(TAG, "veille : contrôleur Bluetooth non gardé"); esp_bt_controller_disable(); esp_bt_controller_deinit(); }
+    else nimble_port_deinit();
     conn = BLE_HS_CONN_HANDLE_NONE; connectee = false; batterie = -1; etat = ranger(0, 0, 0);
 }
+
+void manette_arreter(void) {
+    if (demarre) arreter(false);
+    else if (garde) { garde = false; esp_bt_controller_deinit(); }   /* coupée pendant qu'on la gardait : mémoire rendue */
+}
+
+void manette_veille(void) { if (demarre) arreter(true); }
 
 bool manette_active(void) { return demarre; }
 bool manette_connectee(void) { return connectee; }
 int manette_batterie(void) { return connectee ? batterie : -1; }
+/* OK et RETOUR inversés : lu une fois en NVS (au démarrage de la manette ou par la page des réglages), à côté de
+   l'adresse de la balle ; manette_etat ne lit pas la NVS (tâche de l'émulation) */
+static volatile int inverse = -1;
+static volatile int bloques;   /* boutons tenus au changement : ignorés jusqu'au relâchement (le bouton OK qui vient
+                                  d'inverser serait sinon pris aussitôt pour RETOUR et fermerait la page) */
+bool manette_inverse(void) {
+    if (inverse < 0) {
+        int v = 0;
+        nvs_handle_t h;
+        uint8_t u;
+        if (nvs_open("manette", NVS_READONLY, &h) == ESP_OK) { if (nvs_get_u8(h, "inverse", &u) == ESP_OK) v = !!u; nvs_close(h); }
+        inverse = v;
+    }
+    return inverse > 0;
+}
+void manette_inverser(bool oui) {
+    bloques = (int)(etat & 0xFF);
+    inverse = oui;
+    nvs_handle_t h;
+    if (nvs_open("manette", NVS_READWRITE, &h) != ESP_OK) return;
+    nvs_set_u8(h, "inverse", oui);
+    nvs_commit(h);
+    nvs_close(h);
+}
 manette_t manette_etat(void) {
     const uint32_t e = etat;
     if (!e) return (manette_t){ 0, 0, 0 };
-    return (manette_t){ (int)(e & 0xFF), (int)(e >> 8 & 0xFF) - 128, (int)(e >> 16 & 0xFF) - 128 };
+    int b = (int)(e & 0xFF);
+    const int bl = bloques;
+    if (bl) { const int tenus = bl & b; if (tenus != bl) bloques = tenus; b &= ~tenus; }
+    if (inverse > 0) b = (b & ~(MANETTE_HAUT | MANETTE_CLIC)) | (b & MANETTE_HAUT ? MANETTE_CLIC : 0) | (b & MANETTE_CLIC ? MANETTE_HAUT : 0);
+    return (manette_t){ b, (int)(e >> 8 & 0xFF) - 128, (int)(e >> 16 & 0xFF) - 128 };
 }
 int64_t manette_vue(void) { return vue; }
 void manette_mesure(int *trames, int *ecart_ms) { *trames = mes_n; *ecart_ms = mes_ecart / 1000; mes_n = 0; mes_ecart = 0; }

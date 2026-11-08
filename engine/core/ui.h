@@ -34,6 +34,8 @@ int ui_pts_count(void);
 void ui_present(void);                 /* la liste remplie devient celle que dessinent les bandes */
 extern int ui_ox, ui_oy;   /* origine du canevas de l'interface dans l'image (0, 0 : le canevas couvre l'image) */
 extern int ui_w, ui_h;     /* taille du canevas : 466 × 466, ou toute l'image en plein écran */
+extern int ui_img_w, ui_img_h;   /* taille de toute l'image (le canevas s'arrête aux marges du téléphone) */
+void ui_voile_image(uint16_t c, int alpha);   /* rectangle sur toute l'image, marges comprises, sans ui_translate */
 /* Décalage des opérations enregistrées ensuite (et des zones tactiles de hud.c) : cadre de 466 × 466 d'un écran pas
    encore refait pour le plein écran ; (0, 0) sinon */
 void ui_translate(float x, float y);
@@ -56,6 +58,8 @@ void ui_circle(float cx, float cy, float r, uint16_t c, int alpha);
 void ui_ring(float cx, float cy, float r, float w, uint16_t c, int alpha);
 /* Anneau dégradé de r0 (transparent) à r1 (alpha), en une passe : halos du bord de l'écran ; g2 : plus vite près du bord */
 void ui_halo(float cx, float cy, float r0, float r1, uint16_t c, int alpha, int g2);
+/* Plein écran (ENG_DYN) : halo des bords de toute l'image, marges comprises, épaisseur e (accélération en course) */
+void ui_halo_bord(float e, uint16_t c, int alpha);
 void ui_arc(float cx, float cy, float r, float a0, float a1, float w, uint16_t c, int alpha);   /* angles du canevas (0 = droite, sens horaire) */
 void ui_ellipse_ring(float cx, float cy, float rx, float ry, float w, uint16_t c, int alpha);
 /* Hexagone pointes à gauche et à droite, comme hexPath de l'émulateur */
@@ -71,7 +75,13 @@ float ui_text(const ui_font_t *f, float x, float y, int align, uint16_t c, int a
    (bottom = 0) les lettres vont vers l'extérieur et le texte tourne en sens horaire ; en bas (bottom = 1) elles vont
    vers le centre et le texte se lit de gauche à droite */
 void ui_text_arc(const ui_font_t *f, float cx, float cy, float r, float a, int bottom, uint16_t c, int alpha, const char *s);
+/* Filtre des textes (hud.c : noms échangés de l'héroïne choisie, nom_echange) : rend s, ou le texte filtré écrit dans
+   buf (cap octets). ui_text, ui_text_width, ui_fit et ui_text_arc l'appliquent ; NULL : aucun. Rend le précédent */
+typedef const char *(*ui_filtre_t)(const char *s, char *buf, int cap);
+ui_filtre_t ui_filtre(ui_filtre_t f);
 void ui_icon(const char *name, float cx, float cy, int size, uint16_t c, int alpha);
+/* Carte d'opacité donnée (pictogramme de la carte du menu), comme une icône : coin à (x0, y0) du centre */
+void ui_masque(const ui_mask_t *m, float cx, float cy, uint16_t c, int alpha);
 /* Image RGB565 (masque : 0 = transparent ; NULL : opaque), agrandie de s, découpée au disque (ccx, ccy, cr) */
 void ui_image(const uint16_t *px, const uint8_t *mask, int w, int h, float x, float y, float s, float ccx, float ccy, float cr);
 /* Même chose, opaque, depuis des couleurs RGB (3 octets par pixel) lues telles quelles : pas de copie en mémoire */
@@ -81,5 +91,7 @@ void ui_image_pal(const uint8_t *ix, const uint16_t *pal, int w, int h, float x,
 /* Cellule d'une planche de sprites : index (0 transparent) d'une cellule w × h dans des lignes de stride octets, palette
    pal, opacité a ; ix doit rester lisible jusqu'au dessin de l'image suivante (planche demandée par sheet_block) */
 void ui_sprite(const uint8_t *ix, int stride, const uint16_t *pal, int w, int h, float x, float y, float s, int a, float ccx, float ccy, float cr);
+/* L'image que l'appel précédent vient d'enregistrer se dessine retournée gauche-droite (carte du menu) */
+void ui_miroir(void);
 
 #endif
