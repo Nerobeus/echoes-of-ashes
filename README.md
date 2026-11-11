@@ -1,30 +1,39 @@
 # Le Chœur des Cendres
 
 *Formerly Echoes of Ashes.* A PS1-style RPG (textured 3D terrain, 2D sprite characters) running on a round smartwatch: the Waveshare
-ESP32-S3-Touch-AMOLED-1.75C (466 × 466 AMOLED). The same C99 engine also builds for the web (WebAssembly) and for
-Android (Wear OS watch and phone).
+ESP32-S3-Touch-AMOLED-1.75C (466 × 466 AMOLED). The same C99 engine also builds for the web (WebAssembly), for
+Android (Wear OS watch and phone) and for RetroFW handhelds (LDK Game, 320 × 240).
 
 This repository holds the engine, the watch firmware and the **safe edition** of the game world. Code comments and
 most notes are in French.
 
 ## Play
 
-Standalone builds of the safe edition are in the [release of 8 November 2026](https://github.com/Nerobeus/echoes-of-ashes/releases/tag/android-2026-11-08).
+Standalone builds of the safe edition are in the [release of 11 November 2026](https://github.com/Nerobeus/echoes-of-ashes/releases/tag/2026-11-11).
 Nothing to install and no server: everything is inside the file.
 
-- **PC**: [`le-choeur-des-cendres-pc-2026-11-08.html`](https://github.com/Nerobeus/echoes-of-ashes/releases/download/android-2026-11-08/le-choeur-des-cendres-pc-2026-11-08.html)
-  (152 MB), a single web page to open in a recent Chrome, Edge, Firefox or Safari. Mouse and keyboard (ZQSD or WASD,
+- **PC**: [`le-choeur-des-cendres-pc-2026-11-11.html`](https://github.com/Nerobeus/echoes-of-ashes/releases/download/2026-11-11/le-choeur-des-cendres-pc-2026-11-11.html)
+  (153 MB), a single web page to open in a recent Chrome, Edge, Firefox or Safari. Mouse and keyboard (ZQSD or WASD,
   arrows, Enter, Escape, M for the menu, H for the help); vehicles are driven with an on-screen joystick or the keyboard.
-- **Android phone**: [`le-choeur-des-cendres-android-2026-11-08.apk`](https://github.com/Nerobeus/echoes-of-ashes/releases/download/android-2026-11-08/le-choeur-des-cendres-android-2026-11-08.apk)
-  (261 MB, Android 9 or later).
-- **Wear OS watch**: [`le-choeur-des-cendres-wearos-2026-11-08.apk`](https://github.com/Nerobeus/echoes-of-ashes/releases/download/android-2026-11-08/le-choeur-des-cendres-wearos-2026-11-08.apk)
-  (259 MB, Wear OS 3 or later).
+- **Android phone**: [`le-choeur-des-cendres-android-2026-11-11.apk`](https://github.com/Nerobeus/echoes-of-ashes/releases/download/2026-11-11/le-choeur-des-cendres-android-2026-11-11.apk)
+  (262 MB, Android 9 or later).
+- **Wear OS watch**: [`le-choeur-des-cendres-wearos-2026-11-11.apk`](https://github.com/Nerobeus/echoes-of-ashes/releases/download/2026-11-11/le-choeur-des-cendres-wearos-2026-11-11.apk)
+  (260 MB, Wear OS 3 or later).
+- **RetroFW 2.3 (LDK Game)**, experimental: [`le-choeur-des-cendres-retrofw-2026-11-11.ipk`](https://github.com/Nerobeus/echoes-of-ashes/releases/download/2026-11-11/le-choeur-des-cendres-retrofw-2026-11-11.ipk)
+  (146 MB), to open from GMenuNX's file browser; or [`le-choeur-des-cendres-retrofw-2026-11-11.zip`](https://github.com/Nerobeus/echoes-of-ashes/releases/download/2026-11-11/le-choeur-des-cendres-retrofw-2026-11-11.zip)
+  (136 MB), to unzip at the root of the console's card (`games/choeur_enfant/` and its menu entry). The game shows up
+  in the Games section, full screen at 320 × 240. D-pad to run (hold Y to walk), A to talk and confirm, B to go back, START for
+  the menu, L and R to turn the camera; in a vehicle, R accelerates and L brakes. SELECT + START held for one second quits.
+  The menu entry asks for 600 MHz. Only tested on an LDK Game; the other JZ4760 handhelds that run RetroFW 2.3 should run it
+  too: RS-97 (all versions, RS-97 Plus included, lines doubled on its 320 × 480 screen), RG-300 and RG-300 IPS, LDK Landscape,
+  and, with the 320 × 240 image centred on their 480 × 272 screen, Retro Arcade Mini and PAP KIII Plus.
 
 How to install the APKs on a phone or a watch: [Installing on Android](https://github.com/Nerobeus/echoes-of-ashes/wiki/Installing-on-Android).
 
 ## Screenshots
 
 Rendered by the current engine (1 November 2026) at the watch's native resolution (466 × 466), interface included.
+The LDK Game version, at 320 × 240 (shown twice as large), is further down.
 
 <p align="center"><img src="screenshots/article/00_banniere.png" width="860" alt="Title screen, Lucerne at night, a race, a battle"></p>
 <p align="center">
@@ -51,6 +60,17 @@ Rendered by the current engine (1 November 2026) at the watch's native resolutio
   <img src="screenshots/article/02_introduction.png" width="210" alt="Prologue card">
 </p>
 
+On the LDK Game (RetroFW), 11 November 2026:
+
+<p align="center">
+  <img src="screenshots/article-2026-11-11/02_friches_quete.png" width="420" alt="Exploring the Wastes, a new quest">
+  <img src="screenshots/article-2026-11-11/03_lucerne_rue.png" width="420" alt="A street of Lucerne">
+</p>
+<p align="center">
+  <img src="screenshots/article-2026-11-11/06_combat_commandes.png" width="420" alt="A battle">
+  <img src="screenshots/article-2026-11-11/09_course_virage.png" width="420" alt="Racing on the neon circuit">
+</p>
+
 ## Contents
 
 | Folder | What |
@@ -59,6 +79,7 @@ Rendered by the current engine (1 November 2026) at the watch's native resolutio
 | `engine/platform/esp32` | ESP-IDF 5.2.3 firmware for the watch (CO5300 display by bands, touch, SD card, ES8311 audio, Poké Ball Plus controller over BLE) |
 | `engine/platform/web` | WebAssembly page |
 | `engine/platform/android` | NativeActivity app (watch and phone), no Java besides a settings screen |
+| `engine/platform/retrofw` | RetroFW 2.3 handhelds (LDK Game): a static MIPS32 binary without SDL (framebuffer, evdev, OSS), full screen 320 × 240 |
 | `engine/tools` | build scripts (web, Android), world packaging, SD transfer, test renderer (`rendu_test.c`), balancing simulator |
 | `engine/maquettes` | UI mock-ups |
 | `engine/data/enfant` | the game world, safe edition (Git LFS) |
@@ -89,6 +110,9 @@ All builds use the safe edition through their `--enfant` / `_enfant` variants:
   other apps (`montre/partitions.csv`) and is flashed with `montre/flasher.py`.
 - **Android**: `node engine/tools/build_android.js --telephone --enfant --autonome` for the phone, `--montre` instead of
   `--telephone` for a Wear OS watch (Android NDK, no Gradle; `--autonome`: world and music inside the APK).
+- **RetroFW**: `node engine/tools/build_retrofw.js --enfant` (Zig, `mipsel-linux-musleabihf -mcpu=mips32`, static) gives
+  `engine/build/retrofw/choeur_enfant.ipk` and `engine/build/retrofw/carte_sd/` to copy at the root of the card; `--simu`
+  also builds a PC simulator that writes the screen to BMP files from a script of button presses.
 
 ## Licence
 
