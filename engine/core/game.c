@@ -1179,6 +1179,10 @@ float eau_prof(float x, float z) {
 /* Hauteur de gué (m) du véhicule p de type t : gué renforcé sur celui de Sera */
 static float veh_gue(int p, int t) { return VEH_GUE[t] * (vk_monte(p, VK_GUE) ? VK_GUE_X : 1); }
 int veh_flotte(int p) { const int t = VEH_TYPE(E.w.persos[p].flags); return t >= VEH_VOITURE && t <= VEH_MECH && veh_rolls(p) && vk_monte(p, VK_FLOTTEURS); }
+/* À la surface de l'eau : ce qui plane, le véhicule à flotteurs et, sur l'île, tout bateau, « roule » coché ou non (11/11/2026, retour de
+   l'utilisateur : la barque du prologue était posée au fond, ce qui ne se voyait pas tant que le lagon n'avait que quelques centimètres
+   d'eau ; vehSurface de l'émulateur de l'île ; Echoes inchangé) */
+int veh_surface(int p) { return !veh_rolls(p) || veh_flotte(p) || (E.w.ile[0] && VEH_TYPE(E.w.persos[p].flags) == VEH_BATEAU); }
 /* Véhicule p noyé en (x, z) : il roule (voiture, camion, mech) et un lac ou la mer y dépasse sa hauteur de gué */
 int veh_noye(int p, float x, float z) {
     const int t = VEH_TYPE(E.w.persos[p].flags);

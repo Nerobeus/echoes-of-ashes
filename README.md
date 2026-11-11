@@ -13,8 +13,10 @@ Standalone builds of the safe edition are in the [release of 11 November 2026](h
 Nothing to install and no server: everything is inside the file.
 
 - **PC**: [`le-choeur-des-cendres-pc-2026-11-11.html`](https://github.com/Nerobeus/echoes-of-ashes/releases/download/2026-11-11/le-choeur-des-cendres-pc-2026-11-11.html)
-  (153 MB), a single web page to open in a recent Chrome, Edge, Firefox or Safari. Mouse and keyboard (ZQSD or WASD,
-  arrows, Enter, Escape, M for the menu, H for the help); vehicles are driven with an on-screen joystick or the keyboard.
+  (153 MB), a single web page to open in a recent Chrome, Edge, Firefox or Safari. Full screen and widescreen, with a
+  PC-only renderer: 3D resolution from 854 × 480 to 1920 × 1080 (automatic by default: it follows the window and the speed
+  of the PC), twice the view distance, depth of field, a 32-bit depth buffer. Keyboard keys can be changed in the Keys
+  window (two keys per action, kept in the browser); the mouse clicks like a finger. H opens the help.
 - **Android phone**: [`le-choeur-des-cendres-android-2026-11-11.apk`](https://github.com/Nerobeus/echoes-of-ashes/releases/download/2026-11-11/le-choeur-des-cendres-android-2026-11-11.apk)
   (262 MB, Android 9 or later).
 - **Wear OS watch**: [`le-choeur-des-cendres-wearos-2026-11-11.apk`](https://github.com/Nerobeus/echoes-of-ashes/releases/download/2026-11-11/le-choeur-des-cendres-wearos-2026-11-11.apk)
@@ -104,7 +106,9 @@ git clone https://github.com/Nerobeus/echoes-of-ashes.git
 All builds use the safe edition through their `--enfant` / `_enfant` variants:
 
 - **Web**: `node engine/tools/build_web.js --enfant` (C compiled with Zig: `python -m ziglang cc`) gives
-  `engine/build/moteur_enfant.html`; `--pc --enfant` gives the standalone PC page, `engine/build/choeur_pc_enfant.html`.
+  `engine/build/moteur_enfant.html`; `--pc --enfant` gives the standalone PC page, `engine/build/choeur_pc_enfant.html`
+  (rectangular screen, `ENG_RECT` with `ENG_PREMIUM`: resolution chosen at run time, view distance doubled, depth of field
+  and 32-bit depth; `engine/tools/verifier_pc.js` checks it in a headless Chrome).
 - **Watch**: ESP-IDF 5.2.3, `engine/platform/esp32/idf_enfant.cmd build`; the world goes on the SD card
   (`/sd/echoes_enfant/`), the light package (`monde_esp32.pak`) in flash. The watch uses a partition table shared with
   other apps (`montre/partitions.csv`) and is flashed with `montre/flasher.py`.

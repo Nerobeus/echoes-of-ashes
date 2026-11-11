@@ -29,10 +29,20 @@
 #ifndef ENG_RECT
 #define ENG_RECT 0
 #endif
+/* Version premium pour PC (ENG_PREMIUM=1 avec ENG_RECT=1 : tools/build_web.js --pc, 11/11/2026, demandes de l'utilisateur :
+   « augmenter la définition du jeu pour la version PC », « plus de distance d'affichage, du flou comme dans l'app Android,
+   une meilleure précision du z buffer, bref une version premium ») : 3D à la définition de l'image, choisie par la page
+   (eng_set_screen, ENG_W × ENG_H_PX au plus), l'interface de la montre à sa taille au milieu (ENG_SCALE 1, sans ENG_UI_NATIF),
+   distance de vue du téléphone (VUE_K 2 de render.c), profondeur sur 32 bits (render.c : zcle_t, ZS), flou de profondeur
+   (ENG_DOF : eng_render_band_3d, puis le flou de la plateforme, puis eng_render_band_ui), sans les compromis de la LDK
+   (ENG_RECT_OPT 0 : perspective exacte tous les 16 pixels) */
+#ifndef ENG_PREMIUM
+#define ENG_PREMIUM 0
+#endif
 /* Interface de l'écran rectangulaire dessinée directement en ENG_W × ENG_H_PX (ui.c : coordonnées converties à
    l'enregistrement, glyphes moyennés 2 × 2 au dessin) ; 0 : dessinée en ENG_IMG_W × ENG_IMG_H sur la 3D doublée, puis réduite */
 #ifndef ENG_UI_NATIF
-#define ENG_UI_NATIF ENG_RECT
+#define ENG_UI_NATIF (ENG_RECT && !ENG_PREMIUM)
 #endif
 #if ENG_RECT
 #ifndef ENG_W
@@ -63,14 +73,14 @@
 #if ENG_DYN
 #define ENG_SCALE 1
 #elif ENG_RECT
-#define ENG_SCALE 2
+#define ENG_SCALE (ENG_PREMIUM ? 1 : 2)   /* (premium : la 3D à la définition de l'image) */
 #else
 #define ENG_SCALE (ENG_SCREEN / ENG_W) /* 2 : pixels doublés, 1 : rendu natif */
 #endif
 /* Image native (ce que dessinent les bandes) : l'écran rond de 466, ou l'image rectangulaire doublée */
 #if ENG_RECT
-#define ENG_IMG_W (2 * ENG_W)
-#define ENG_IMG_H (2 * ENG_H_PX)
+#define ENG_IMG_W (ENG_SCALE * ENG_W)
+#define ENG_IMG_H (ENG_SCALE * ENG_H_PX)
 #else
 #define ENG_IMG_W ENG_SCREEN
 #define ENG_IMG_H ENG_SCREEN
@@ -229,13 +239,15 @@ void eng_render_band_on(int worker, int y0, int h, uint16_t *dst, int x0, int x1
    ENG_IMG_W × ENG_NATIVE_BAND pixels de travail */
 void eng_render_band_rect(int y0, int h, uint16_t *dst, uint16_t *tmp);
 #endif
-#if ENG_DYN
-/* Plein écran : taille de l'image (paire, bornée à ENG_W × ENG_H_PX), avant eng_init ; l'interface ronde de 466 × 466
+#if ENG_DYN || ENG_PREMIUM
+/* Plein écran : taille de l'image (paire, bornée à ENG_W × ENG_H_PX), avant eng_init (version PC premium : à tout moment) ; l'interface ronde de 466 × 466
    est centrée, les touchers restent donnés en pixels de l'image */
 void eng_set_screen(int w, int h);
 void eng_screen_size(int *w, int *h);
+#if ENG_DYN
 /* Marges des barres du système, en pixels de l'image (après eng_set_screen) : l'interface se place entre elles */
 void eng_set_safe(int haut, int bas);
+#endif
 /* 3D des lignes [y0, y0 + h) sur toute la largeur (h ≤ ENG_NATIVE_BAND), dans dst, et la profondeur de chaque pixel
    dans depth (facultative ; 255 : ciel, voir eng_focus_depth), par le fil worker (0 à ENG_WORKERS - 1) ; puis
    l'interface des mêmes lignes par-dessus l'image (floutée entre-temps) */

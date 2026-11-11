@@ -2,72 +2,253 @@
 <html lang="fr"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
 <title>Le Chœur des Cendres</title>
 <!-- Version autonome pour PC (node tools/build_web.js --pc [--enfant]) : un seul fichier, ouvert d'un double-clic, sans
-     serveur. Moteur C en WebAssembly (3D native 466 × 466), monde et musiques compressés en gzip dans la page,
-     décompressés par le navigateur (DecompressionStream). Commandes de conduite : le joystick d'un doigt au départ. -->
+     serveur. Moteur C en WebAssembly, écran rectangulaire en version premium (ENG_RECT, ENG_PREMIUM : 3D à la définition
+     choisie dans Réglages, de 640 × 360 à 1920 × 1080, distance de vue doublée, profondeur sur 32 bits, flou de profondeur
+     comme l'app Android ; l'interface de la montre au milieu), agrandi sur toute la fenêtre ; monde et musiques compressés
+     en gzip dans la page (DecompressionStream). Réglages gardés dans ce navigateur (« echoes-pc-reglages »).
+     Commandes (11/11/2026, demande de l'utilisateur : « une version plein écran rectangle pour PC avec commande clavier
+     personnalisable ») : actions du jeu (ACTIONS, bits de web_frame_pc de main_web.c), deux touches chacune, choisies dans
+     la fenêtre Touches, gardées dans ce navigateur (« echoes-pc-touches ») ; la souris clique comme un doigt. -->
 <style>
-:root{--bg:#07060c;--fg:#e8f6ff;--dim:#8a93a8;--line:#2a2540;--c1:#22e4ff;--c2:#ff4fb0;color-scheme:dark}
+:root{--bg:#000;--panneau:#0d0c18;--fg:#e8f6ff;--dim:#8a93a8;--line:#2a2540;--c1:#22e4ff;--c2:#ff4fb0;color-scheme:dark}
 *{box-sizing:border-box}
 html,body{margin:0;height:100%;background:var(--bg);color:var(--fg);font:14px "Segoe UI",system-ui,sans-serif;overflow:hidden}
-#scene{position:fixed;inset:0;display:grid;place-items:center;background:radial-gradient(circle at 50% 45%,#141224 0,var(--bg) 70%)}
-canvas{display:block;border-radius:50%;background:#000;touch-action:none;box-shadow:0 0 0 2px #1b2a3a,0 0 48px rgba(34,228,255,.12)}
+#scene{position:fixed;inset:0;display:grid;place-items:center;background:#000}
+canvas{display:block;background:#000;touch-action:none}
 canvas.net{image-rendering:pixelated}
-.barre{position:fixed;top:12px;right:12px;display:flex;gap:8px}
-button{font:12px ui-monospace,"Cascadia Mono",monospace;letter-spacing:.08em;background:rgba(10,12,22,.8);color:var(--fg);border:1px solid var(--line);border-radius:4px;padding:7px 11px;cursor:pointer}
+#ips{position:fixed;left:10px;top:8px;font:12px ui-monospace,"Cascadia Mono",monospace;color:var(--c1);text-shadow:0 1px 2px #000;pointer-events:none;display:none}
+.reglage{display:grid;grid-template-columns:1fr auto;gap:6px 14px;align-items:center;padding:8px 0;border-top:1px solid #1a1830}
+.reglage label{color:var(--fg)}
+select{font:13px "Segoe UI",system-ui,sans-serif;background:#07060c;color:var(--fg);border:1px solid var(--line);border-radius:4px;padding:5px 8px}
+input[type=checkbox]{width:18px;height:18px;accent-color:var(--c1)}
+.barre{position:fixed;top:12px;right:12px;display:flex;gap:8px;transition:opacity .4s}
+.barre.cachee{opacity:0;pointer-events:none}
+button{font:12px ui-monospace,"Cascadia Mono",monospace;letter-spacing:.06em;background:rgba(10,12,22,.82);color:var(--fg);border:1px solid var(--line);border-radius:4px;padding:7px 11px;cursor:pointer}
 button:hover{border-color:var(--c1);color:var(--c1)}
 button:focus-visible{outline:2px solid var(--c1);outline-offset:1px}
-#aide{position:fixed;inset:0;display:none;place-items:center;background:rgba(4,4,10,.72);padding:16px}
-#aide.ouverte{display:grid}
-.carte{max-width:560px;width:100%;max-height:calc(100vh - 32px);overflow:auto;background:#0d0c18;border:1px solid var(--line);border-top:2px solid var(--c1);border-radius:6px;padding:20px 22px}
+.voile{position:fixed;inset:0;display:none;place-items:center;background:rgba(0,0,6,.74);padding:16px}
+.voile.ouverte{display:grid}
+.carte{max-width:640px;width:100%;max-height:calc(100vh - 32px);overflow:auto;background:var(--panneau);border:1px solid var(--line);border-top:2px solid var(--c1);border-radius:6px;padding:20px 22px}
 h1{margin:0 0 4px;font-size:22px;letter-spacing:.04em}
 h2{margin:18px 0 8px;font-size:12px;letter-spacing:.14em;text-transform:uppercase;color:var(--c1)}
 .sous{margin:0;color:var(--dim);font-size:13px}
 dl{display:grid;grid-template-columns:max-content 1fr;gap:6px 14px;margin:0}
 dt{font:12px ui-monospace,"Cascadia Mono",monospace;color:var(--fg);white-space:nowrap}
 dd{margin:0;color:var(--dim)}
-kbd{font:11px ui-monospace,monospace;border:1px solid var(--line);border-bottom-width:2px;border-radius:3px;padding:1px 5px;color:var(--fg)}
+kbd{font:11px ui-monospace,monospace;border:1px solid var(--line);border-bottom-width:2px;border-radius:3px;padding:1px 5px;color:var(--fg);margin-right:3px}
 .note{margin:14px 0 0;color:var(--dim);font-size:12px}
-.fin{display:flex;justify-content:flex-end;margin-top:16px}
+.fin{display:flex;justify-content:flex-end;gap:8px;margin-top:16px;flex-wrap:wrap}
 #etat{position:fixed;left:0;right:0;bottom:14px;text-align:center;color:var(--dim);font:12px ui-monospace,monospace;pointer-events:none}
+table{width:100%;border-collapse:collapse}
+th{text-align:left;font-weight:normal;color:var(--dim);font-size:12px;padding:0 0 6px}
+td{padding:4px 0;border-top:1px solid #1a1830;vertical-align:middle}
+td:first-child{padding-right:10px}
+.nom{color:var(--fg)}
+.detail{display:block;color:var(--dim);font-size:12px}
+.case{display:inline-flex;align-items:center;gap:2px;margin-right:6px}
+.touche{min-width:96px;text-align:center}
+.touche.vide{color:var(--dim)}
+.touche.attente{border-color:var(--c2);color:var(--c2)}
+.effacer{padding:7px 8px;color:var(--dim)}
+#message{min-height:18px;margin:10px 0 0;color:var(--c2);font-size:12px}
+@media (max-width:560px){.touche{min-width:72px}.case{margin:2px 4px 2px 0}}
 </style></head><body>
-<div id="scene"><canvas id="ecran" width="466" height="466" aria-label="Écran du jeu"></canvas></div>
-<div class="barre" role="group" aria-label="Affichage">
-  <button type="button" id="baide">Aide (H)</button>
+<div id="scene"><canvas id="ecran" width="640" height="360" aria-label="Écran du jeu"></canvas></div>
+<p id="ips" aria-live="off"></p>
+<div class="barre" id="barre" role="group" aria-label="Affichage">
+  <button type="button" id="baide">Aide</button>
+  <button type="button" id="breglages">Réglages</button>
+  <button type="button" id="btouches">Touches</button>
   <button type="button" id="bplein">Plein écran</button>
 </div>
 <p id="etat">Chargement du monde…</p>
-<div id="aide" role="dialog" aria-modal="true" aria-labelledby="titre-aide"><div class="carte">
+
+<div class="voile" id="aide" role="dialog" aria-modal="true" aria-labelledby="titre-aide"><div class="carte">
   <h1 id="titre-aide">Le Chœur des Cendres</h1>
-  <p class="sous">Version pour PC, dans le navigateur. Même moteur que la montre et le téléphone.</p>
+  <p class="sous">Version pour PC, dans le navigateur, en plein écran. Même moteur que la montre, le téléphone et la LDK Game.</p>
+  <h2>Clavier</h2>
+  <dl id="aide-touches"></dl>
   <h2>Souris</h2>
   <dl>
-    <dt>Clic au sol</dt><dd>Sera s'y rend ; bouton maintenu : elle suit le pointeur (loin d'elle, elle court)</dd>
-    <dt>Bord du cercle</dt><dd>glisser pour tourner la caméra</dd>
-    <dt>Clic sur une bulle</dt><dd>parler, monter dans un véhicule, entrer</dd>
-    <dt>Double-clic sur Sera</dt><dd>menu</dd>
-    <dt>Joystick</dt><dd>en véhicule, cercle sous le véhicule : cliquer dessus puis glisser (vers le haut avancer, sur les côtés braquer, vers le bas freiner et reculer)</dd>
+    <dt>Clic au sol</dt><dd>l'héroïne s'y rend ; bouton maintenu : elle suit le pointeur</dd>
+    <dt>Clic sur une bulle, un bouton</dt><dd>parler, monter dans un véhicule, entrer, choisir</dd>
   </dl>
-  <h2>Clavier</h2>
-  <dl>
-    <dt><kbd>Z</kbd><kbd>Q</kbd><kbd>S</kbd><kbd>D</kbd> ou flèches</dt><dd>se déplacer, conduire (<kbd>W</kbd><kbd>A</kbd><kbd>S</kbd><kbd>D</kbd> en QWERTY)</dd>
-    <dt><kbd>A</kbd> <kbd>E</kbd></dt><dd>tourner la caméra (<kbd>Q</kbd> <kbd>E</kbd> en QWERTY)</dd>
-    <dt><kbd>Entrée</kbd> <kbd>Espace</kbd></dt><dd>parler, valider</dd>
-    <dt><kbd>Échap</kbd></dt><dd>retour</dd>
-    <dt><kbd>M</kbd></dt><dd>menu</dd>
-    <dt><kbd>R</kbd> <kbd>F</kbd></dt><dd>vaisseau : monter, descendre</dd>
-    <dt><kbd>H</kbd></dt><dd>cette aide</dd>
-  </dl>
-  <p class="note">Menu SYSTÈME › COMMANDES : JOYSTICK (un doigt ou la souris) ou DOUBLES (écran tactile, deux pouces : gaz à gauche, volant à droite). Les parties sont gardées dans ce navigateur : effacer les données du site les efface.</p>
-  <div class="fin"><button type="button" id="bjouer">Jouer</button></div>
+  <p class="note">La définition de l'image et le flou se règlent dans la fenêtre Réglages, les touches dans la fenêtre Touches. Les parties et les touches sont gardées dans ce navigateur : effacer les données du site les efface.</p>
+  <div class="fin"><button type="button" id="ballertouches">Changer les touches</button><button type="button" id="bjouer">Jouer</button></div>
 </div></div>
+
+<div class="voile" id="touches" role="dialog" aria-modal="true" aria-labelledby="titre-touches"><div class="carte">
+  <h1 id="titre-touches">Touches</h1>
+  <p class="sous">Cliquez sur une case, puis appuyez sur la touche voulue. Deux touches par action ; × efface une case. Une touche déjà prise par une autre action lui est retirée.</p>
+  <table><thead><tr><th>Action</th><th>Touches</th></tr></thead><tbody id="liste-touches"></tbody></table>
+  <p id="message" role="status"></p>
+  <div class="fin"><button type="button" id="bdefaut">Touches d'origine</button><button type="button" id="bfermer">Fermer</button></div>
+</div></div>
+
+<div class="voile" id="reglages" role="dialog" aria-modal="true" aria-labelledby="titre-reglages"><div class="carte">
+  <h1 id="titre-reglages">Réglages</h1>
+  <p class="sous">Plus la définition est haute, plus l'image est fine, et plus le processeur travaille : baissez-la si le jeu saccade.</p>
+  <h2>Image</h2>
+  <div class="reglage"><label for="rdef">Définition de la 3D</label><select id="rdef">
+    <option value="auto">Automatique (selon la fenêtre et la vitesse du PC)</option>
+    <option value="854x480">854 × 480</option>
+    <option value="960x540">960 × 540</option>
+    <option value="1280x720">1280 × 720</option>
+    <option value="1600x900">1600 × 900</option>
+    <option value="1920x1080">1920 × 1080</option>
+  </select></div>
+  <div class="reglage"><label for="rflou">Flou de profondeur</label><input type="checkbox" id="rflou"></div>
+  <div class="reglage"><label for="rips">Images par seconde (en haut à gauche)</label><input type="checkbox" id="rips"></div>
+  <div class="fin"><button type="button" id="bdefreg">Réglages d'origine</button><button type="button" id="bfermerreg">Fermer</button></div>
+</div></div>
+
 <script id="wasm" type="application/octet-stream">@@WASM@@</script>
 <script id="pak" type="application/octet-stream">@@PAK_GZ@@</script>
 <script id="musique" type="application/octet-stream">@@MUSIQUE_GZ@@</script>
 <script>
 (async () => {
-  const etat = document.getElementById('etat');
-  // Base64 décodé par morceaux de 4 Mo dans un tableau de la bonne taille, puis texte de la balise rendu
-  const b64 = id => {
-    const el = document.getElementById(id), t = el.textContent.trim();
+  const $ = id => document.getElementById(id);
+  const etat = $('etat');
+
+  // ---------- Actions et touches ----------
+  // bit : celui de web_frame_pc (main_web.c) ; page : action de la page, pas du jeu. Codes physiques des touches
+  // (KeyW = Z en AZERTY, W en QWERTY) : les mêmes places sur tous les claviers
+  const ACTIONS = [
+    { id: 'haut', nom: 'Haut', detail: 'courir, choisir ; en véhicule : accélérer', bit: 1, defaut: ['KeyW', 'ArrowUp'] },
+    { id: 'bas', nom: 'Bas', detail: 'en véhicule : freiner, reculer', bit: 2, defaut: ['KeyS', 'ArrowDown'] },
+    { id: 'gauche', nom: 'Gauche', detail: 'en véhicule : braquer', bit: 4, defaut: ['KeyA', 'ArrowLeft'] },
+    { id: 'droite', nom: 'Droite', detail: '', bit: 8, defaut: ['KeyD', 'ArrowRight'] },
+    { id: 'pas', nom: 'Au pas', detail: 'tenu : marcher au lieu de courir ; en véhicule : gaz à moitié', bit: 8192, defaut: ['ShiftLeft', ''] },
+    { id: 'ok', nom: 'Valider', detail: 'parler, entrer, monter dans un véhicule', bit: 16, defaut: ['Enter', 'Space'] },
+    { id: 'retour', nom: 'Retour', detail: 'revenir ; hors des menus : ouvrir le menu', bit: 32, defaut: ['Escape', 'Backspace'] },
+    { id: 'menu', nom: 'Menu', detail: 'ouvrir le menu, pause en course', bit: 64, defaut: ['@m', 'Tab'] },
+    { id: 'cam_g', nom: 'Caméra à gauche', detail: 'tourner la caméra ; carte du menu : zoom', bit: 128, defaut: ['KeyQ', ''] },
+    { id: 'cam_d', nom: 'Caméra à droite', detail: '', bit: 256, defaut: ['KeyE', ''] },
+    { id: 'gaz', nom: 'Accélérer', detail: 'en véhicule, comme une gâchette (en plus de Haut)', bit: 512, defaut: ['', ''] },
+    { id: 'frein', nom: 'Freiner', detail: 'en véhicule, comme une gâchette (en plus de Bas)', bit: 1024, defaut: ['', ''] },
+    { id: 'monter', nom: 'Monter', detail: 'vaisseau', bit: 2048, defaut: ['@r', ''] },
+    { id: 'descendre', nom: 'Descendre', detail: 'vaisseau', bit: 4096, defaut: ['@f', ''] },
+    { id: 'aide', nom: 'Aide', detail: 'cette page', page: true, defaut: ['@h', 'F1'] },
+    { id: 'plein', nom: 'Plein écran', detail: 'ou F11 du navigateur', page: true, defaut: ['@p', ''] }
+  ];
+  const CLE = 'echoes-pc-touches';
+  // Libellés : ceux du clavier de la machine quand le navigateur les donne (Chrome, Edge : getLayoutMap), sinon celui de la
+  // touche appuyée gardé avec elle, sinon d'après son code
+  const NOMS = { ArrowUp: '↑', ArrowDown: '↓', ArrowLeft: '←', ArrowRight: '→', Enter: 'Entrée', NumpadEnter: 'Entrée (pavé)', Space: 'Espace',
+    Escape: 'Échap', Backspace: 'Retour arrière', Tab: 'Tab', ShiftLeft: 'Maj gauche', ShiftRight: 'Maj droite', ControlLeft: 'Ctrl gauche',
+    ControlRight: 'Ctrl droite', AltLeft: 'Alt', AltRight: 'Alt Gr', CapsLock: 'Verr. maj', Delete: 'Suppr', Insert: 'Inser', Home: 'Origine',
+    End: 'Fin', PageUp: 'Page préc.', PageDown: 'Page suiv.', ContextMenu: 'Menu contextuel' };
+  let carte = null;
+  try { if (navigator.keyboard && navigator.keyboard.getLayoutMap) carte = await navigator.keyboard.getLayoutMap(); } catch (e) {}
+  const libelle = (code, vu) => {
+    if (!code) return '';
+    if (NOMS[code]) return NOMS[code];
+    const l = carte && carte.get(code);
+    if (l) return l.toUpperCase();
+    if (vu) return vu;
+    if (/^Key[A-Z]$/.test(code)) return code.slice(3);
+    if (/^Digit\d$/.test(code)) return code.slice(5);
+    if (/^Numpad/.test(code)) return code.replace('Numpad', 'Pavé ');
+    return code;
+  };
+  // touches[id] = [{ code, vu }, { code, vu }] ; par défaut, « @m » : la touche qui porte la lettre m sur ce clavier (M est à la place
+  // de la virgule du QWERTY en AZERTY), à défaut sa place en QWERTY ; les autres : leur place (ZQSD en AZERTY = WASD en QWERTY)
+  const lettre = l => { if (carte) for (const [c, v] of carte) if (v === l) return c; return 'Key' + l.toUpperCase(); };
+  const defauts = () => Object.fromEntries(ACTIONS.map(a => [a.id, a.defaut.map(c => ({ code: c.startsWith('@') ? lettre(c.slice(1)) : c, vu: '' }))]));
+  let touches = defauts();
+  try {
+    const g = JSON.parse(localStorage.getItem(CLE) || 'null');
+    if (g && g.v === 1) for (const a of ACTIONS) if (Array.isArray(g.t[a.id])) touches[a.id] = [0, 1].map(i => ({ code: (g.t[a.id][i] || {}).code || '', vu: (g.t[a.id][i] || {}).vu || '' }));
+  } catch (e) {}
+  const garder = () => { try { localStorage.setItem(CLE, JSON.stringify({ v: 1, t: touches })); } catch (e) {} };
+  // Code -> actions (bits du jeu, actions de la page)
+  let parCode = new Map();
+  const indexer = () => {
+    parCode = new Map();
+    for (const a of ACTIONS) for (const t of touches[a.id]) if (t.code) parCode.set(t.code, a);
+  };
+  indexer();
+
+  // ---------- Fenêtres : aide, touches ----------
+  const aide = $('aide'), fen = $('touches'), freg = $('reglages');
+  const ouverte = () => aide.classList.contains('ouverte') || fen.classList.contains('ouverte') || freg.classList.contains('ouverte');
+  // Barre des boutons : cachée en jeu, revient quand la souris bouge
+  let barreT = 0;
+  const barreMontrer = () => { $('barre').classList.remove('cachee'); clearTimeout(barreT); barreT = setTimeout(() => { if (!ouverte()) $('barre').classList.add('cachee'); }, 2500); };
+  addEventListener('pointermove', barreMontrer);
+  let souris = null;   // bouton de la souris tenu sur l'écran : { id, p } (plus bas)
+  const aideRemplir = () => {
+    const dl = $('aide-touches');
+    dl.textContent = '';
+    for (const a of ACTIONS) {
+      const ks = touches[a.id].filter(t => t.code);
+      if (!ks.length) continue;
+      const dt = document.createElement('dt'), dd = document.createElement('dd');
+      for (const t of ks) { const k = document.createElement('kbd'); k.textContent = libelle(t.code, t.vu); dt.appendChild(k); }
+      dd.textContent = a.nom + (a.detail ? ' : ' + a.detail : '');
+      dl.append(dt, dd);
+    }
+  };
+  let attente = null;   // { id, i } : case qui attend une touche
+  const message = t => { $('message').textContent = t || ''; };
+  const listeRemplir = () => {
+    const tb = $('liste-touches');
+    tb.textContent = '';
+    for (const a of ACTIONS) {
+      const tr = document.createElement('tr'), t1 = document.createElement('td'), t2 = document.createElement('td');
+      const n = document.createElement('span'); n.className = 'nom'; n.textContent = a.nom; t1.appendChild(n);
+      if (a.detail) { const d = document.createElement('span'); d.className = 'detail'; d.textContent = a.detail; t1.appendChild(d); }
+      for (let i = 0; i < 2; i++) {
+        const c = document.createElement('span'); c.className = 'case';
+        const b = document.createElement('button'), t = touches[a.id][i];
+        b.type = 'button'; b.className = 'touche';
+        const att = attente && attente.id === a.id && attente.i === i;
+        b.textContent = att ? 'Appuyez…' : t.code ? libelle(t.code, t.vu) : '—';
+        if (att) b.classList.add('attente'); else if (!t.code) b.classList.add('vide');
+        b.setAttribute('aria-label', a.nom + ', touche ' + (i + 1) + ' : ' + (t.code ? libelle(t.code, t.vu) : 'aucune'));
+        b.onclick = () => { attente = att ? null : { id: a.id, i }; message(attente ? 'Appuyez sur la touche pour « ' + a.nom + ' »' : ''); listeRemplir(); };
+        const x = document.createElement('button');
+        x.type = 'button'; x.className = 'effacer'; x.textContent = '×'; x.title = 'Effacer'; x.setAttribute('aria-label', 'Effacer la touche ' + (i + 1) + ' de ' + a.nom);
+        x.onclick = () => { touches[a.id][i] = { code: '', vu: '' }; attente = null; garder(); indexer(); message(''); listeRemplir(); };
+        c.append(b, x); t2.appendChild(c);
+      }
+      tr.append(t1, t2); tb.appendChild(tr);
+    }
+  };
+  const assigner = (e) => {
+    const a = ACTIONS.find(x => x.id === attente.id), code = e.code, vu = e.key && e.key.length === 1 ? e.key.toUpperCase() : '';
+    let retiree = '';
+    for (const b of ACTIONS) touches[b.id].forEach((t, i) => { if (t.code === code && !(b.id === a.id && i === attente.i)) { touches[b.id][i] = { code: '', vu: '' }; if (b.id !== a.id) retiree = b.nom; } });
+    touches[a.id][attente.i] = { code, vu };
+    attente = null; garder(); indexer();
+    message(retiree ? '« ' + libelle(code, vu) + ' » retirée de « ' + retiree + ' »' : '');
+    listeRemplir();
+  };
+  const fenetre = (f, on) => {
+    f.classList.toggle('ouverte', on);
+    if (f === fen) { attente = null; message(''); if (on) listeRemplir(); }
+    if (f === aide) { if (on) aideRemplir(); else { try { localStorage.setItem('echoes-pc-aide', '1'); } catch (e) {} } }
+    barreMontrer();
+  };
+  $('baide').onclick = () => fenetre(aide, !aide.classList.contains('ouverte'));
+  $('bjouer').onclick = () => fenetre(aide, false);
+  $('ballertouches').onclick = () => { fenetre(aide, false); fenetre(fen, true); };
+  $('btouches').onclick = () => fenetre(fen, !fen.classList.contains('ouverte'));
+  $('bfermer').onclick = () => fenetre(fen, false);
+  $('breglages').onclick = () => fenetre(freg, !freg.classList.contains('ouverte'));
+  $('bfermerreg').onclick = () => fenetre(freg, false);
+  $('bdefaut').onclick = () => { touches = defauts(); attente = null; garder(); indexer(); message('Touches d\'origine remises'); listeRemplir(); };
+  for (const f of [aide, fen, freg]) f.addEventListener('pointerdown', e => { if (e.target === f) fenetre(f, false); });
+  const plein = () => document.fullscreenElement ? document.exitFullscreen() : document.documentElement.requestFullscreen().catch(() => {});
+  $('bplein').onclick = plein;
+  let vue = false;
+  try { vue = localStorage.getItem('echoes-pc-aide') === '1'; } catch (e) {}
+  if (!vue) fenetre(aide, true);
+
+
+  // ---------- Chargement ----------
+  const b64 = id => {   // base64 décodé par morceaux de 4 Mo dans un tableau de la bonne taille, puis texte de la balise rendu
+    const el = $(id), t = el.textContent.trim();
     if (!t) return null;
     const n = t.length / 4 * 3 - (t.endsWith('==') ? 2 : t.endsWith('=') ? 1 : 0), o = new Uint8Array(n);
     for (let i = 0, j = 0; i < t.length; i += 1 << 22) {
@@ -80,26 +261,12 @@ kbd{font:11px ui-monospace,monospace;border:1px solid var(--line);border-bottom-
   const gunzip = async b => new Uint8Array(await new Response(new Blob([b]).stream().pipeThrough(new DecompressionStream('gzip'))).arrayBuffer());
   const pause = () => new Promise(r => setTimeout(r, 30));   // laisse le texte d'état s'afficher
   if (!window.DecompressionStream || !window.WebAssembly) { etat.textContent = 'Navigateur trop ancien : Chrome, Edge, Firefox ou Safari récent requis'; return; }
-
-  // Aide : ouverte au premier lancement, puis par H ou le bouton
-  const aide = document.getElementById('aide');
-  let vue = false;
-  try { vue = localStorage.getItem('echoes-pc-aide') === '1'; } catch (e) {}
-  const montrer = on => { aide.classList.toggle('ouverte', on); if (!on) { try { localStorage.setItem('echoes-pc-aide', '1'); } catch (e) {} } };
-  document.getElementById('baide').onclick = () => montrer(!aide.classList.contains('ouverte'));
-  document.getElementById('bjouer').onclick = () => montrer(false);
-  aide.addEventListener('pointerdown', e => { if (e.target === aide) montrer(false); });
-  if (!vue) montrer(true);
-  document.getElementById('bplein').onclick = () => document.fullscreenElement ? document.exitFullscreen() : document.documentElement.requestFullscreen().catch(() => {});
-
   await pause();
   let pak;
   try { pak = await gunzip(b64('pak')); } catch (e) { etat.textContent = 'Monde illisible (' + e.message + ')'; return; }
   etat.textContent = 'Démarrage du moteur…'; await pause();
-  const cv = document.getElementById('ecran'), ctx = cv.getContext('2d'), img = ctx.createImageData(466, 466);
   let X = null;
-  // Sauvegardes : emplacements dans le stockage local du navigateur
-  const env = {
+  const env = {   // sauvegardes : emplacements dans le stockage local du navigateur
     js_save_write: (slot, ptr, len) => {
       try { const a = new Uint8Array(X.memory.buffer, ptr, len); let s = ''; for (let i = 0; i < a.length; i++) s += String.fromCharCode(a[i]);
         localStorage.setItem('echoes-pc-sauve-' + slot, btoa(s)); return len; } catch (e) { return -1; }
@@ -116,24 +283,60 @@ kbd{font:11px ui-monospace,monospace;border:1px solid var(--line);border-bottom-
   if (X._initialize) X._initialize();
   const pp = X.web_alloc(pak.length);
   new Uint8Array(X.memory.buffer, pp, pak.length).set(pak);
-  if (X.web_init(pp, pak.length, 1) !== 0) { etat.textContent = 'Paquet refusé par le moteur'; return; }   // 1 : joystick au départ
+  if (X.web_init(pp, pak.length, 0) !== 0) { etat.textContent = 'Paquet refusé par le moteur'; return; }
   pak = null;
-  // Musiques : copiées dans la mémoire du module (lues de là comme sur la carte SD)
-  try {
+  try {   // musiques : copiées dans la mémoire du module (lues de là comme sur la carte SD)
     const mz = b64('musique');
     if (mz) { const m = await gunzip(mz), p = X.web_alloc(m.length); if (p) { new Uint8Array(X.memory.buffer, p, m.length).set(m); X.web_music(p, m.length); } }
   } catch (e) {}
   etat.textContent = '';
 
-  // Taille : la plus grande qui tient ; à partir du double, un multiple entier en pixels nets, sinon lissée
+  // ---------- Réglages : définition de la 3D, flou de profondeur, images par seconde ----------
+  const REG = 'echoes-pc-reglages', REG_DEF = { def: 'auto', flou: true, ips: false };
+  let reg = Object.assign({}, REG_DEF);
+  try { Object.assign(reg, JSON.parse(localStorage.getItem(REG) || '{}')); } catch (e) {}
+  const regGarder = () => { try { localStorage.setItem(REG, JSON.stringify(reg)); } catch (e) {} };
+  const WMAX = X.web_dim(5), HMAX = X.web_dim(6), ECH = X.web_dim(4);   // ECH : échelle de l'image des clics (1 en premium)
+  // Automatique : la taille de la fenêtre en pixels de l'écran, ses proportions gardées, dans 1920 × 1080 au plus, réduite d'autoK
+  // tant que les images prennent trop de temps (11/11/2026 : en 1280 × 720 avec le flou, 34 ms par image, le navigateur tournait à
+  // plein) : vérifié toutes les deux secondes (boucle), plus de AUTO_LENT ms en moyenne : × 0,85 ; moins de AUTO_VITE : × 1,1
+  const AUTO_LENT = 17, AUTO_VITE = 11;
+  let autoK = 0.75;
+  const definition = () => {
+    if (reg.def !== 'auto') { const [w, h] = reg.def.split('x').map(Number); return [w, h]; }
+    let w = innerWidth * (devicePixelRatio || 1), h = innerHeight * (devicePixelRatio || 1);
+    const kmax = Math.min(1, WMAX / w, HMAX / h), kmin = Math.min(kmax, 480 / h);   // (480 lignes au moins : le cadre de l'interface)
+    autoK = Math.max(autoK, kmin / kmax);
+    const k = kmax * autoK;   // proportions de la fenêtre toujours gardées
+    return [Math.max(640, Math.round(w * k)), Math.max(480, Math.round(h * k))];
+  };
+
+  // ---------- Écran : l'image du moteur, agrandie sur toute la fenêtre (proportions gardées) ----------
+  const cv = $('ecran'), ctx = cv.getContext('2d');
+  let W = 0, H = 0, img = null;
   const taille = () => {
-    const dispo = Math.max(200, Math.min(innerWidth, innerHeight) - 32), k = Math.floor(dispo / 466), s = k >= 2 ? k * 466 : dispo;
-    cv.style.width = cv.style.height = s + 'px';
-    cv.classList.toggle('net', k >= 2);
+    const [dw, dh] = definition();
+    if (X.web_definition) X.web_definition(dw, dh);
+    const w = X.web_dim(0), h = X.web_dim(1);
+    if (w !== W || h !== H) { W = w; H = h; cv.width = W; cv.height = H; img = ctx.createImageData(W, H); }
+    const k = Math.min(innerWidth / W, innerHeight / H), e = k >= 1 && Math.abs(k - Math.round(k)) < 0.04 ? Math.round(k) : k;
+    cv.style.width = Math.floor(W * e) + 'px'; cv.style.height = Math.floor(H * e) + 'px';
+    cv.classList.toggle('net', e >= 2 && Number.isInteger(e));   // pixels nets si l'image est agrandie d'un nombre entier de fois
   };
   addEventListener('resize', taille); taille();
+  const regAppliquer = () => {
+    $('rdef').value = reg.def; $('rflou').checked = reg.flou; $('rips').checked = reg.ips;
+    if (X.web_flou) X.web_flou(reg.flou ? 1 : 0);
+    $('ips').style.display = reg.ips ? 'block' : 'none';
+    taille();
+  };
+  $('rdef').onchange = () => { reg.def = $('rdef').value; regGarder(); regAppliquer(); };
+  $('rflou').onchange = () => { reg.flou = $('rflou').checked; regGarder(); regAppliquer(); };
+  $('rips').onchange = () => { reg.ips = $('rips').checked; regGarder(); regAppliquer(); };
+  $('bdefreg').onclick = () => { reg = Object.assign({}, REG_DEF); regGarder(); regAppliquer(); };
+  regAppliquer();
 
-  // Son : démarré au premier geste (les navigateurs l'exigent) ; la page tire les échantillons du moteur par blocs
+  // ---------- Son : démarré au premier geste (les navigateurs l'exigent) ----------
   let audio = null;
   const startAudio = () => {
     if (audio) { if (audio.state === 'suspended') audio.resume(); return; }
@@ -149,43 +352,63 @@ kbd{font:11px ui-monospace,monospace;border:1px solid var(--line);border-bottom-
   };
   addEventListener('pointerdown', startAudio); addEventListener('keydown', startAudio);
 
-  // Clavier (codes physiques : ZQSD en AZERTY = WASD en QWERTY)
-  const keys = new Set();
-  const KB = { KeyW: 1, ArrowUp: 1, KeyS: 2, ArrowDown: 2, KeyA: 4, ArrowLeft: 4, KeyD: 8, ArrowRight: 8, KeyQ: 16, KeyE: 32, Enter: 64, Space: 64, Escape: 128, KeyM: 256, KeyR: 512, KeyF: 1024 };
+  // ---------- Clavier ----------
+  const tenues = new Set();
   addEventListener('keydown', e => {
-    if (e.code === 'KeyH' && !e.repeat) { montrer(!aide.classList.contains('ouverte')); return; }
-    if (aide.classList.contains('ouverte')) { if (e.code === 'Escape' || e.code === 'Enter') montrer(false); e.preventDefault(); return; }
-    if (KB[e.code] && !e.ctrlKey && !e.altKey && !e.metaKey) { keys.add(e.code); e.preventDefault(); }
+    if (attente) {   // une case de la fenêtre Touches attend une touche
+      if (['MetaLeft', 'MetaRight'].includes(e.code)) return;
+      e.preventDefault(); assigner(e); return;
+    }
+    const a = parCode.get(e.code);
+    if (ouverte()) {
+      if (!e.repeat && (e.code === 'Escape' || (a && a.id === 'aide' && aide.classList.contains('ouverte')))) { fenetre(aide, false); fenetre(fen, false); fenetre(freg, false); e.preventDefault(); }
+      return;
+    }
+    if (!a || e.ctrlKey || e.altKey || e.metaKey) return;
+    e.preventDefault();
+    if (a.page) { if (!e.repeat) { if (a.id === 'aide') fenetre(aide, true); else if (a.id === 'plein') plein(); } return; }
+    tenues.add(e.code);
   });
-  addEventListener('keyup', e => keys.delete(e.code));
-  addEventListener('blur', () => { keys.clear(); fingers.clear(); });
+  addEventListener('keyup', e => tenues.delete(e.code));
+  addEventListener('blur', () => { tenues.clear(); souris = null; });
 
-  // Pointeur : la souris (bouton gauche) ou deux doigts au plus, en pixels de l'écran 466
-  const fingers = new Map();
-  const pos = e => { const r = cv.getBoundingClientRect(); return [(e.clientX - r.left) / r.width * 466, (e.clientY - r.top) / r.height * 466]; };
+  // ---------- Souris : un doigt, en pixels de l'image (doublée sur la LDK : ECH ; le moteur convertit dans le repère de l'interface) ----------
+  const pos = e => { const r = cv.getBoundingClientRect(); return [(e.clientX - r.left) / r.width * W * ECH, (e.clientY - r.top) / r.height * H * ECH]; };
   cv.addEventListener('pointerdown', e => {
     if (e.pointerType === 'mouse' && e.button !== 0) return;
     cv.setPointerCapture(e.pointerId); e.preventDefault();
-    if (fingers.size < 2) fingers.set(e.pointerId, pos(e));
+    souris = { id: e.pointerId, p: pos(e) };
   });
-  cv.addEventListener('pointermove', e => { if (fingers.has(e.pointerId)) fingers.set(e.pointerId, pos(e)); });
-  const lift = e => fingers.delete(e.pointerId);
-  cv.addEventListener('pointerup', lift); cv.addEventListener('pointercancel', lift);
+  cv.addEventListener('pointermove', e => { if (souris && souris.id === e.pointerId) souris.p = pos(e); });
+  const lacher = e => { if (souris && souris.id === e.pointerId) souris = null; };
+  cv.addEventListener('pointerup', lacher); cv.addEventListener('pointercancel', lacher);
   cv.addEventListener('contextmenu', e => e.preventDefault());
 
-  // Boucle : 60 images par seconde au plus (écrans à 120 ou 144 Hz : le moteur ne tourne pas plus vite pour rien)
-  let last = performance.now(), prochaine = 0;
+  // ---------- Boucle : 60 images par seconde au plus ----------
+  let last = performance.now(), prochaine = 0, ipsN = 0, ipsT = last, ipsMs = 0;
   const loop = now => {
     requestAnimationFrame(loop);
     if (now < prochaine) return;
     prochaine = Math.max(prochaine + 1000 / 60, now - 1000 / 60);
     const dt = Math.min(0.1, (now - last) / 1000); last = now;
-    let k = 0;
-    if (!aide.classList.contains('ouverte')) keys.forEach(c => k |= KB[c]);
-    const f = aide.classList.contains('ouverte') ? [] : [...fingers.values()];
-    X.web_frame(dt, now / 1000, k, f.length > 0, f[0] ? f[0][0] : 0, f[0] ? f[0][1] : 0, f.length > 1, f[1] ? f[1][0] : 0, f[1] ? f[1][1] : 0);
-    img.data.set(new Uint8Array(X.memory.buffer, X.web_fb(), 466 * 466 * 4));
+    let bits = 0;
+    if (!ouverte()) tenues.forEach(c => { const a = parCode.get(c); if (a && a.bit) bits |= a.bit; });
+    const s = !ouverte() && souris;
+    const t0 = performance.now();
+    X.web_frame_pc(dt, now / 1000, bits, s ? 1 : 0, s ? s.p[0] : 0, s ? s.p[1] : 0);
+    img.data.set(new Uint8Array(X.memory.buffer, X.web_fb(), W * H * 4));
     ctx.putImageData(img, 0, 0);
+    ipsMs += performance.now() - t0; ipsN++;
+    if (reg.def === 'auto' && now - ipsT >= 1000 && ipsN > 10) {   // automatique : la définition suit la vitesse du PC
+      const ms = ipsMs / ipsN, avant = autoK;
+      if (ms > AUTO_LENT) autoK = Math.max(0.3, autoK * 0.85); else if (ms < AUTO_VITE) autoK = Math.min(1, autoK * 1.1);
+      if (autoK !== avant) taille();
+    }
+    if (now - ipsT >= 1000) {
+      if (reg.ips) $('ips').textContent = Math.round(ipsN * 1000 / (now - ipsT)) + ' i/s · ' + W + ' × ' + H + ' · ' + (ipsMs / ipsN).toFixed(1) + ' ms par image';
+      window.__ips = { ips: ipsN * 1000 / (now - ipsT), ms: ipsMs / ipsN, w: W, h: H };   // (contrôle sans fenêtre : tools/verifier_pc.js)
+      ipsN = 0; ipsMs = 0; ipsT = now;
+    }
   };
   requestAnimationFrame(loop);
 })();

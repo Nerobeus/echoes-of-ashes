@@ -6,8 +6,9 @@
 //     --enfant  édition enfant (ECHOES_ENFANT : seul un paquet de l'édition enfant se lance) : data/enfant/monde.pak
 //     --ile     monde de l'île (maj_monde.js --ile) : data/ile/monde.pak -> build/moteur_ile.html, sauvegardes à part
 //               -> build/moteur_enfant.html, sauvegardes à part dans le stockage du navigateur
-//     --pc      version autonome pour PC (platform/web/pc.template.html) : jeu seul, sans la montre simulée, 3D native,
-//               joystick de conduite au départ, monde et musiques compressés en gzip dans la page (un seul fichier, ouvert
+//     --pc      version autonome pour PC (platform/web/pc.template.html) : jeu seul, sans la montre simulée, en plein écran
+//               rectangulaire (3D 640 × 360 et interface, ENG_RECT), touches du clavier au choix, monde et musiques
+//               compressés en gzip dans la page (un seul fichier, ouvert
 //               d'un double-clic, sans serveur) -> build/choeur_pc.html (build/choeur_pc_enfant.html avec --enfant)
 const { execFileSync } = require('child_process');
 const fs = require('fs');
@@ -48,7 +49,10 @@ const build = (name, defs) => {
     return wasm;
 };
 if (pc) {   // version autonome pour PC : un seul module (3D native), paquet et musiques en gzip dans la page
-    const wasm = build('choeur_pc' + suf + '.wasm', ['-DENG_W=466', '-DENG_H_PX=466']);
+    // écran rectangulaire (11/11/2026, demande de l'utilisateur : « une version plein écran rectangle pour PC avec commande
+    // clavier personnalisable ») : 3D 640 × 360 (16:9 : × 2 en 720p, × 3 en 1080p) et interface comme sur la LDK (ENG_RECT,
+    // main_web.c : web_frame_pc) ; champ plus large que la montre : tampons du rendu doublés
+    const wasm = build('choeur_pc' + suf + '.wasm', ['-DENG_RECT=1', '-DENG_PREMIUM=1', '-DENG_DOF=1', '-DENG_ROUND=0', '-DENG_W=1920', '-DENG_H_PX=1080', '-DENG_WORKERS=1']);
     let page = fs.readFileSync(path.join(root, 'platform', 'web', 'pc.template.html'), 'utf8');
     if (enfant) page = page.split("'echoes-pc-sauve-'").join("'echoes-pc-enfant-sauve-'");
     if (ile) page = page.split("'echoes-pc-sauve-'").join("'echoes-pc-ile-sauve-'");

@@ -165,7 +165,7 @@ void ui_present(void) { UR = UB; UB = UB == &UF[0] ? &UF[1] : &UF[0]; }
    Formes, images et halos se dessinent ensuite tels quels (au pixel, sans antialiasing) ; glyphes et icônes gardent leur
    masque d'origine, moyenné 2 × 2 au dessin (band_mask_demi, band_rmask_demi : le même lissage qu'avant la réduction) */
 #ifndef ENG_UI_NATIF
-#define ENG_UI_NATIF ENG_RECT
+#define ENG_UI_NATIF (ENG_RECT && !ENG_PREMIUM)
 #endif
 #if ENG_UI_NATIF
 #define NX(x) (((x) + ui_ox) * 0.5f)

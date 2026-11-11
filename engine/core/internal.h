@@ -756,6 +756,7 @@ int vk_max(int k);
 int vk_prix(int k);          /* prix du niveau suivant */
 const char *vk_nom(int k), *vk_desc(int k);
 int veh_flotte(int p);       /* le véhicule p roule mais flotte (flotteurs) : à la surface, comme celui qui plane */
+int veh_surface(int p);      /* le véhicule p est à la surface de l'eau : il plane, a des flotteurs, ou bateau de l'île */
 int concession_ici(void);    /* Sera dans la concession (bâtiment « Concession » de PORT) */
 void concession_ouvrir(void);
 float eau_prof(float x, float z);   /* profondeur de l'eau en (x, z) (cases), 0 hors de l'eau et sur un pont */
