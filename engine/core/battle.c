@@ -174,6 +174,37 @@ static const float GROUPE_XP[BT_EMAX + 1] = { 1, 1, 1.1f, 1.25f, 1.35f };
    défaite la remet et relance le même combat (battle_reessayer) ; la transformation et la file repartent du début du
    combat, comme la première fois */
 static struct { int ok, nk, lvl, boss, mode, ks[BT_EMAX], var[BT_EMAX]; member_t party[sizeof PARTY / sizeof PARTY[0]]; int items[MAX_ITEMS], credits; } RT ENG_FROID;
+/* Arène du combat (11/11/2026, demande de l'utilisateur : « varier les scènes de combat, c'est toujours une scène de ville même
+   quand on est loin des villes ») : la plus proche de Sera (de la porte de l'intérieur où elle est) parmi celles que l'émulateur
+   a relevées sur sa carte, une par bloc de ARENE_BLOC cases (AREN : arenesCalc de l'émulateur) ; sinon celle de la carte (HEAD,
+   CART), comme avant. Le combat se joue dans le paysage où l'on est : désert, forêt, neige, marais, ville. AREN : nombre de
+   cartes u16, puis pour chacune son nombre u16 et ses arènes, x et z × 2 en u16 (areneChoisir de l'émulateur, à garder identique) */
+static void arene_choisir(void) {
+    world_t *w = &E.w;
+    const uint8_t *p = w->aren, *fin = p ? p + w->aren_sz : NULL;
+    if (!p) return;
+    const int nc = p[0] | p[1] << 8;
+    p += 2;
+    for (int k = 0; k < nc && p + 2 <= fin; k++) {
+        const int n = p[0] | p[1] << 8;
+        p += 2;
+        if (p + (size_t)n * 4 > fin) return;
+        if (k == w->carte && n > 0) {
+            const float x = E.in.on ? E.in.rx : E.sera.x, z = E.in.on ? E.in.rz : E.sera.z;
+            float bd = 1e30f, bx = 0, bz = 0;
+            for (int i = 0; i < n; i++) {
+                const uint8_t *q = p + i * 4;
+                const float ax = (q[0] | q[1] << 8) / 2.0f, az = (q[2] | q[3] << 8) / 2.0f, d = (ax - x) * (ax - x) + (az - z) * (az - z);
+                if (d < bd) { bd = d; bx = ax; bz = az; }
+            }
+            w->arena_x = bx; w->arena_z = bz;
+            w->epos_x = w->arena_x + (sinf(BAT_YAW) * BAT_EAV - cosf(BAT_YAW) * BAT_EG) / w->ech;   /* comme world_carte */
+            w->epos_z = w->arena_z + 2.5f + (cosf(BAT_YAW) * BAT_EAV + sinf(BAT_YAW) * BAT_EG) / w->ech;
+            return;
+        }
+        p += (size_t)n * 4;
+    }
+}
 void battle_start(int k, int lvl, int boss) { battle_start_groupe(&k, 1, lvl, boss, GROUPE_PARTS, NULL); }
 void battle_start_groupe(const int *ks, int nk, int lvl, int boss, int mode, const int *vars) {
     const world_t *w = &E.w;
@@ -184,6 +215,7 @@ void battle_start_groupe(const int *ks, int nk, int lvl, int boss, int mode, con
     RT.credits = E.credits;
     effet_manette(ENG_EFFET_COMBAT);
     BT.ret_x = E.sera.x; BT.ret_z = E.sera.z;
+    arene_choisir();   /* le combat se joue près d'où l'on est (11/11/2026) */
     E.has_dest = 0;
     /* palette : combat du scénario (boss) : celle de l'ennemi vu juste avant (palette_vue, avant hud_battle_start qui
        oublie l'interlocuteur) ; patrouille : celles qu'on voyait ; rencontre : une de ses palettes (PVAR), au hasard */
@@ -972,8 +1004,17 @@ static void objet_utiliser(int i, int u) {
     ITEMS[i].count--;
     perform(&a);
 }
-/* La cible debout suivante de u pour l'objet i : les camarades, puis les ennemis. Un objet lancé ne va qu'aux ennemis, ce qui ne rend que des PM qu'aux camarades */
+/* La cible debout suivante de u pour l'objet i : les camarades, puis les ennemis. Un objet lancé ne va qu'aux ennemis, ce qui ne rend que des PM qu'aux camarades.
+   i < 0 : l'action en attente (cible_choisir) : l'ennemi debout suivant, ou le camarade suivant (debout ; à terre pour une relève) */
 static int cible_suivante(int u, int i) {
+    if (i < 0) {
+        if (BT.pend_sorte == CIBLE_ENNEMI) {
+            for (int k = 1; k <= BT.nen; k++) { const int q = (u - BT_ENEMY + k) % BT.nen; if (BT.en[q].hp > 0) return BT_ENEMY + q; }
+            return u;
+        }
+        for (int k = 1; k <= NMEMB; k++) { const int q = (u + k) % NMEMB; if (in_team(q) && (BT.pend_sorte == CIBLE_RELEVE ? PARTY[q].hp <= 0 : PARTY[q].hp > 0)) return q; }
+        return u;
+    }
     if (ITEMS[i].releve) {   /* relève : le camarade à terre suivant, de l'équipe au combat */
         for (int k = 1; k <= NMEMB; k++) { const int q = ((u < NMEMB ? u : 0) + k) % NMEMB; if (in_team(q) && PARTY[q].hp <= 0) return q; }
         return u;
@@ -984,6 +1025,49 @@ static int cible_suivante(int u, int i) {
         if (q < NMEMB ? !lance && in_team(q) && PARTY[q].hp > 0 : ennemis && BT.en[q - NMEMB].hp > 0) return q < NMEMB ? q : BT_ENEMY + q - NMEMB;
     }
     return u;
+}
+/* Effet de l'action (celui que lancer lui donnera) : le sort, sinon la technique, sinon l'arme ; soin et objet : aucun */
+static int act_fx(const bt_act_t *act) {
+    int fx = -1; uint32_t col;
+    if (act->sort) fx = act->fx;
+    else if (!(act->heal || act->item)) { fx_of(BT.actor, &fx, &col); if (act->fx > 0 && act->fx < FX_N) fx = act->fx; }
+    return fx;
+}
+/* Cible d'une action (11/11/2026, retour de jeu : « pour les sorts de soin on ne peut pas choisir la cible ; pour tous les sorts et
+   attaques il faut pouvoir choisir ») : un soin pour un seul (pas toute l'équipe) va au camarade choisi, une attaque, une technique
+   ou un sort sur un seul ennemi (pas une action de zone) à l'ennemi choisi, comme un objet (BP_ALLIE : SUIVANT, la cible, RETOUR, ou
+   toucher son sprite). Seulement s'il y a plus d'une cible possible ; proposée d'abord : le camarade le plus blessé (relève : le
+   premier à terre), l'ennemi visé. La commande est rejouée une fois la cible prise (cible_action). Renvoie 1 si l'action attend sa
+   cible (cibleChoisir de l'émulateur) */
+static int cible_choisir(int cmd, int arg, const bt_act_t *a) {
+    if (BT.cible_prise) return 0;
+    int sorte, n = 0, prop = -1;
+    if (a->heal || a->rend_pm) {
+        if (a->soin == 2) return 0;   /* toute l'équipe */
+        sorte = a->soin == SOIN_RELEVE ? CIBLE_RELEVE : CIBLE_SOIN;
+        float bk = 2;
+        for (int q = 0; q < NMEMB; q++) {
+            if (!in_team(q) || (sorte == CIBLE_RELEVE ? PARTY[q].hp > 0 : PARTY[q].hp <= 0)) continue;
+            const float kq = sorte == CIBLE_RELEVE ? 0 : (float)PARTY[q].hp / PARTY[q].max;
+            if (prop < 0 || kq < bk) { bk = kq; prop = q; }
+            n++;
+        }
+    } else {
+        if (act_zone(a, act_fx(a))) return 0;   /* tout le groupe */
+        sorte = CIBLE_ENNEMI; n = battle_vivants();
+        cible_maj(); prop = BT_ENEMY + BT.cible;
+    }
+    if (n < 2 || prop < 0) return 0;
+    BT.pend_cmd = cmd; BT.pend_arg = arg; BT.pend_phase = BT.phase; BT.pend_sorte = sorte;
+    BT.obj = -1; BT.allie = prop; BT.phase = BP_ALLIE;
+    return 1;
+}
+/* L'action en attente part sur l'unité u (camarade, ou BT_ENEMY + k) : sa commande rejouée depuis sa phase, la cible prise */
+static void cible_action(int u) {
+    if (u >= BT_ENEMY) { BT.cible = u - BT_ENEMY; BT.pend_allie = -1; } else BT.pend_allie = u;
+    BT.phase = BT.pend_phase; BT.cible_prise = 1;
+    battle_command(BT.pend_cmd, BT.pend_arg);
+    BT.cible_prise = 0;
 }
 static void perform(const bt_act_t *act) {
     member_t *m = &PARTY[BT.actor];
@@ -1309,7 +1393,7 @@ void battle_update(float dt) {
             float parts = 0;
             for (int k = 0; k < BT.nen; k++) parts += BT.en[k].part;
             const int xp0 = (int)lroundf(exp_of(BT.lvl) * parts);
-            BT.rw_xp = BT.boss == 2 ? xp0 * BOSS_RW_ANNEXE : BT.boss ? xp0 * BOSS_RW : (int)lroundf(xp0 * RENC_XP);
+            BT.rw_xp = BT.boss == 2 ? (int)lroundf(xp0 * BOSS_RW_ANNEXE * ANNEXE_XP) : BT.boss ? xp0 * BOSS_RW : (int)lroundf(xp0 * RENC_XP);
             BT.rw_cr = (int)lroundf(credits_of(BT.lvl) * parts) * (BT.boss ? BOSS_RW : 1);
             if (BT.arene) { BT.rw_xp = (int)lroundf(BT.rw_xp * ARN_RW); BT.rw_cr = (int)lroundf(BT.rw_cr * ARN_RW); }   /* arène (arene.c) */
             BT.rw_loot = item_loot(); BT.rw_nloot = 0;
@@ -1335,7 +1419,8 @@ void battle_command(int cmd, int arg) {
         if (BT.phase != BP_CMD) return;
         memset(&BT.pending, 0, sizeof BT.pending);
         BT.pending.name = "ATTAQUE"; BT.pending.mult = 1;
-        perform(&BT.pending);   /* l'action part tout de suite, sur l'ennemi visé (attackChoisie de l'émulateur) */
+        if (cible_choisir(BC_ATTACK, 0, &BT.pending)) break;   /* plusieurs ennemis debout : lequel ? */
+        perform(&BT.pending);   /* l'action part sur l'ennemi visé (attackChoisie de l'émulateur) */
         break;
     case BC_TECHS: if (BT.phase == BP_CMD) BT.phase = BP_TECH; break;
     case BC_ITEMS: if (BT.phase == BP_CMD) { BT.phase = BP_ITEM; BT.mpage = 0; } break;
@@ -1354,6 +1439,8 @@ void battle_command(int cmd, int arg) {
         const tech_t *t = &m->tech[arg];
         if (m->mp < t->mp) { banner("PM INSUFFISANTS", NULL, AMBER, 0); return; }
         bt_act_t a = { t->name, t->mp, t->heal, 0, t->mult, t->delay, t->fx, 0, 0 };
+        if (cible_choisir(BC_TECH, arg, &a)) break;   /* à qui ? */
+        if (BT.cible_prise && BT.pend_allie >= 0) a.cible1 = BT.pend_allie + 1;
         /* coup de grâce (le dernier ennemi debout tombe même au plus bas du tirage des dégâts) : cut-in plein écran */
         /* genre de l'image : l'effet de la technique, sinon son nom (« TIR LASER »), sinon l'arme (soin : CG_SOIN) */
         int fx = t->fx; uint32_t col;
@@ -1410,9 +1497,9 @@ void battle_command(int cmd, int arg) {
         BT.allie = cible_suivante(BT.allie, BT.obj);
         if (BT.allie >= BT_ENEMY) BT.cible = BT.allie - BT_ENEMY;
         break;
-    case BC_ALLIE_OK: if (BT.phase == BP_ALLIE) objet_utiliser(BT.obj, BT.allie); break;
+    case BC_ALLIE_OK: if (BT.phase == BP_ALLIE) { if (BT.obj >= 0) objet_utiliser(BT.obj, BT.allie); else cible_action(BT.allie); } break;
     case BC_BACK:   /* retour ; à l'éventail (rien à quitter), l'ennemi visé suivant (clavier, manette) */
-        if (BT.phase == BP_ALLIE) BT.phase = BP_ITEM;
+        if (BT.phase == BP_ALLIE) BT.phase = BT.obj >= 0 ? BP_ITEM : BT.pend_phase;
         else if (BT.phase == BP_MAGIE) BT.phase = BP_TECH;
         else if (BT.phase == BP_TECH || BT.phase == BP_ITEM || BT.phase == BP_TARGET) { BT.phase = BP_CMD; BT.locked = 0; }
         else if (BT.phase == BP_CMD && battle_vivants() > 1) battle_command(BC_CIBLE, -1);
@@ -1436,6 +1523,8 @@ void battle_command(int cmd, int arg) {
             if (!ko) { banner("PERSONNE À TERRE", NULL, AMBER, 0); return; }
         }
         bt_act_t a = { sp->nom, sp->pm, sp->soin ? (int)lroundf(m->mag * sp->mult) : 0, 0, sp->mult, 0, sp->fx, 1, sp->soin };
+        if (cible_choisir(BC_SORT, arg, &a)) break;   /* à qui ? */
+        if (BT.cible_prise && BT.pend_allie >= 0) a.cible1 = BT.pend_allie + 1;
         if (sp->fx >= FX_MAGIE && FX_NIV(sp->fx) == 3) cutin_preparer(sp->nom, 1, 0, cut_genre(sp->fx, sp->soin));   /* grand sort : cut-in plein écran, de son élément */
         perform(&a);
         break;
@@ -1457,6 +1546,20 @@ int battle_enemy_at(float x, float y) {
     }
     return best;
 }
+/* Camarade de l'équipe au combat sous le doigt (x, y), debout (à terre : ko) : le plus proche du milieu de son sprite, parmi ceux
+   dont la boîte contient le doigt ; -1 : aucun (membreTouche de l'émulateur). Avant le 11/11/2026, le premier de PARTY : l'équipe est
+   serrée, et un toucher sur Bors donnait l'objet à Varn */
+static int membre_at(float x, float y, int ko) {
+    int best = -1;
+    float bd = 1e9f;
+    for (int q = 0; q < NMEMB; q++) {
+        const screen_pos_t *cq = &E.scr_party[q];
+        if (!in_team(q) || (ko ? PARTY[q].hp > 0 : PARTY[q].hp <= 0) || !cq->vis || fabsf(x - cq->cx) >= 44 || y <= cq->top || y >= cq->foot + 12) continue;
+        const float d = hypotf(x - cq->cx, y - cq->cy);
+        if (d < bd) { bd = d; best = q; }
+    }
+    return best;
+}
 /* Toucher hors des boutons : commencer, terminer, viser un ennemi du groupe (pendant le choix d'une action), ou viser
    l'ennemi (à moins de 100 px de son centre) */
 void battle_tap(float x, float y) {
@@ -1464,6 +1567,12 @@ void battle_tap(float x, float y) {
     if (BT.phase == BP_INTRO) { BT.ban.on = 0; advance(); return; }
     if (BT.phase == BP_WIN) { battle_end(1); return; }
     if (BT.phase == BP_LOSE) return;   /* défaite : ses deux boutons (draw_defaite de hud.c, battle_defaite) */
+    if (BT.phase == BP_ALLIE && BT.obj < 0) {   /* action en attente : toucher sa cible, un ennemi, ou un camarade pour un soin (à terre pour une relève) */
+        if (BT.pend_sorte == CIBLE_ENNEMI) { const int k = battle_enemy_at(x, y); if (k >= 0) cible_action(BT_ENEMY + k); return; }
+        const int q = membre_at(x, y, BT.pend_sorte == CIBLE_RELEVE);
+        if (q >= 0) cible_action(q);
+        return;
+    }
     if (BT.phase == BP_ALLIE) {   /* toucher un camarade : l'objet est pour lui ; un ennemi : un objet lancé part, un soin demande un second toucher (le soigner par erreur coûte cher) */
         const int lance = ITEMS[BT.obj].type == OBJ_LANCER;
         if (lance || ITEMS[BT.obj].hp > 0) {
@@ -1474,10 +1583,8 @@ void battle_tap(float x, float y) {
                 return;
             }
         }
-        if (!lance) for (int q = 0; q < NMEMB; q++) {
-            const screen_pos_t *cq = &E.scr_party[q];
-            if (in_team(q) && (ITEMS[BT.obj].releve ? PARTY[q].hp <= 0 : PARTY[q].hp > 0) && cq->vis && fabsf(x - cq->cx) < 44 && y > cq->top && y < cq->foot + 12) { objet_utiliser(BT.obj, q); return; }   /* une relève : un camarade à terre */
-        }
+        const int q = lance ? -1 : membre_at(x, y, ITEMS[BT.obj].releve);   /* une relève : un camarade à terre */
+        if (q >= 0) objet_utiliser(BT.obj, q);
         return;
     }
     if (bt_choix() && BT.phase != BP_TARGET && BT.nen > 1) { const int k = battle_enemy_at(x, y); if (k >= 0) battle_command(BC_CIBLE, k); return; }
@@ -1514,6 +1621,10 @@ int zone_sure(float x, float z) {
 #define PATR_SERA_MAX 12.0f
 #define PATR_AVANCE 4.0f   /* s : la chasse vise où Sera sera, jusqu'à ce temps d'avance : un groupe lui coupe la route (droit sur elle, il ne rattrapait jamais qui court) */
 #define PATR_HAUT 1.2f     /* radians au plus (0,8 avant le zoom à 300 % partout, 07/11/2026) : direction tournée vers le haut de l'écran, qui montre 10 cases devant la caméra et 2 de côté ; sinon le groupe n'y entre qu'au dernier moment */
+/* Sera qui court vers le bas de l'écran (plus de PATR_DOS entre sa course et le haut de l'écran) : le groupe naît sur son chemin, devant elle,
+   hors de l'écran (on n'y voit qu'une ou deux cases vers le bas) ; né en haut de l'écran, il était derrière elle et ne la rattrapait jamais
+   (08/11/2026, retour de jeu : un cinquième de la carte traversé en diagonale sans un combat ; rendu_test marchevue:n:cap) */
+#define PATR_DOS 1.6f
 #define PATR_LOIN 9.0f     /* cases (12 avant le zoom à 300 % partout : ils naissaient trop loin et de côté, vus 0,2 s avant le contact) */
 #define PATR_RAYON 4.0f
 #define PATR_MARCHE 1.4f
@@ -1551,9 +1662,10 @@ int patrouille_poser(int force) {
     (void)force;
     int membres = 0;
     for (int m = 0; m < NMEMB; m++) membres += in_team(m);
-    /* sur le chemin de Sera, dans le brouillard du haut de l'écran, sur une case praticable */
+    /* sur le chemin de Sera, dans le brouillard du haut de l'écran, sur une case praticable ; si elle court vers le bas de l'écran,
+       devant elle (PATR_DOS) */
     float a0 = E.sera.dir;
-    { const float ec = remainderf(E.yaw - a0, 2 * PI_F); a0 += fabsf(ec) < PATR_HAUT ? ec : (ec < 0 ? -PATR_HAUT : PATR_HAUT); }
+    { const float ec = remainderf(E.yaw - a0, 2 * PI_F); if (fabsf(ec) <= PATR_DOS) a0 += fabsf(ec) < PATR_HAUT ? ec : (ec < 0 ? -PATR_HAUT : PATR_HAUT); }
     for (int essai = 0; essai < 12; essai++) {
         const float loin = essai < 6 ? PATR_LOIN : essai < 9 ? 7.0f : 5.0f;   /* plus près si rien ne va (galeries) */
         const float a = a0 + (brand() - 0.5f) * PATR_ANGLE, x = E.sera.x + sinf(a) * loin, z = E.sera.z + cosf(a) * loin;

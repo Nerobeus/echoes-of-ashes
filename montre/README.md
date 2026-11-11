@@ -23,9 +23,10 @@ MONTRE du menu SYSTÈME, rangée MONTRE du menu des applications), le PC DOS (to
 ## Pages et gestes
 
 Glisser à gauche ou à droite : NOTIFICATIONS · CADRAN · APPS · RÉGLAGES. Toucher : agir. Le doigt ne rallume pas
-l'écran ni une notification ni un appel (bandeau seulement écran allumé). PWR ou BOOT l'éteignent d'un appui court ; pour
-l'allumer, il faut les tenir 0,1 s (`REVEIL_TENU_MS` ; 0,3 s jugé trop long ; la veille profonde, elle, se réveille à
-tout appui de PWR). Chaque réveil revient au cadran, dessiné à l'heure et envoyé avant l'affichage (`lcd_sortir_veille`, puis
+l'écran ni une notification ni un appel (bandeau seulement écran allumé). PWR ou BOOT l'éteignent d'un appui court et
+la rallument de même, au premier appui (08/11/2026 ; du 02/11 au 08/11, il fallait les tenir 0,1 s, `REVEIL_TENU_MS`, alors
+que les réveils intempestifs venaient de la minuterie de la veille légère restée armée ; la veille profonde, elle, se
+réveille à tout appui de PWR). Chaque réveil revient au cadran, dessiné à l'heure et envoyé avant l'affichage (`lcd_sortir_veille`, puis
 `lcd_afficher` : plus d'image d'avant la veille). Rallumée par un bouton et pas touchée, elle se rendort après
 5 s (`REVEIL_BREF_S`, le temps de lire l'heure) ; le premier toucher rend la veille des RÉGLAGES. Interface commune avec le menu du PC DOS : `commun/ui_montre/` (dessin, polices, thème, et `pages.c` : pages
 glissées, toucher, appui long, glissé vertical des listes), compilée dans les deux projets. Pendant un glissé, chaque
@@ -35,7 +36,7 @@ page est dessinée une fois dans une image en PSRAM puis recopiée décalée à 
 - CADRAN : heure, date, arc des secondes, batterie, état du Bluetooth, nombre de notifications (toucher : la liste).
 - NOTIFICATIONS : les 20 dernières (aussi dans `/sd/montre/notifs.txt`) ; toucher : le détail, EFFACER (aussi sur le
   téléphone), RETOUR ; TOUT EFFACER.
-- APPS : ECHOES OF ASHES, PC DOS, CONSOLES, STOCKAGE USB, RÉGLAGES. CONSOLES : la console (GAME BOY, NES, MASTER
+- APPS : LE CHŒUR DES CENDRES, PC DOS, CONSOLES, STOCKAGE USB, RÉGLAGES. CONSOLES : la console (GAME BOY, NES, MASTER
   SYSTEM, GAME GEAR, DOOM), puis toutes ses ROM (`/sd/gameboy` : `.gb`, `.gbc` ; `/sd/nes` : `.nes` ; `/sd/sms` : `.sms`,
   `.sg` ; `/sd/gamegear` : `.gg` ; `/sd/doom` : `.wad` ; sans limite : liste en PSRAM, noms longs), le dernier jeu joué en tête, REPRISE
   quand un état l'attend (cherché page par page) ; cinq rangées, glissé vertical pour la suite ; RETOUR revient au choix

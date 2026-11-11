@@ -22,6 +22,26 @@
 #ifndef ENG_DYN
 #define ENG_DYN 0
 #endif
+/* Écran rectangulaire (ENG_RECT=1, avec ENG_ROUND=0 : RetroFW, LDK Game, 11/11/2026) : 3D de ENG_W × ENG_H_PX (320 × 240)
+   doublée dans une image de ENG_IMG_W × ENG_IMG_H (640 × 480), l'interface de la montre (466 × 466) au milieu ; la 3D
+   garde la hauteur de vue de la montre et s'élargit sur les côtés (FOCAL d'après la hauteur). La plateforme réduit
+   l'image de moitié : la 3D à sa définition, l'interface à moitié. Distance de vue et tampons : ceux de la montre */
+#ifndef ENG_RECT
+#define ENG_RECT 0
+#endif
+/* Interface de l'écran rectangulaire dessinée directement en ENG_W × ENG_H_PX (ui.c : coordonnées converties à
+   l'enregistrement, glyphes moyennés 2 × 2 au dessin) ; 0 : dessinée en ENG_IMG_W × ENG_IMG_H sur la 3D doublée, puis réduite */
+#ifndef ENG_UI_NATIF
+#define ENG_UI_NATIF ENG_RECT
+#endif
+#if ENG_RECT
+#ifndef ENG_W
+#define ENG_W 320
+#endif
+#ifndef ENG_H_PX
+#define ENG_H_PX 240
+#endif
+#endif
 #if ENG_DYN
 #ifndef ENG_W
 #define ENG_W 960
@@ -42,8 +62,18 @@
 #endif
 #if ENG_DYN
 #define ENG_SCALE 1
+#elif ENG_RECT
+#define ENG_SCALE 2
 #else
 #define ENG_SCALE (ENG_SCREEN / ENG_W) /* 2 : pixels doublés, 1 : rendu natif */
+#endif
+/* Image native (ce que dessinent les bandes) : l'écran rond de 466, ou l'image rectangulaire doublée */
+#if ENG_RECT
+#define ENG_IMG_W (2 * ENG_W)
+#define ENG_IMG_H (2 * ENG_H_PX)
+#else
+#define ENG_IMG_W ENG_SCREEN
+#define ENG_IMG_H ENG_SCREEN
 #endif
 #ifndef ENG_WORKERS
 #define ENG_WORKERS 2                  /* fils qui dessinent les bandes en même temps (les deux cœurs de l'ESP32) */
@@ -147,6 +177,12 @@ typedef struct {
     /* Commandes de conduite au départ (facultatif) : 1 le joystick d'un seul doigt (page web pour PC : une souris n'a qu'un
        pointeur), 0 les commandes doubles (deux pouces) ; SYSTÈME › COMMANDES les change, la sauvegarde garde le choix */
     int joystick;
+    /* Paquet commun (facultatif, 09/11/2026 : monde découpé en paquets spécialisés ; l'île du jeu des héroïnes sur la
+       montre) : le paquet passé à eng_init n'a que les sections propres à son monde, et sa section PRIS liste celles à
+       prendre ici, dans le paquet léger d'Echoes en flash (sons, polices, icônes, sprites communs). Le paquet propre est
+       alors en mémoire vive : ses textures n'y sont pas recopiées */
+    const uint8_t *pak_commun;
+    size_t pak_commun_len;
 } eng_config_t;
 
 typedef struct {
@@ -187,6 +223,12 @@ void eng_render_native_band(int y0, int h, uint16_t *dst, int x0, int x1);
    différentes de l'image présentée (chacun a son propre contexte de bande). */
 void eng_render_band_on(int worker, int y0, int h, uint16_t *dst, int x0, int x1);
 
+#if ENG_RECT
+/* Écran rectangulaire : lignes internes [y0, y0 + h) (h ≤ ENG_BAND) de l'image de ENG_W × ENG_H_PX, prêtes à afficher dans
+   dst (ENG_W × h pixels) : la 3D, et l'interface (dessinée en 640 × 480 et réduite de moitié) là où elle est ; tmp :
+   ENG_IMG_W × ENG_NATIVE_BAND pixels de travail */
+void eng_render_band_rect(int y0, int h, uint16_t *dst, uint16_t *tmp);
+#endif
 #if ENG_DYN
 /* Plein écran : taille de l'image (paire, bornée à ENG_W × ENG_H_PX), avant eng_init ; l'interface ronde de 466 × 466
    est centrée, les touchers restent donnés en pixels de l'image */
@@ -205,6 +247,10 @@ int eng_focus_depth(void);
 
 /* Statistiques de l'image présentée (préparation et bandes) */
 const eng_stats_t *eng_stats(void);
+#if ENG_RECT
+int eng_diag_intact(void);              /* LDK : pointeurs des images intacts (render.c, diagnostic du plantage du 11/11/2026) */
+int eng_diag_rendu(char *s, int n);     /* leur état, en texte */
+#endif
 
 /* Banc d'essai : place Sera en (x, z) et la caméra au lacet yaw (chunks autour chargés tout de suite) */
 void eng_teleport(float x, float z, float yaw);
@@ -217,6 +263,8 @@ void eng_move_to(float x, float z);
    allege = 0 : sans l'allègement du rendu en course (sol simplifié plus tôt, render.c), pour comparer. 0 : refusée */
 int eng_essai_course(int piste, int allege);
 int eng_essai_monde(float x, float z, float cap, int pluie, float heure, float s);
+/* État des rencontres sur une ligne (SDX ETAT) : longueur écrite */
+int eng_etat_rencontres(char *b, int n);
 int eng_essai_actif(void);   /* essai de fluidité : Sera posée, pluie, heure, elle court s secondes (game.c) */
 /* Profilage du rendu des bandes (compilé avec ENG_PROFILE, sinon tout à zéro) : cycles des deux cœurs additionnés
    depuis le dernier appel, par poste ; out reçoit ENG_PROF_N valeurs (ou NULL : remise à zéro seulement) */
@@ -252,6 +300,9 @@ void eng_set_horloge(int secondes);
 int eng_sauvegarder(void);
 /* 1 sur l'écran titre (pas de partie en cours) */
 int eng_ecran_titre(void);
+/* 1 quand Sera conduit (véhicule ou course) sans menu, pause ni combat : la plateforme peut y changer ses commandes
+   (RetroFW : gâchettes) */
+int eng_conduite(void);
 /* 1 sur une page de menu de l'écran titre que personne ne touche depuis une seconde : la plateforme peut ralentir la
    cadence (batterie de la montre), seules la caméra et les cendres bougent, lentement */
 int eng_ecran_calme(void);

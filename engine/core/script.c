@@ -298,7 +298,7 @@ int script_niveau(float x, float z) {
         const int v = step_niv(q, E.quests[q], &ox, &oz, &oc);
         if (v > n && ox != 65535 && oc == E.w.carte && hypotf(ox / 8.0f - x, oz / 8.0f - z) < NIV_RAYON) n = v;
     }
-    return n;
+    return n || !E.w.ile[0] ? n : ile_niveau(x, z);   /* île sans quête en cours : le niveau de sa région (ile.c) */
 }
 /* Quête en cours à suivre : la première principale, sinon la première secondaire (-1 : aucune) */
 static int next_active(void) {
@@ -683,8 +683,8 @@ static void exec(void) {
             VM.pc = ok == (c[pc] == OP_JMP_IF_RACE) ? rd16(c + pc + 2) : pc + 4;
             break;
         }
-        case OP_EXP: {
-            const int n = rd16(c + pc + 1);
+        case OP_EXP: {   /* une quête annexe (ou hors quête) : × ANNEXE_XP (11/11/2026) */
+            const int n0 = rd16(c + pc + 1), n = script_quest_type(ev->quest) || ev->quest >= E.w.sc_nq ? (int)lroundf(n0 * ANNEXE_XP) : n0;
             VM.pc += 3;
             const int L0 = E.level;
             if (party_gain_exp(n)) snprintf(t, sizeof t, "NIVEAU %d !", E.level); else snprintf(t, sizeof t, "+%d EXP", n);

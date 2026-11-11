@@ -11,6 +11,9 @@
 #include <stdlib.h>
 #include <string.h>
 #include <math.h>
+#if ENG_RECT
+#include <stdio.h>   /* eng_diag_rendu (LDK) */
+#endif
 #include "internal.h"
 #include "ui.h"
 
@@ -56,7 +59,11 @@ int eng_sans_z;   /* banc d'essai (rendu_test « sansz ») : tampon de profondeu
 #define Z_PLUS(k) ((k) + ((k) >> 6))
 #define LV 16
 #define FV 8
+#if ENG_RECT
+#define SUB 32   /* écran rectangulaire (LDK, 11/11/2026, choix de l'utilisateur : « perspective allégée ») : une division tous les 32 pixels */
+#else
 #define SUB 16
+#endif
 #if ENG_DYN
 #define VIEW_R 38                 /* rayon de vue à l'échelle 1 (taille des tableaux) ; à l'échelle ech, VIEW_R / ech */
 #define MAX_PRIMS 18000
@@ -209,6 +216,7 @@ typedef struct {
     uint16_t *buf;
     uint8_t *cov;                /* couverture de la bande : bit 0 pixel déjà peint, bit 1 ombre en attente, bits 2 à 7 : créneau de teinte en attente (surface d'un bassin) */
     uint8_t *fon;                /* un bit par pixel de la bande : peint par une face en fondu (bâtiment devant Sera) ; la lueur des feux le laisse (lum_band) */
+    uint8_t *per;                /* île (ile.c) : un bit par pixel de la bande, peint par un personnage qui n'est pas Sera (sa silhouette ne compte que le décor) */
     uint16_t *att;               /* couleur en attente d'une face en fondu, translucide (créneaux ATT_SLOT0 à 63 du masque : fondu_px) */
     uint16_t *zb;                /* profondeur du pixel peint (clé ZK / z), lue seulement là où le bit 0 de cov est posé : jamais effacée */
 #if ENG_DOF
@@ -257,6 +265,25 @@ typedef struct {
     uint32_t us3d_w[ENG_WORKERS], usui_w[ENG_WORKERS];
 } frame_t;
 static frame_t FR[2], *B = &FR[0], *RF = &FR[0];
+#if ENG_RECT
+/* Diagnostic de la LDK (11/11/2026 : plantage, FR[x].bin_idx devenu nul en cours de jeu) : les pointeurs des deux images,
+   relevés par render_init, comparés à chaque étape par la plateforme (eng_diag_intact) et écrits au plantage (eng_diag_rendu) */
+static const void *diag_fr[2][4];
+int eng_diag_intact(void) {
+    if (RF != &FR[0] && RF != &FR[1]) return 0;
+    if (B != &FR[0] && B != &FR[1]) return 0;
+    for (int k = 0; k < 2; k++)
+        if (diag_fr[k][0] && (FR[k].verts != diag_fr[k][0] || FR[k].prims != diag_fr[k][1] || FR[k].order != diag_fr[k][2] || FR[k].bin_idx != diag_fr[k][3])) return 0;
+    return 1;
+}
+int eng_diag_rendu(char *s, int n) {
+    int o = snprintf(s, (size_t)n, "RF %p B %p FR %p", (void *)RF, (void *)B, (void *)FR);
+    for (int k = 0; k < 2 && o < n; k++)
+        o += snprintf(s + o, (size_t)(n - o), " | FR%d %p %p %p %p (%p) ok %d prims %d ordre %d", k, (void *)FR[k].verts, (void *)FR[k].prims,
+                      (void *)FR[k].order, (void *)FR[k].bin_idx, diag_fr[k][3], FR[k].bin_ok, FR[k].nprims, FR[k].norder);
+    return o;
+}
+#endif
 static int32_t ot_head[OTN], ot_tail[OTN];
 
 /* ---------- Couleurs ---------- */
@@ -395,7 +422,7 @@ static void lum_setup(int bat);
 #define FOG_FIN 27.0f
 
 void render_init(void) {
-    FOCAL = CXF / tanf(25.0f * PI_F / 180.0f);
+    FOCAL = (ENG_RECT ? CYF : CXF) / tanf(25.0f * PI_F / 180.0f);   /* (écran rectangulaire : la hauteur de vue de la montre, plus large) */
     pcx = CXF; pcy = CYF;
     const float ech = E.w.ech;
     view_r0 = VIEW_R / ech;
@@ -424,6 +451,7 @@ void render_init(void) {
             WK[k]->zb = E.cfg.alloc(RW_MAX * ENG_BAND * 2, 1);
             WK[k]->buf = E.cfg.alloc(RW_MAX * ENG_BAND * 2, 1);
             WK[k]->fon = E.cfg.alloc((RW_MAX * ENG_BAND + 7) / 8, 0);
+            WK[k]->per = E.cfg.alloc((RW_MAX * ENG_BAND + 7) / 8, 0);
             WK[k]->att = E.cfg.alloc(RW_MAX * ENG_BAND * 2, 0);
             if (!WK[k]->zb) WK[k]->zb = E.cfg.alloc(RW_MAX * ENG_BAND * 2, 0);   /* plus de SRAM interne : en PSRAM (une bande tient dans le cache) */
             WK[k]->sil_o = E.cfg.alloc(SIL_MAX * 2, 0); WK[k]->sil_v = E.cfg.alloc(SIL_MAX * 2, 0); WK[k]->sil_e = E.cfg.alloc(SIL_MAX, 0);
@@ -432,7 +460,7 @@ void render_init(void) {
             if (!WK[k]->dep) { E.error = "mémoire insuffisante (profondeur)"; return; }
 #endif
         }
-        if (!WK[k] || !WK[k]->buf || !WK[k]->cov || !WK[k]->zb || !WK[k]->fon || !WK[k]->att || !WK[k]->sil_o || !WK[k]->sil_v || !WK[k]->sil_e) { E.error = "mémoire insuffisante (bandes)"; return; }
+        if (!WK[k] || !WK[k]->buf || !WK[k]->cov || !WK[k]->zb || !WK[k]->fon || !WK[k]->per || !WK[k]->att || !WK[k]->sil_o || !WK[k]->sil_v || !WK[k]->sil_e) { E.error = "mémoire insuffisante (bandes)"; return; }
     }
     for (int k = 0; k < 2; k++) {
         FR[k].verts = E.cfg.alloc(sizeof(sv_t) * MAX_VERTS, 0);
@@ -440,6 +468,9 @@ void render_init(void) {
         FR[k].order = E.cfg.alloc(sizeof(int32_t) * MAX_PRIMS, 0);
         FR[k].bin_idx = E.cfg.alloc(BIN_CAP * 2, 1);
         if (!FR[k].verts || !FR[k].prims || !FR[k].order || !FR[k].bin_idx) { E.error = "mémoire insuffisante (rendu)"; return; }
+#if ENG_RECT
+        diag_fr[k][0] = FR[k].verts; diag_fr[k][1] = FR[k].prims; diag_fr[k][2] = FR[k].order; diag_fr[k][3] = FR[k].bin_idx;
+#endif
     }
     cmap = E.cfg.alloc(LV * FV * 256 * 2, 1);
     if (!cmap) { E.error = "mémoire insuffisante (rendu)"; return; }
@@ -587,6 +618,56 @@ static int poly_hors_champ(const pak_poly_t *pp) {
     return 0;
 }
 
+/* Île (10/11/2026, demande de l'utilisateur : « faire disparaître les murs quand on passe derrière, ne garder que la base du mur sur
+   quelques pixels pour voir la limite ; l'idéal serait de le faire aussi en extérieur, ça gagnerait des fps »), puis Echoes le même jour
+   (« propager ça à Echoes, intérieur et extérieur ») : ce qui cache l'héroïne n'est plus estompé (trame, transparence) mais coupé, d'un
+   coup (« sans animation »). Dehors, le bâtiment entier (« l'ensemble du bâtiment ensemble, sinon c'est très bizarre ») à COUPE_FONDATION
+   au-dessus de son pied, faces de dos comprises (le contour de la fondation entier) ; dedans, chaque mur qui la cache à COUPE_MUR_BASE
+   au-dessus du pied des murs du niveau (linteaux compris). Moins de pixels peints, plus de mélange. La couverture de l'héroïne se juge sur
+   les polygones entiers (coupés, ils ne la couvriraient plus) et seulement quand elle est vraiment cachée (couverture). Mêmes règles dans
+   les émulateurs d'Echoes et de l'île (coupeHauteur, coupeY, couvPoly). */
+static float coupe_hauteur(float lo, float hi, float a) { return lo + fmaxf(COUPE_MUR_BASE, (hi - lo) * (1 - a)); }
+/* Polygone d'une porte d'un bâtiment coupé (le même jour, demande de l'utilisateur : « il faut que l'on voie les portes des bâtiments
+   masqués ») : tous ses sommets dans la boîte d'une de ses portes (PORT : la largeur de l'ouverture et le cadre de part et d'autre du
+   seuil, une case de chaque côté de la façade, à moins de COUPE_PORTE_H du pied du bâtiment) ; il reste entier (estPorte des émulateurs) */
+static int est_porte(const pak_poly_t *pp, const int_porte_t *const *pts, int npt, float lo) {
+    const int n = pp->nv > 8 ? 8 : pp->nv;
+    for (int d = 0; d < npt; d++) {
+        const int_porte_t *q = pts[d];
+        const float demi = q->w / 2 + 0.2f;
+        int k = 0;
+        for (; k < n; k++) {
+            const pak_vert_t *v = &pp->v[k];
+            const float dx = v->x - q->x, dz = v->z - q->z;
+            if (fabsf(dz * q->nx - dx * q->nz) > demi || fabsf(dx * q->nx + dz * q->nz) > 1.0f || v->y > lo + COUPE_PORTE_H) break;
+        }
+        if (n && k == n) return 1;
+    }
+    return 0;
+}
+/* Polygone du paquet à l'écran, coupé au plan proche comme submit_poly le fait, sans le soumettre : n points (16 au plus ; moins de 3 :
+   rien) et sa boîte ; 0 : hors de l'image */
+static int poly_ecran(const pak_poly_t *pp, float *sx, float *sy, float *bx) {
+    const int n = pp->nv > 8 ? 8 : pp->nv;
+    v3 v[8];
+    int devant = 0;
+    for (int i = 0; i < n; i++) { v[i] = to_view(pp->v[i].x, pp->v[i].y, pp->v[i].z); devant |= v[i].z >= NEAR_Z; }
+    if (!devant) return 0;
+    float minx = 1e9f, maxx = -1e9f, miny = 1e9f, maxy = -1e9f;
+    int np = 0;
+#define BOITE_PT(X, Y, Z) do { const float sx_ = pcx + (X) * FOCAL / (Z), sy_ = pcy - (Y) * FOCAL / (Z); sx[np] = sx_; sy[np] = sy_; np++; \
+        minx = min_f(minx, sx_); maxx = max_f(maxx, sx_); miny = min_f(miny, sy_); maxy = max_f(maxy, sy_); } while (0)
+    for (int i = 0; i < n; i++) {
+        const v3 *a = &v[i], *b = &v[(i + 1) % n];
+        if (a->z >= NEAR_Z) BOITE_PT(a->x, a->y, a->z);
+        if ((a->z >= NEAR_Z) != (b->z >= NEAR_Z)) { const float t = (NEAR_Z - a->z) / (b->z - a->z); BOITE_PT(a->x + (b->x - a->x) * t, a->y + (b->y - a->y) * t, NEAR_Z); }
+    }
+#undef BOITE_PT
+    if (np < 3 || maxx < 0 || minx > RW || maxy < 0 || miny > RH) return 0;
+    bx[0] = minx; bx[1] = maxx; bx[2] = miny; bx[3] = maxy;
+    return np;
+}
+
 /* ---------- Table d'ordre ---------- */
 static prim_t *new_prim(int b) {
     if (B->nprims >= MAX_PRIMS) return NULL;
@@ -683,7 +764,17 @@ static float poly_bias;                 /* profondeur retirée avant le choix du
    son ordre (sol de l'émulateur : SOL_RECUL) */
 #define SOL_RECUL 2.5f
 static int char_bucket = -1;            /* seau imposé à un personnage (intérieur : tout dans le même, dans l'ordre) */
-static float char_devant;               /* > 0 : profondeur (vue) que le personnage précède (seau et clé) : l'attaquant au corps à corps devant l'ennemi qu'il frappe */
+static float char_devant, char_devant_z; /* > 0 : profondeurs (vue) que le personnage précède, seau et clé : l'attaquant au corps à corps devant l'ennemi qu'il frappe */
+/* L'image de la direction row descend sous son ancrage (véhicule ancré au milieu de son emprise) : des pixels opaques à plus de
+   2 pixels sous lui, le vide sous le pixel le plus bas (foot) déduit. Avant le 11/11/2026, ce vide comptait : un personnage
+   ancré à ses pieds avec 3 ou 4 lignes vides sous eux (Sera, Bors, Varn selon la direction) avait sa profondeur avancée comme
+   un camion et passait devant ses voisins en combat (retour de jeu ; sousAncrage de l'émulateur) */
+static int sous_ancrage(int sheet, int row) {
+    if (sheet < 0 || !E.w.sheets[sheet].has_pv) return 0;
+    const sheet_t *S = &E.w.sheets[sheet];
+    const int vide = S->footok >> (row & 7) & 1 ? S->foot[row & 7] : 0;
+    return S->fh - S->pv[row & 7][1] / 2.0f - vide > 2;
+}
 static int char_teinte;                 /* membre transformé (ÉVEIL) + 1 du personnage soumis (prim_t.teinte ; 0 : aucun) */
 #define TEINTE_FANTOME 255              /* fantôme du contre-la-montre (prim_t.teinte) */
 static int char_tissu;                  /* variante de couleur de la tenue du personnage soumis (member_tissu ; 0 : aucune) */
@@ -705,28 +796,118 @@ static int bld_hit;
 int eng_essai_fondus(void) { int n = 0; for (int f = 0; f < FADE_N; f++) if (fades[f].used && fades[f].a > 0.5f && fades[f].r > 0) n++; return n; }   /* rendu_test (scenecams) : bâtiments estompés */
 #endif
 
-/* Grand décor (plus de 1,2 de haut : arbres, rochers) entre la caméra et Sera, qui la recouvre à l'écran : place de fondu
-   repérée par sa position, comme un bâtiment ; prim : son quadrilatère, q : ses sommets en vue */
-static void plant_fade(float px, float pz, prim_t *prim, const vv_t *q) {
-    if ((occ_sera < 0 && !sujet_on && !parle_on) || !prim) return;
+/* Grands décors qui cachent l'héroïne (11/11/2026, demande de l'utilisateur : « la composition des arbres divise par 2 les i/s ;
+   il faudrait traiter les sprites comme les bâtiments pour éviter ces compositions de transparence, dans toutes les versions du
+   moteur ») : plus d'estompage (chaque pixel du sprite mêlé à ce qui est derrière, par le chemin lent du tracé) ; un grand décor
+   (plus de 1,2 de haut : arbres, rochers) placé entre la caméra et un personnage suivi (Sera, le sujet d'une caméra de scène,
+   celui qui parle) est coupé d'un coup à COUPE_FONDATION au-dessus de son pied, comme un bâtiment (le pied du sprite reste : on
+   voit où il est). Couverture : les points de couv_points sur lesquels tombe un pixel opaque de son sprite (rayon de chaque point
+   jusqu'au plan du quadrilatère, texel lu), l'union de tous les décors qui couvrent ce personnage ; coupés ensemble à COUV_COUPE
+   points et plus, gardés coupés tant qu'ils en cachent COUV_GARDE ; un décor juste devant la caméra (un coin derrière le plan
+   proche) l'est toujours. Décision à la fin des décors (deco_decider), appliquée à l'image suivante par une place de fades
+   (r < 0 : décor), d'un coup comme les bâtiments. decoCouv, decoDecider des émulateurs d'Echoes et de l'île, à garder identiques */
+#define COUV_NX 3                       /* couverture d'un personnage (couv_points, plus bas) */
+#define COUV_NY 7
+#define COUV_COUPE 11
+#define COUV_GARDE 8
+static int couv_nb(uint32_t m);
+#define DECO_COUV_N 32                  /* grands décors candidats par image (au-delà : ignorés) */
+typedef struct { float x, z; uint32_t cv[3]; int proche, coupe; } deco_couv_t;
+static deco_couv_t deco_cands[DECO_COUV_N];
+static int ndeco_cands;
+/* Point (i, j) de la grille de couverture d'un personnage, à l'écran (couv_points) */
+static void couv_xy(const occ_t *o, int i, int j, float *x, float *y) {
+    const float w = o->x1 - o->x0, h = o->y1 - o->y0;
+    *x = (o->x0 + o->x1) * 0.5f + (i - (COUV_NX - 1) * 0.5f) * 0.15f * w;
+    *y = o->y1 - h * (0.06f + 0.84f * j / (COUV_NY - 1));
+}
+/* Texture d'un décor (draw_poly) : sa taille rognée pour un grand décor, sinon une case de 16 × 16 */
+static const uint8_t *deco_tex(int tile, int *sh, int *m, int *mv) {
+    const world_t *w = &E.w;
+    *sh = 4; *m = *mv = 15;
+    if (tile >= TILE_BIG && tile < TILE_LOD) {
+        const uint32_t k = (uint32_t)(tile - TILE_BIG);
+        if (k >= w->deco_n) return NULL;
+        const uint8_t *d = w->deco + k * 12;
+        *sh = d[8]; *m = (1 << *sh) - 1; *mv = (1 << d[9]) - 1;
+        return w->tex + w->big_off + (d[0] | (d[1] << 8) | (d[2] << 16) | ((uint32_t)d[3] << 24));
+    }
+    return tile >= 0 && tile < TILE_BIG ? w->tex + tile * 256 : NULL;
+}
+/* Points du personnage o couverts par un pixel opaque du décor q (parallélogramme en vue : q0 + a (q1 - q0) + b (q3 - q0),
+   textures u de q0 à q1, v de q0 à q3) */
+static uint32_t deco_couv(const occ_t *o, const vv_t *q, const uint8_t *tex, int sh, int m, int mv) {
+    const float e1x = q[1].x - q[0].x, e1y = q[1].y - q[0].y, e1z = q[1].z - q[0].z;
+    const float e2x = q[3].x - q[0].x, e2y = q[3].y - q[0].y, e2z = q[3].z - q[0].z;
+    const float nx = e1y * e2z - e1z * e2y, ny = e1z * e2x - e1x * e2z, nz = e1x * e2y - e1y * e2x;
+    const float qn = q[0].x * nx + q[0].y * ny + q[0].z * nz;
+    const float g11 = e1x * e1x + e1y * e1y + e1z * e1z, g12 = e1x * e2x + e1y * e2y + e1z * e2z, g22 = e2x * e2x + e2y * e2y + e2z * e2z;
+    const float det = g11 * g22 - g12 * g12;
+    if (det <= 1e-12f) return 0;
+    uint32_t r = 0;
+    for (int j = 0; j < COUV_NY; j++) for (int i = 0; i < COUV_NX; i++) {
+        float sx, sy;
+        couv_xy(o, i, j, &sx, &sy);
+        const float dx = (sx - pcx) / FOCAL, dy = -(sy - pcy) / FOCAL, dn = dx * nx + dy * ny + nz;
+        if (fabsf(dn) < 1e-9f) continue;
+        const float t = qn / dn;   /* profondeur (vue) du point du décor sur ce rayon */
+        if (t < NEAR_Z || t > o->vz - 0.2f) continue;
+        const float px = t * dx - q[0].x, py = t * dy - q[0].y, pz = t - q[0].z;
+        const float p1 = px * e1x + py * e1y + pz * e1z, p2 = px * e2x + py * e2y + pz * e2z;
+        const float a = (p1 * g22 - p2 * g12) / det, b = (p2 * g11 - p1 * g12) / det;
+        if (a < 0 || a > 1 || b < 0 || b > 1) continue;
+        const int u = (int)(q[0].u + a * (q[1].u - q[0].u)), v = (int)(q[0].v + b * (q[3].v - q[0].v));
+        if (tex[((v & mv) << sh) | (u & m)]) r |= 1u << (j * COUV_NX + i);
+    }
+    return r;
+}
+/* Grand décor soumis : coupé à cette image (place de fades à 1 : l'image d'avant l'a décidé) ? Candidat pour la décision suivante :
+   ce qu'il couvre des personnages suivis, s'il est juste devant la caméra ; q : son quadrilatère entier, en vue */
+static int deco_coupe(float px, float pz, int tile, const vv_t *q) {
+    int coupe = 0;
+    for (int f = 0; f < FADE_N; f++)
+        if (fades[f].used && fades[f].r < 0 && fades[f].a > 0 && fabsf(fades[f].cx - px) < 0.01f && fabsf(fades[f].cz - pz) < 0.01f) { coupe = 1; break; }
+    if ((occ_sera < 0 && !sujet_on && !parle_on) || ndeco_cands >= DECO_COUV_N) return coupe;
     float minx = 1e9f, maxx = -1e9f, miny = 1e9f, maxy = -1e9f, vz = 0;
-    int close = 0;   /* un coin derrière le plan proche : le décor est juste devant la caméra (zoom fort), on l'estompe */
-    for (int m = 0; m < 4; m++) {
-        if (q[m].z < NEAR_Z) { close = 1; continue; }
-        const float sx = pcx + q[m].x * FOCAL / q[m].z, sy = pcy - q[m].y * FOCAL / q[m].z;
-        minx = fminf(minx, sx); maxx = fmaxf(maxx, sx); miny = fminf(miny, sy); maxy = fmaxf(maxy, sy); vz += q[m].z / 4;
+    int proche = 0;
+    for (int k = 0; k < 4; k++) {
+        if (q[k].z < NEAR_Z) { proche = 1; continue; }
+        const float sx = pcx + q[k].x * FOCAL / q[k].z, sy = pcy - q[k].y * FOCAL / q[k].z;
+        minx = fminf(minx, sx); maxx = fmaxf(maxx, sx); miny = fminf(miny, sy); maxy = fmaxf(maxy, sy); vz += q[k].z / 4;
     }
-#define COUVRE_OCC(o) (vz < (o)->vz - 0.2f && !(maxx < (o)->x0 || minx > (o)->x1 || maxy < (o)->y0 || miny > (o)->y1))
-    const int hit = close || (occ_sera >= 0 && COUVRE_OCC(&occ[occ_sera])) || (sujet_on && COUVRE_OCC(&occ_sujet)) || (parle_on && COUVRE_OCC(&occ_parle));
-    int slot = -1, freeslot = -1;
-    for (int f = 0; f < FADE_N; f++) {
-        if (!fades[f].used) { if (freeslot < 0) freeslot = f; continue; }
-        if (fabsf(fades[f].cx - px) < 0.01f && fabsf(fades[f].cz - pz) < 0.01f) { slot = f; break; }
+    deco_couv_t *d = &deco_cands[ndeco_cands];
+    d->x = px; d->z = pz; d->proche = proche; d->coupe = coupe; d->cv[0] = d->cv[1] = d->cv[2] = 0;
+    if (!proche) {
+        int sh, m, mv;
+        const uint8_t *tex = deco_tex(tile, &sh, &m, &mv);
+        const occ_t *os[3] = { occ_sera >= 0 ? &occ[occ_sera] : NULL, sujet_on ? &occ_sujet : NULL, parle_on ? &occ_parle : NULL };
+        for (int k = 0; k < 3 && tex; k++) {
+            const occ_t *o = os[k];
+            if (o && vz < o->vz - 0.2f && !(maxx < o->x0 || minx > o->x1 || maxy < o->y0 || miny > o->y1)) d->cv[k] = deco_couv(o, q, tex, sh, m, mv);
+        }
     }
-    if (slot < 0 && hit && freeslot >= 0) { slot = freeslot; fades[slot] = (fade_t){ px, pz, 0, 1, 0, 0 }; }
-    if (slot < 0) return;
-    if (hit) fades[slot].hit = 1;
-    prim->fade = (uint8_t)(slot + 1);
+    if (proche || d->cv[0] || d->cv[1] || d->cv[2]) ndeco_cands++;
+    return coupe;
+}
+/* Après les décors : ceux qui cachent ensemble assez d'un personnage suivi (ou juste devant la caméra) ont leur place de fades */
+static void deco_decider(void) {
+    for (int k = 0; k < 3; k++) {
+        uint32_t u = 0; int deja = 0;
+        for (int c = 0; c < ndeco_cands; c++) if (deco_cands[c].cv[k]) { u |= deco_cands[c].cv[k]; deja |= deco_cands[c].coupe; }
+        if (couv_nb(u) < (deja ? COUV_GARDE : COUV_COUPE)) for (int c = 0; c < ndeco_cands; c++) deco_cands[c].cv[k] = 0;
+    }
+    for (int c = 0; c < ndeco_cands; c++) {
+        const deco_couv_t *d = &deco_cands[c];
+        if (!d->proche && !d->cv[0] && !d->cv[1] && !d->cv[2]) continue;
+        int slot = -1, freeslot = -1;
+        for (int f = 0; f < FADE_N; f++) {
+            if (!fades[f].used) { if (freeslot < 0) freeslot = f; continue; }
+            if (fades[f].r < 0 && fabsf(fades[f].cx - d->x) < 0.01f && fabsf(fades[f].cz - d->z) < 0.01f) { slot = f; break; }
+        }
+        if (slot < 0 && freeslot >= 0) { slot = freeslot; fades[slot] = (fade_t){ d->x, d->z, 0, 1, 0, -1 }; }
+        if (slot >= 0) fades[slot].hit = 1;
+    }
+    ndeco_cands = 0;
 }
 static void occ_add(float x, float z) {
     char_view_t c;
@@ -745,6 +926,45 @@ static int front_de(const occ_t *o, const pak_poly_t *pp, float minx, float maxx
     float ps = (o->x - q->x) * pp->n[0] + (o->y - q->y) * pp->n[1] + (o->z - q->z) * pp->n[2];
     if ((ps < 0) == (cs < 0)) return 0;
     return 1 | (maxx < o->x0 || minx > o->x1 || maxy < o->y0 || miny > o->y1 ? 0 : 2);
+}
+/* Couverture d'un personnage par un bâtiment ou un mur (10/11/2026, demande de l'utilisateur : « le masquage du bâtiment seulement si le
+   personnage joué est caché à plus de 50 % par le bâtiment, pour éviter que les bâtiments disparaissent quand on longe les côtés sans
+   être réellement masqué ») : COUV_NX × COUV_NY points sur son corps à l'écran (colonnes au milieu du cadre de sa planche, de la
+   cheville à la tête), couverts ou non par les faces placées devant lui (polygones entiers, à l'écran : chaque point d'un masque de
+   bits, l'union de toutes les faces du bâtiment ou de l'objet mur). Coupé à COUV_COUPE points et plus (la moitié), gardé coupé tant qu'il
+   en couvre COUV_GARDE (sans clignoter au seuil). Avant : la boîte d'une seule face qui touchait le cadre du personnage suffisait.
+   couvPoly, couvPoints des émulateurs, à garder identiques. */
+static uint32_t couv_points(const occ_t *o, const float *sx, const float *sy, int n) {
+    uint32_t m = 0;
+    for (int j = 0; j < COUV_NY; j++) for (int i = 0; i < COUV_NX; i++) {
+        float x, y;
+        couv_xy(o, i, j, &x, &y);
+        int dedans = 0;
+        for (int a = 0, b = n - 1; a < n; b = a++)
+            if ((sy[a] > y) != (sy[b] > y) && x < sx[a] + (sx[b] - sx[a]) * (y - sy[a]) / (sy[b] - sy[a])) dedans = !dedans;
+        if (dedans) m |= 1u << (j * COUV_NX + i);
+    }
+    return m;
+}
+static int couv_nb(uint32_t m) { int n = 0; while (m) { m &= m - 1; n++; } return n; }
+/* Ce que la face pp couvre de chaque personnage suivi (Sera, le sujet de la caméra, celui qui parle), ajouté à cv[0..2] ; seulement si
+   son plan les sépare de la caméra */
+static void couv_face(const pak_poly_t *pp, int sujet, uint32_t *cv) {
+    float sx[16], sy[16], bx[4];
+    const int n = poly_ecran(pp, sx, sy, bx);
+    if (n < 3) return;
+    const occ_t *os[3] = { occ_sera >= 0 ? &occ[occ_sera] : NULL, sujet ? &occ_sujet : NULL, parle_on ? &occ_parle : NULL };
+    for (int k = 0; k < 3; k++) if (os[k] && (front_de(os[k], pp, bx[0], bx[1], bx[2], bx[3]) & 2)) {
+        const uint32_t m = couv_points(os[k], sx, sy, n);
+        cv[k] |= m;
+#ifdef ENG_DEBUG_COUV   /* mise au point (rendu_test compilé avec -DENG_DEBUG_COUV) : chaque face qui couvre un personnage suivi */
+        if (m && k == 0) printf("COUV face (%.2f %.2f %.2f) n (%.2f %.2f %.2f) nv %d : %d points, sera y %.2f%c", pp->v[0].x, pp->v[0].y, pp->v[0].z, pp->n[0], pp->n[1], pp->n[2], pp->nv, couv_nb(m), os[k]->y, 10);
+#endif
+    }
+}
+static int couv_cache(const uint32_t *cv, int coupe) {
+    const int s = coupe ? COUV_GARDE : COUV_COUPE;
+    return couv_nb(cv[0]) >= s || couv_nb(cv[1]) >= s || couv_nb(cv[2]) >= s;
 }
 static int sera_front(const pak_poly_t *pp, float minx, float maxx, float miny, float maxy) {
     return (occ_sera >= 0 ? front_de(&occ[occ_sera], pp, minx, maxx, miny, maxy) : 0) | (sujet_ici ? front_de(&occ_sujet, pp, minx, maxx, miny, maxy) : 0)
@@ -877,6 +1097,26 @@ static int submit_pak_poly(const pak_poly_t *pp, int tile, int forced, int alpha
     }
     return submit_poly(v, n, tile, forced, alpha);
 }
+/* Polygone du paquet coupé à la hauteur yc (île : coupe_hauteur) : sa partie sous yc ; -1 s'il n'en reste rien ; dos : face tournée
+   de l'autre côté (le dos d'un mur, vu dans un bâtiment coupé), ses sommets pris à l'envers */
+static int submit_pak_poly_coupe(const pak_poly_t *pp, int tile, int forced, int alpha, float yc, int dos) {
+    if (poly_hors_champ(pp)) return -1;
+    vv_t v[10];
+    const int n = pp->nv > 8 ? 8 : pp->nv;
+    int m = 0;
+    for (int i = 0; i < n; i++) {
+        const pak_vert_t *a = &pp->v[dos ? n - 1 - i : i], *b = &pp->v[dos ? (2 * n - 2 - i) % n : (i + 1) % n];
+        pak_vert_t q[2]; int nq = 0;
+        if (a->y <= yc) q[nq++] = *a;
+        if ((a->y <= yc) != (b->y <= yc)) {
+            const float t = (yc - a->y) / (b->y - a->y);
+            q[nq].x = a->x + (b->x - a->x) * t; q[nq].y = yc; q[nq].z = a->z + (b->z - a->z) * t;
+            q[nq].u = a->u + (b->u - a->u) * t; q[nq].v = a->v + (b->v - a->v) * t; q[nq].l = a->l + (b->l - a->l) * t; nq++;
+        }
+        for (int j = 0; j < nq && m < 10; j++) { const v3 o = to_view(q[j].x, q[j].y, q[j].z); v[m].x = o.x; v[m].y = o.y; v[m].z = o.z; v[m].u = q[j].u; v[m].v = q[j].v; v[m].l = q[j].l; m++; }
+    }
+    return m < 3 ? -1 : submit_poly(v, m, tile, forced, alpha);
+}
 static int culled(const pak_poly_t *pp) {
     if (!(pp->flags & POLY_CULL)) return 0;
     const camera_t *c = &E.cam;
@@ -907,6 +1147,18 @@ static int sera_row(float dir) {
    ground : véhicule qui roule, image descendue de son vide (foot) pour que son bas touche le sol ;
    ombre : réglage d'ombre (E.w.ombre, OMBRE_JOUEUR pour le joueur), -1 : l'ombre d'origine */
 #define NAGE_SINK 0.55f          /* à la nage : part de la hauteur du sprite sous la surface */
+#define ILE_NAGE_PLEIN 0.3f      /* île : profondeur (cases) où l'enfoncement atteint ILE_NAGE_SINK (ileNage de l'émulateur de l'île) */
+/* Île (11/11/2026, demande de l'utilisateur : les héroïnes à moitié immergées quand elles nagent) : l'enfoncement suit la profondeur ;
+   ILE_NAGE_SINK (internal.h) plutôt que NAGE_SINK, qui ne laissait que la tête hors de l'eau ; en deçà d'ILE_GUE, on ne nage pas */
+static float ile_nage(float prof, float H) { return prof - ILE_NAGE_SINK * H * fminf(1.0f, prof / ILE_NAGE_PLEIN); }
+/* Réfraction (11/11/2026, demande de l'utilisateur : la partie immergée visible, d'une autre couleur et plus écrasée) : sous la ligne d'eau,
+   un sprite de l'île est tassé vers la surface (ILE_REFRAC_K de sa hauteur immergée) et mêlé à la couleur de l'eau (ILE_EAU_*, mélange
+   ILE_EAU_MELE / 16) ; ligne d'eau à l'écran dans v0 du sprite (y + 1, 0 : aucune) ; drawSprite de l'émulateur de l'île */
+#define ILE_REFRAC_K 0.6f
+#define ILE_EAU_R 0x1E
+#define ILE_EAU_G 0x7F
+#define ILE_EAU_B 0x96
+#define ILE_EAU_MELE 7
 #define WHO_MEMBRE 3
 #define WHO_ENNEMI (WHO_MEMBRE + NMEMB)
 static void add_character(float x, float z, int frame, int row, int remap, int sheet, int who, float taille, float alt, int ground, int ombre) {
@@ -969,14 +1221,20 @@ static void add_character(float x, float z, int frame, int row, int remap, int s
     p->tissu = (uint16_t)(sheet >= 0 && E.w.sheets[sheet].tissu ? char_tissu : 0);
     p->teinte = (uint8_t)char_teinte;
     p->tile = (uint16_t)(ZK / c.z);   /* clé de profondeur des pieds */
+    p->v0 = 0;   /* île : ligne d'eau à l'écran (réfraction : draw_sprite) */
+    if (E.w.ile[0] && !clip) {
+        const float pe = eau_prof(x, z);
+        char_view_t ve;
+        if (pe > 0 && alt < pe - 0.02f && char_view(x, z, pe, &ve)) { const float yw = ve.sy + (sy - c.sy); if (yw > 0 && yw < 65000) p->v0 = (uint32_t)lroundf(yw) + 1; }
+    }
     /* Image qui descend sous son ancrage (véhicule : ancré au milieu de son emprise) : ce bas est devant l'ancrage, et le
        sol qu'il recouvre passait devant lui au test de profondeur (camion coupé en bas) ; la clé est avancée comme le
        seau. Un personnage, ancré à ses pieds, garde la sienne */
-    if (sheet >= 0 && E.w.sheets[sheet].has_pv && E.w.sheets[sheet].fh - E.w.sheets[sheet].pv[row & 7][1] / 2.0f > 2) {
+    if (sous_ancrage(sheet, row)) {
         const float zf = fmaxf(c.z * 0.5f, c.z - 0.25f - 0.3f * ratio * ht * c.z / FOCAL);
         p->tile = (uint16_t)fminf(65535.0f, ZK / zf);
     }
-    if (char_devant > 0) p->tile = (uint16_t)fmaxf(p->tile, fminf(65535.0f, ZK / char_devant));
+    if (char_devant_z > 0) p->tile = (uint16_t)fmaxf(p->tile, fminf(65535.0f, ZK / char_devant_z));
     /* Planche propre : même hauteur à l'écran que la planche commune, fois la taille du personnage */
     if (sheet >= 0) p->s = s * E.w.fh / (float)E.w.sheets[sheet].fh * t;
     /* Ancrage de la direction (PIVO) : ce point de l'image sur la position au sol ; sans lui, un véhicule qui roule est
@@ -990,13 +1248,16 @@ static void add_character(float x, float z, int frame, int row, int remap, int s
 }
 /* Profondeur (vue) la plus proche que prend le sprite d'un personnage en (x, z) dans add_character : celle de son seau,
    avancée de 0,25 et de 0,3 × sa largeur (pas plus près que la moitié de la sienne) ; 0 hors de la vue (charAvant de
-   l'émulateur) */
-static float char_avant(float x, float z, int sheet, float taille) {
+   l'émulateur). *cle : la profondeur de sa clé, celle de ses pieds, ou celle du seau pour une image qui descend sous son
+   ancrage dans la direction row (machine) */
+static float char_avant(float x, float z, int sheet, float taille, int row, float *cle) {
     char_view_t c;
     if (!char_view(x, z, 0, &c)) return 0;
     const float t = (taille > 0 ? taille : sheet >= 0 ? E.w.sheets[sheet].taille : 1.0f) * (sheet >= 0 ? E.w.sheets[sheet].norm : 1.0f), ht = E.w.fh * c.s * t;
     const float ratio = sheet >= 0 ? (float)E.w.sheets[sheet].fw / E.w.sheets[sheet].fh : (float)E.w.fw / E.w.fh;
-    return fmaxf(c.z * 0.5f, c.z - 0.25f - 0.3f * ratio * ht * c.z / FOCAL);
+    const float av = fmaxf(c.z * 0.5f, c.z - 0.25f - 0.3f * ratio * ht * c.z / FOCAL);
+    *cle = sous_ancrage(sheet, row) ? av : c.z;
+    return av;
 }
 
 /* Eau (EAUC : toujours transparente) : sorte d'une rive (celle d'une case d'eau voisine, sinon la première des terrains) */
@@ -1035,7 +1296,10 @@ static int eau_surface(int i, int j, float wh, int bb, int sorte) {
         const int x = i + CX4[k], z = j + CZ4[k];
         const v3 o = to_view((float)x, wh, (float)z);
         q[k].x = o.x; q[k].y = o.y; q[k].z = o.z; q[k].u = CX4[k] * 16.0f * UREP_SURF + du; q[k].v = CZ4[k] * 16.0f * UREP_SURF + dv;
+        /* plafonnée à l'opacité pleine (16) : sans quoi, entre un sommet à 30 (mer profonde) et un à 5 (lagon), la limite opaque
+           collait au sommet peu profond et dessinait des marches le long du maillage (11/11/2026 ; eauSurface de l'émulateur de l'île) */
         q[k].l = (wh - hv(x, z)) / E.w.eaux[sorte].prof * 16.0f;
+        if (E.w.ile[0] && q[k].l > 16.0f) q[k].l = 16.0f;   /* (île seulement : Echoes garde l'eau de son émulateur) */
     }
     cur_cat = 1;
     return eau_poly(q, 4, bb > 0 ? bb - 1 : bb, sorte);
@@ -1229,14 +1493,22 @@ static void cell_plants(const chunk_t *ch, int c, int i, int j, int cb, float fo
                 v3 o = to_view(P[m][0], P[m][1], P[m][2]);
                 q[m].x = o.x; q[m].y = o.y; q[m].z = o.z; q[m].u = P[m][3]; q[m].v = P[m][4]; q[m].l = p->l;
             }
+            /* Grand décor qui cachait un personnage suivi : coupé à COUPE_FONDATION au-dessus de son pied (deco_coupe ; le haut du
+               quadrilatère ramené vers le bas, la texture avec lui) */
+            if (size > 1.2f && !bat && deco_coupe(p->x, p->z, p->tile, q) && hy > COUPE_FONDATION) {
+                const float f = COUPE_FONDATION / hy;
+                for (int a = 0; a < 2; a++) {
+                    vv_t *t = &q[3 - a];
+                    const vv_t *b0 = &q[a];
+                    t->x = b0->x + (t->x - b0->x) * f; t->y = b0->y + (t->y - b0->y) * f; t->z = b0->z + (t->z - b0->z) * f;
+                    t->v = b0->v + (t->v - b0->v) * f;
+                }
+            }
             int own = bucket_of(to_view(p->x, p->y, p->z).z);
             cur_cat = 2;
             const int np0 = B->nprims;
             const int pb = submit_poly(q, 4, p->tile, cb >= 0 && cb < own ? cb : own, 1);
-            if (size > 1.2f && !bat && B->nprims > np0) {
-                plant_fade(p->x, p->z, &B->prims[np0], q);
-                if (dist_lt(i + 0.5f - focx, j + 0.5f - focz, ARB_R / w->ech)) arb_add(p->x, p->y, p->z, pb, q);
-            }
+            if (size > 1.2f && !bat && B->nprims > np0 && dist_lt(i + 0.5f - focx, j + 0.5f - focz, ARB_R / w->ech)) arb_add(p->x, p->y, p->z, pb, q);
             if (efface && B->nprims > np0) B->prims[np0].fade = (uint8_t)(200 + efface);   /* niveau direct (≥ 200) */
         }
     }
@@ -1253,16 +1525,20 @@ static int sol_fondu(float x, float z) {
     }
     return 0;
 }
-static void sol_noir(int i, int j) {
+static void sol_noir(int i, int j, const chunk_t *ch, int lx, int lz, int c) {
     static const int CX4[4] = { 0, 1, 1, 0 }, CZ4[4] = { 0, 0, 1, 1 };
+    /* Le bâtiment coupé (coupe_hauteur) laisse voir son plancher : le sol de la case, à l'ombre (COUPE_SOL_OMBRE ; île, puis Echoes le 10/11/2026) */
+    const int ile = !ch->water[c], t = ile ? ch->tile[c] : T_DARK;
+    const float S = ile && t >= (int)E.w.g0 ? 32.0f : 16.0f;
     vv_t q[4];
     for (int k = 0; k < 4; k++) {
         const v3 o = grid_vertex(i + CX4[k], j + CZ4[k], 0);
-        q[k].x = o.x; q[k].y = o.y; q[k].z = o.z; q[k].u = CX4[k] * 16.0f; q[k].v = CZ4[k] * 16.0f; q[k].l = 0;
+        q[k].x = o.x; q[k].y = o.y; q[k].z = o.z; q[k].u = CX4[k] * S; q[k].v = CZ4[k] * S;
+        q[k].l = ile ? ch->lv[(lz + CZ4[k]) * CV + lx + CX4[k]] * COUPE_SOL_OMBRE : 0;
     }
     cur_cat = 0;
     poly_bias = -SOL_RECUL;
-    submit_poly(q, 4, T_DARK, -1, 0);
+    submit_poly(q, 4, t, -1, 0);
     poly_bias = 0;
 }
 
@@ -1357,19 +1633,33 @@ static const pak_poly_t *int_bassin(float x, float z) {
     }
     return NULL;
 }
+/* Pied et haut des murs de l'intérieur chargé (relevés une fois par niveau) : la coupe va du haut au pied, linteaux compris */
+static void int_murs_y(const interieur_t *I, float *lo, float *hi) {
+    static int cur = -1, np = -1; static float l, h;
+    if (cur != I->cur || np != I->npoly) {
+        cur = I->cur; np = I->npoly; l = 1e9f; h = -1e9f;
+        for (int i = 0; i < I->npoly; i++) {
+            const pak_poly_t *pp = int_poly(I, i);
+            if (!(pp->flags & INT_WALL)) continue;
+            for (int k = 0; k < pp->nv && k < 8; k++) { l = fminf(l, pp->v[k].y); h = fmaxf(h, pp->v[k].y); }
+        }
+        if (l > h) { l = 0; h = I->h; }
+    }
+    *lo = l; *hi = h;
+}
+static int int_mur_cache = 0;   /* l'objet mur en cours cache l'héroïne (int_draw_obj : couverture de ses faces) */
 static void int_submit(interieur_t *I, int i) {
     const pak_poly_t *pp = int_poly(I, i);
     if (culled(pp)) return;
     if (pp->flags & INT_EAU) { int_eau(pp, 0, 0, 0); return; }
-    const int np0 = B->nprims;
-    if (submit_pak_poly(pp, pp->tile, OTN - 1, pp->flags & POLY_ALPHA) < 0 || B->nprims == np0 || !(pp->flags & INT_WALL) || occ_sera < 0) return;
-    const occ_t *o = &occ[occ_sera];
-    const int hit = int_after && !(sp_maxx < o->x0 || sp_minx > o->x1 || sp_maxy < o->y0 || sp_miny > o->y1);
-    float a = I->fade[i] / 255.0f + (hit ? int_dt : -int_dt) / FADE_S;
-    a = a < 0 ? 0 : a > 1 ? 1 : a;
-    I->fade[i] = (uint8_t)lroundf(a * 255);
-    const int lvl = (int)lroundf(a * FADE_MAX);
-    if (lvl) { B->prims[np0].fade = (uint8_t)lvl; if (hit) B->sera_faded = 1; }
+    if ((pp->flags & INT_WALL) && occ_sera >= 0) {   /* le mur qui cache l'héroïne est coupé (coupe_hauteur), pas estompé */
+        float lo, hi;
+        I->fade[i] = int_mur_cache ? 255 : 0;   /* d'un coup, sans descente */
+        if (int_mur_cache) { int_murs_y(I, &lo, &hi); submit_pak_poly_coupe(pp, pp->tile, OTN - 1, pp->flags & POLY_ALPHA, coupe_hauteur(lo, hi, 1), 0); }
+        else submit_pak_poly(pp, pp->tile, OTN - 1, pp->flags & POLY_ALPHA);
+        return;
+    }
+    submit_pak_poly(pp, pp->tile, OTN - 1, pp->flags & POLY_ALPHA);
 }
 /* Triangles d'un meuble low poly : du plus loin au plus proche (centre de chaque face) */
 typedef struct { float z; int i; } int_tri_t;
@@ -1407,16 +1697,36 @@ static void int_draw_colle(interieur_t *I, const int_obj_t *o) {
     for (int i = o->p0; i < o->p0 + o->np; i++) {
         const pak_poly_t *pp = int_poly(I, i);
         if (culled(pp)) continue;
-        const int np0 = B->nprims;
-        if (submit_pak_poly(pp, pp->tile, OTN - 1, pp->flags & POLY_ALPHA) < 0 || B->nprims == np0) continue;
-        I->fade[i] = wp >= 0 ? I->fade[wp] : 0;
-        const int lvl = (int)lroundf(I->fade[i] / 255.0f * FADE_MAX);
-        if (lvl) B->prims[np0].fade = (uint8_t)lvl;
+        I->fade[i] = wp >= 0 ? I->fade[wp] : 0;   /* coupée avec son pan de mur */
+        float lo, hi;
+        if (I->fade[i]) { int_murs_y(I, &lo, &hi); submit_pak_poly_coupe(pp, pp->tile, OTN - 1, pp->flags & POLY_ALPHA, coupe_hauteur(lo, hi, I->fade[i] / 255.0f), 0); }
+        else submit_pak_poly(pp, pp->tile, OTN - 1, pp->flags & POLY_ALPHA);
     }
 }
 static void int_draw_obj(interieur_t *I, const int_obj_t *o) {
     if (o->mur && o->np) { int_draw_colle(I, o); return; }
-    if (!o->mesh) { for (int i = o->p0; i < o->p0 + o->np; i++) int_submit(I, i); return; }
+    if (!o->mesh) {
+        /* un objet mur dessiné après l'héroïne (devant elle) la cache-t-il ? Union de ses faces (couverture), seuil abaissé s'il était coupé */
+        int_mur_cache = 0;
+        if (int_after && occ_sera >= 0) {
+            uint32_t cv[3] = { 0, 0, 0 };
+            int coupe = 0, murs = 0;
+            for (int i = o->p0; i < o->p0 + o->np; i++) {
+                const pak_poly_t *pp = int_poly(I, i);
+                if (!(pp->flags & INT_WALL) || culled(pp)) continue;
+                murs = 1; coupe |= I->fade[i] != 0;
+                float sx[16], sy[16], bx[4];
+                const int n = poly_ecran(pp, sx, sy, bx);
+                const occ_t *so = &occ[occ_sera];
+                if (n >= 3 && !(bx[1] < so->x0 || bx[0] > so->x1 || bx[3] < so->y0 || bx[2] > so->y1)) cv[0] |= couv_points(so, sx, sy, n);
+            }
+            int_mur_cache = murs && couv_cache(cv, coupe);
+            if (int_mur_cache) B->sera_faded = 1;
+        }
+        for (int i = o->p0; i < o->p0 + o->np; i++) int_submit(I, i);
+        int_mur_cache = 0;
+        return;
+    }
     static int_tri_t T[INT_TRI_MAX] ENG_FROID;
     int n = 0;
     for (int k = 0; k < o->np && n < INT_TRI_MAX; k++) {
@@ -1657,7 +1967,8 @@ void eng_build_frame(float time_s) {
         /* Vaisseau : la caméra suit son altitude, un peu plus loin ; véhicule qui coule : sa hauteur au-dessus du fond ;
            véhicule qui plane sur l'eau : la surface */
         const float alt = ship ? E.ride_alt : E.ride >= 0 && E.ride_coule > 0 ? E.ride_alt
-            : E.ride >= 0 && !CR.on && (!veh_rolls(E.npcs[E.ride].perso) || veh_flotte(E.npcs[E.ride].perso)) ? eau_prof(E.sera.x, E.sera.z) : 0;
+            : E.ride >= 0 && !CR.on && (!veh_rolls(E.npcs[E.ride].perso) || veh_flotte(E.npcs[E.ride].perso)) ? eau_prof(E.sera.x, E.sera.z)
+            : E.w.ile[0] && E.ride < 0 && E.nage && !E.in.on ? swim_alt() : 0;   /* île : à la nage, la surface (en mer profonde, la caméra passait sous l'eau, 11/11/2026 ; computeCamera de l'émulateur de l'île) */
         if (MISE.cam_on) {   /* caméra de script (instruction « camera ») : son point, son lacet, son zoom */
             setup_camera(MISE.cam[0], ground_y(MISE.cam[0], MISE.cam[1]) + MISE.cam[4], MISE.cam[1], MISE.cam[2], E.pitch, 12.5f / w->ech / MISE.cam[3]);   /* cam[4] : hauteur visée (1 / ech, ou « hauteur ») */
             focx = MISE.cam[0]; focz = MISE.cam[1];
@@ -1720,7 +2031,7 @@ void eng_build_frame(float time_s) {
     B->stats.chunk_loads = (int)E.stream_loads; B->stats.us_stream = E.stream_us;
     E.stream_loads = E.stream_us = 0;
     for (int b = 0; b < OTN; b++) ot_head[b] = ot_tail[b] = -1;
-    occ_poly = NULL; nocc = 0; occ_sera = -1; narb = 0;
+    occ_poly = NULL; nocc = 0; occ_sera = -1; narb = 0; ndeco_cands = 0;
     /* Exemplaires dessinés : les NPC_DRAW plus proches de Sera, présents, devant la caméra, dans le rayon du décor ; en
        combat, aucun personnage du monde (ni Sera, ni les exemplaires) */
     int shown[NPC_DRAW], nshown = 0;
@@ -1820,7 +2131,7 @@ void eng_build_frame(float time_s) {
         const float hmin = min_f(min_f(h4[0], h4[1]), min_f(h4[CV], h4[CV + 1]));
         const float wh = ch->water_h[c];
         { const float hs = max_f(hmin, wh); if (hs < sol_bas) sol_bas = hs; }   /* sol, ou surface de l'eau qui le couvre */
-        if (ch->hidden[c]) { if (sol_fondu(i + 0.5f, j + 0.5f)) sol_noir(i, j); continue; }
+        if (ch->hidden[c]) { if (sol_fondu(i + 0.5f, j + 0.5f)) sol_noir(i, j, ch, lx, lz, c); continue; }
         int t = ch->tile[c], water = ch->water[c];
         const int sea = wh == w->wl;   /* sommets d'eau du cache (niveau de la mer) */
         const int clair = water && w->neaux;   /* eau transparente : le fond à son relief, puis la surface */
@@ -1918,7 +2229,26 @@ void eng_build_frame(float time_s) {
                 } else if (boite_hors_champ(b->cx, chunk_poly(ch, b->first)->v[0].y, b->cz, rb, BAT_CHAMP_H, rb)) { BAT_ECARTE(); continue; }
             }
             sujet_ici = sujet_on && !dist_lt(b->cx - occ_sujet.x, b->cz - occ_sujet.z, b->r * SUJET_DANS);
-            bld_hit = 0; fade_mark = 1;
+            bld_hit = 0; fade_mark = 0;
+            /* Le bâtiment qui cachait l'héroïne à l'image d'avant (sa place de fondu, à 1) coupé en entier à sa fondation (île, puis Echoes) */
+            const int ile_coupe = 1;
+            float ycoupe = INFINITY, ypied = 0;
+            uint32_t cv[3] = { 0, 0, 0 };   /* couverture des personnages suivis par ses faces (couv_face) */
+            const int_porte_t *pts[4]; int npt = 0;   /* ses portes (est_porte) */
+            {
+                for (int f = 0; f < FADE_N; f++) {
+                    if (!fades[f].used || fades[f].a <= 0 || fabsf(fades[f].cx - b->cx) >= 0.01f || fabsf(fades[f].cz - b->cz) >= 0.01f) continue;
+                    float lo = 1e9f;
+                    if (k < BAT_CACHE) { bat_y_lire(sl, ch); lo = bat_y[sl].ylo[k] / BAT_Y_PAS; }
+                    else {
+                        for (uint32_t m = 0; m < b->count; m++) { const pak_poly_t *pp = chunk_poly(ch, b->first + m); for (int i = 0; i < pp->nv && i < 8; i++) lo = fminf(lo, pp->v[i].y); }
+                        lo = floorf(lo * BAT_Y_PAS) / BAT_Y_PAS;   /* comme bat_y */
+                    }
+                    ycoupe = lo + COUPE_FONDATION; ypied = lo;
+                    for (int d = 0; d < E.w.nportes && npt < 4; d++) { const int_porte_t *q = &E.w.portes[d]; if (dist_lt(q->x - b->cx, q->z - b->cz, b->r + 1.5f)) pts[npt++] = q; }
+                    break;
+                }
+            }
             int prev_b = -1;   /* seau du polygone précédent : une affiche (POLY_COLLE) s'y range, après son mur */
             for (uint32_t m = 0; m < b->count; m++) {
                 const pak_poly_t *pp = chunk_poly(ch, b->first + m);
@@ -1929,11 +2259,22 @@ void eng_build_frame(float time_s) {
                 const int rk = POLY_RANK(pp);
                 poly_bias = rk == POLY_RANK_MAX ? 0.4f : rk && rk != POLY_COLLE ? 0.6f + 0.004f * (rk - 1) : 0;   /* objet posé (conteneur), accessoire : rang + 1 ; le reste par sa profondeur */
                 cur_cat = 4; occ_poly = pp;
-                if (culled(pp) || (rk == POLY_COLLE && prev_b < 0)) { prev_b = -1; continue; }
+                const int dos = culled(pp);
+                if (rk == POLY_COLLE && prev_b < 0) continue;
+                if (dos && !(ile_coupe && ycoupe < INFINITY)) { prev_b = -1; continue; }
+                if (ile_coupe) {   /* ce qu'elle couvre de l'héroïne (polygone entier) */
+                    if (!dos && (occ_sera >= 0 || sujet_ici || parle_on)) couv_face(pp, sujet_ici, cv);
+                    if (ycoupe < INFINITY) {
+                        if (npt && est_porte(pp, pts, npt, ypied)) {   /* une porte : entière (sa face de dos, cachée par les autres faces, non) */
+                            if (dos) { prev_b = -1; continue; }
+                        } else { prev_b = submit_pak_poly_coupe(pp, pp->tile, rk == POLY_COLLE ? prev_b : -1, pp->flags & POLY_ALPHA, ycoupe, dos); continue; }
+                    }
+                }
                 prev_b = submit_pak_poly(pp, pp->tile, rk == POLY_COLLE ? prev_b : -1, pp->flags & POLY_ALPHA);
             }
             poly_bias = 0;
             fade_mark = 0;
+            bld_hit = couv_cache(cv, ycoupe < INFINITY);   /* caché à moitié et plus (gardé coupé à COUV_GARDE) */
             /* Place de fondu : celle du bâtiment s'il en a une, une nouvelle s'il cache Sera */
             int slot = -1, freeslot = -1;
             for (int f = 0; f < FADE_N; f++) {
@@ -1959,6 +2300,7 @@ void eng_build_frame(float time_s) {
         for (int k = 0; k < ncib && !vu; k++) vu = dans_bande(E.w.cibles[cib[k]].x, E.w.cibles[cib[k]].z);
         if (!vu) { eng_dlg_hors = 1; eng_dlg_x = E.sera.x; eng_dlg_z = E.sera.z; }
     }
+    deco_decider();   /* grands décors coupés à l'image suivante */
     /* Fondus : chaque place va vers 1 si son bâtiment cache Sera, vers 0 sinon (libérée à 0) ; puis le niveau de chaque
        face (pixels sautés sur 16) remplace sa place */
     {
@@ -1970,7 +2312,8 @@ void eng_build_frame(float time_s) {
         for (int f = 0; f < FADE_N; f++) {
             fade_t *fd = &fades[f];
             if (!fd->used) continue;
-            fd->a += (fd->hit ? dt : -dt) / FADE_S;
+            if (fd->r != 0) fd->a = fd->hit ? 1.0f : 0.0f;   /* bâtiment (r > 0) ou grand décor (r < 0) coupé ou entier d'un coup (île, puis Echoes ; décors le 11/11/2026) */
+            else fd->a += (fd->hit ? dt : -dt) / FADE_S;
             if (fd->a > 1) fd->a = 1;
             if (fd->a <= 0 && !fd->hit) { fd->used = 0; continue; }
             if (fd->a < 0) fd->a = 0;
@@ -2029,8 +2372,30 @@ void eng_build_frame(float time_s) {
            (in_team) prennent les places 0 à EQUIPE_MAX - 1 dans l'ordre de PARTY (team_place), la réserve n'est pas là */
         float tx = 0, tz = 0;   /* centre de l'équipe : celui des EQUIPE_MAX places */
         for (int k = 0; k < EQUIPE_MAX; k++) { float bx, bz; battle_member(k, &bx, &bz); tx += bx / EQUIPE_MAX; tz += bz / EQUIPE_MAX; }
+        /* Ordre d'affichage de l'équipe (11/11/2026, retour de jeu : « le personnage le plus à droite passe au-dessus des autres en
+           lançant l'attaque ») : les membres sont presque à la même profondeur (moins de 1/64 d'écart), le test de profondeur ne
+           tranche pas ; le seau, qui avance chaque sprite de sa largeur, puis l'ordre d'arrivée décidaient, et le dernier de PARTY
+           (le plus à droite) passait devant ses voisins dès qu'il bougeait. Désormais tous dans le même seau (celui de la moitié de
+           la profondeur du plus proche, comme char_avant au plus près), du plus loin au plus proche : à égalité, le plus proche
+           l'emporte (dessiné en premier) ; l'attaquant au contact de l'ennemi garde le sien (char_devant). Même ordre dans
+           l'émulateur, qui peint du fond vers l'avant */
+        int ordre[NMEMB], no = 0;
+        float prof[NMEMB], pmin = 1e9f;
         for (int i = 0; i < NMEMB; i++) {
             if (!in_team(i)) continue;
+            float bx, bz, vx, vz; battle_member(team_place(i), &bx, &bz); battle_vise(i, &vx, &vz);
+            const float dx = vx - bx, dz = vz - bz, dl = hypotf(dx, dz), pas = BT.off[i] + BT.avance[i] * PAS_ACTIF;
+            char_view_t cv;
+            prof[i] = char_view(bx + dx / dl * pas / w->ech, bz + dz / dl * pas / w->ech, 0, &cv) ? cv.z : 0;
+            if (prof[i] > 0 && prof[i] < pmin) pmin = prof[i];
+            int k = no++;
+            while (k > 0 && prof[ordre[k - 1]] < prof[i]) { ordre[k] = ordre[k - 1]; k--; }
+            ordre[k] = i;
+        }
+        const int seau_equipe = pmin < 1e9f ? bucket_of(pmin * 0.5f) : -1;
+        for (int oi = 0; oi < no; oi++) {
+            const int i = ordre[oi];
+            char_bucket = seau_equipe;
             float bx, bz; battle_member(team_place(i), &bx, &bz);
             float vx, vz; battle_vise(i, &vx, &vz);   /* tourné vers l'ennemi visé (groupe), celui de son action */
             const int retourne = BT.phase == BP_ANIM && BT.an.who == i && BT.an.melee && E.clock - BT.an.t0 >= ELAN_FRAPPE && BT.off[i] > 0;   /* élan : le retour, en courant vers sa place */
@@ -2042,14 +2407,21 @@ void eng_build_frame(float time_s) {
             const int pp = i ? w->party_perso[i] : -1, own = i ? member_sheet(i) : ps;   /* dans sa tenue */
             /* Élan au corps à corps : l'attaquant devant l'ennemi qu'il frappe. Une machine ancrée au milieu de son emprise
                (Glaneur, char) a sa profondeur avancée (add_character) : arrêté à BAT_CONTACT de son centre, l'attaquant
-               passait derrière elle (02/11/2026) */
+               passait derrière elle (02/11/2026). Seulement près de lui (ELAN_DEVANT), et à la clé de l'ennemi (ses pieds,
+               sauf une machine) : avant le 11/11/2026, celle du haut de son grand sprite, pendant toute la course, et le
+               dernier de l'équipe à droite passait devant ceux qu'il croisait (retour de jeu) */
             if (BT.phase == BP_ANIM && BT.an.who == i && BT.an.melee && BT.off[i] > 0) {
                 const int k = battle_vise_en(i);
                 if (k < BT.nen && BT.en[k].perso >= 0) {
                     const perso_t *pe = &w->persos[BT.en[k].perso];
                     float ex, ez; battle_enemy_pos(k, &ex, &ez);
-                    int f2; const int esh = battle_anim(pe->sheet, BT_ENEMY + k, 0, &f2);
-                    char_devant = char_avant(ex, ez, esh, pe->taille * BAT_ETAILLE) * 0.96f;
+                    if (hypotf(ex - bx, ez - bz) * w->ech < BAT_CONTACT + ELAN_DEVANT) {
+                        int f2; const int esh = battle_anim(pe->sheet, BT_ENEMY + k, 0, &f2);
+                        float cle = 0;   /* hors de la vue : 0, rien d'imposé */
+                        char_devant = char_avant(ex, ez, esh, pe->taille * BAT_ETAILLE, sera_row(atan2f(tx - ex, tz - ez)), &cle) * 0.96f;
+                        char_devant_z = cle * 0.96f;
+                        char_bucket = -1;   /* au contact : le seau de l'ennemi, pas celui de l'équipe */
+                    }
                 }
             }
             const uint32_t hx6 = hud_theme_c2();
@@ -2058,12 +2430,16 @@ void eng_build_frame(float time_s) {
             if (own >= 0 && (PARTY[i].hp > 0 || has_anim(own, ANIM_KO))) {
                 int f2; const int sh = battle_anim(own, i, fr, &f2);
                 char_tissu = member_tissu(i); char_teinte = BT.transfo[i] ? i + 1 : 0;
-                if (i) { const perso_vue_t pv = perso_vue(pp, 0); add_character(bx, bz, f2, sera_row(dir), pv.remap, sh, WHO_MEMBRE + i, pv.taille, 0, 0, pv.ombre); }
-                else add_character(bx, bz, f2, sera_row(dir), 0, sh, WHO_MEMBRE, joueur_taille(), 0, 0, OMBRE_SERA);
+                /* île : héroïnes à 75 % (une taille 0 vaut celle de la planche : prise avant la réduction) */
+                const float kt = w->ile[0] ? ILE_BAT_TAILLE : 1.0f;
+                #define TAILLE_K(t) ((kt == 1.0f ? (t) : ((t) > 0 ? (t) : w->sheets[own].taille)) * kt)
+                if (i) { const perso_vue_t pv = perso_vue(pp, 0); add_character(bx, bz, f2, sera_row(dir), pv.remap, sh, WHO_MEMBRE + i, TAILLE_K(pv.taille), 0, 0, pv.ombre); }
+                else add_character(bx, bz, f2, sera_row(dir), 0, sh, WHO_MEMBRE, TAILLE_K(joueur_taille()), 0, 0, OMBRE_SERA);
+                #undef TAILLE_K
                 char_tissu = char_teinte = 0;
             }
             else add_character(bx, bz, fr, sprite_row(dir), PARTY[i].hp > 0 ? REMAP[i & 3] : 5, -1, WHO_MEMBRE + i, 0, 0, 0, -1);
-            char_devant = 0; char_anneau = 0;
+            char_devant = char_devant_z = 0; char_anneau = 0; char_bucket = -1;
         }
         /* Ennemis en haut à gauche (groupe : en arc autour de la place du chef, battle_enemy_pos), tournés vers l'équipe
            (trois quarts face) ; leur position à l'écran : point visé (à mi-hauteur), nom, barre ; un ennemi abattu tombe
@@ -2088,7 +2464,7 @@ void eng_build_frame(float time_s) {
                profond) : la surface tramée, devant elle, voile le corps immergé selon la profondeur ; son ombre sur le fond */
             const float H = 2.0f / E.w.ech * E.w.sprite_scale * joueur_taille() * E.w.sheets[ps].norm, prof = E.nage ? swim_alt() : 0;
             char_tissu = member_tissu(0); char_teinte = eveil_hors_combat();
-            add_character(E.sera.x, E.sera.z, fr, sera_row(E.sera.dir), 0, sh, 0, joueur_taille(), fmaxf(0, prof - NAGE_SINK * H), 0, OMBRE_SERA);
+            add_character(E.sera.x, E.sera.z, fr, sera_row(E.sera.dir), 0, sh, 0, joueur_taille(), E.w.ile[0] ? ile_nage(prof, H) : fmaxf(0, prof - NAGE_SINK * H), 0, OMBRE_SERA);
             char_tissu = char_teinte = 0;
         } else add_character(E.sera.x, E.sera.z, E.sera.frame % 4, sprite_row(E.sera.dir), 0, -1, 0, 0, 0, 0, -1);
     }
@@ -2099,8 +2475,9 @@ void eng_build_frame(float time_s) {
         const int veh = (pe->flags & PERS_VEHICULE) != 0;
         /* En course : hauteur de la piste ; vaisseau conduit, ou véhicule qui coule : E.ride_alt ; sur l'eau, un véhicule
            qui plane glisse au-dessus de la surface */
-        const float alt = (mine ? course_alt_joueur() : 0) + ((VEH_TYPE(pe->flags) == VEH_VAISSEAU || E.ride_coule > 0) && veh && mine && !CR.on ? E.ride_alt
+        float alt = (mine ? course_alt_joueur() : 0) + ((VEH_TYPE(pe->flags) == VEH_VAISSEAU || E.ride_coule > 0) && veh && mine && !CR.on ? E.ride_alt
             : veh ? veh_hover(nc->perso, (float)k) + (veh_rolls(nc->perso) && !veh_flotte(nc->perso) ? 0 : eau_prof(nc->x, nc->z)) : 0);
+        for (int q = 0; q < E.w.ile_nsocles; q++) if (E.w.ile_socle_perso[q] == nc->perso) alt = E.w.ile_socle[q];   /* statue sur son piédestal (section ILE) */
         const perso_vue_t pv = perso_vue(nc->perso, nc->var);   /* (la recrue de l'héroïne choisie : en Sera) */
         /* Starter des circuits : son drapeau pendant le compte à rebours et l'arrivée */
         const int drapeau = nc->depart && CR.on && (CR.phase == CP_GRILLE || CR.phase == CP_ARRIVEE) && has_anim(pv.sheet, ANIM_DEPART);
@@ -2126,7 +2503,23 @@ void eng_build_frame(float time_s) {
         const int sh = anim_sheet(pv.sheet, a->walking ? (a->court && has_anim(pv.sheet, ANIM_RUN) ? ANIM_RUN : ANIM_WALK) : ANIM_IDLE);
         const int fr = !a->walking && !has_anim(pv.sheet, ANIM_IDLE) ? 0 : a->frame % E.w.sheets[sh].frames;
         char_tissu = pv.tissu;
-        add_character(a->x, a->z, fr, sera_row(a->dir), pv.remap, sh, 2, pv.taille, 0, 0, pv.ombre);
+        /* un acteur véhicule flotte comme un exemplaire (île : barque du passeur, pirogue de Maia) */
+        const int vh = (E.w.persos[a->perso].flags & PERS_VEHICULE) != 0;
+        add_character(a->x, a->z, fr, sera_row(a->dir), pv.remap, sh, 2, pv.taille, vh ? veh_hover(a->perso, (float)k) + (veh_rolls(a->perso) && !veh_flotte(a->perso) ? 0 : eau_prof(a->x, a->z)) : 0, 0, pv.ombre);
+        char_tissu = 0;
+    }
+    /* Île du jeu des héroïnes (ile.c) : la compagne de l'héroïne sur la trace de ses pas (une seule visible hors combat :
+       ILE_VISIBLES ; l'autre est au combat) ; à la nage, enfoncée comme elle */
+    for (int k = 0; k < (bat || !ile_compagnes_vues() ? 0 : ile_ncomp < ILE_VISIBLES ? ile_ncomp : ILE_VISIBLES); k++) {
+        const ile_comp_t *c = &ILE_COMP[k];
+        if ((c->x - E.cam.x) * E.cam.sy + (c->z - E.cam.z) * E.cam.cy < 1) continue;
+        const perso_vue_t pv = perso_vue(c->perso, 0);
+        if (pv.sheet < 0) continue;
+        const int sh = anim_sheet(pv.sheet, c->st == 2 && has_anim(pv.sheet, ANIM_RUN) ? ANIM_RUN : c->st ? ANIM_WALK : ANIM_IDLE);
+        const int fr = !c->st && !has_anim(pv.sheet, ANIM_IDLE) ? 0 : c->frame % E.w.sheets[sh].frames;
+        const float H = 2.0f / E.w.ech * E.w.sprite_scale * pv.taille * E.w.sheets[pv.sheet].norm, prof = eau_prof(c->x, c->z);
+        char_tissu = pv.tissu;
+        add_character(c->x, c->z, fr, sera_row(c->dir), pv.remap, sh, 2, pv.taille, E.w.ile[0] ? (prof > ILE_GUE ? ile_nage(prof, H) : 0) : fmaxf(0, prof - NAGE_SINK * H), 0, pv.ombre);
         char_tissu = 0;
     }
     /* Agents de la police à pied (police.c) : course, marche ou attente, dans le rayon du décor, devant la caméra (comme
@@ -2303,15 +2696,53 @@ static const int32_t BAYER_NUL[4] = { 0, 0, 0, 0 };
    toujours la réponse de (int32_t)((wy + dwdx × x) × ZK) > Z_PLUS(zp). Le sol caché sous la piste d'une course en
    passe des dizaines de milliers par image */
 /* d / n arrondi vers zéro comme la division du C, par un décalage pour un segment entier (n = SUB, le cas courant) */
-_Static_assert(SUB == 16, "div_seg : décalage de 4 pour SUB");
-static inline int32_t div_seg(int32_t d, int n) { return n == SUB ? (d + ((d >> 31) & (SUB - 1))) >> 4 : d / n; }
+_Static_assert(SUB == 16 || SUB == 32, "div_seg : décalage de 4 ou 5 pour SUB");
+#define SUB_SH (SUB == 32 ? 5 : 4)
+static inline int32_t div_seg(int32_t d, int n) { return n == SUB ? (d + ((d >> 31) & (SUB - 1))) >> SUB_SH : d / n; }
 #define Z_MARGE (4 + (RW_MAX >> 8))
+#ifndef ENG_RECT_OPT
+#define ENG_RECT_OPT ENG_RECT   /* optimisations du rendu de l'écran rectangulaire (LDK) ; 0 : le rendu de la montre, pour comparer */
+#endif
+#if !ENG_RECT_OPT
 static inline int libre_z(uint16_t zp, int32_t z8, float wy, float dwdx, int x) {
     const int32_t t = Z_PLUS((int32_t)zp), k = z8 >> 8;
     if (k > t + Z_MARGE) return 1;
     if (k < t - Z_MARGE) return 0;
     return (int32_t)((wy + dwdx * x) * ZK) > t;
 }
+#endif
+/* Écran rectangulaire (LDK, 11/11/2026 ; la montre garde libre_z) : la clé du polygone avance en entiers avec 2^sh de
+   fraction (11 bits, au lieu de 8), et la marge m vient d'une borne de l'écart au calcul flottant faite à chaque ligne
+   (zmarge) : réponse sûre si k > t + m (libre) ou k < t - m + 1 (pas libre), le flottant ne décide qu'entre les deux. Sur
+   la LDK (FPU lente), le calcul flottant de libre_z prenait 12 % du temps de la 3D ; mêmes réponses qu'avant */
+#if ENG_RECT_OPT
+static inline int libre_zr(uint16_t zp, int32_t zq, int sh, int m, float wy, float dwdx, int x) {
+    const int32_t t = Z_PLUS((int32_t)zp), k = zq >> sh;
+    if (k > t + m) return 1;
+    if (k < t - m + 1) return 0;
+    return (int32_t)((wy + dwdx * x) * ZK) > t;
+}
+/* Fraction (zfr = 2^sh), pas zdq et marge m d'un polygone (les sommets v, n, pente dwdx de 1/z par colonne). Écart de la
+   clé entière d'une ligne (départ en xs, un pas par colonne) au flottant de libre_z ((wy + dwdx × x) × ZK, simple
+   précision) : arrondis des deux calculs flottants, au plus ZK × 2^-24 × (4 |wy| + 6 |dwdx| (|x| + |xs|) + 2 |dwdx|
+   (x - xs)), plus la troncature du départ et de chaque pas (1 / 2^sh par pas). Sur toutes les lignes du polygone : 1/z
+   entre ses sommets (wmax), |wy| ≤ wmax + RW |dwdx|, x et xs < RW : ZK × 2^-24 × (4 wmax + 18 RW |dwdx|) + (RW + 2) / 2^sh ;
+   m : cette borne × 1,5, plus 1 (la clé tronquée du flottant est entre k - m et k + m). La borne d'une ligne, faite à
+   chaque ligne, coûtait 2,8 % de la 3D (LDK). Trop grand pour 32 bits (polygone presque de profil, tout près) : 8 bits et la
+   marge d'origine (Z_MARGE) */
+static inline void zmarge_poly(const sv_t *v, int n, float dwdx, float *zfr, int32_t *zdq, int *sh, int *m) {
+    float wmax = 0;
+    for (int i = 0; i < n; i++) wmax = fmaxf(wmax, fabsf(v[i].w));
+    const float adw = fabsf(dwdx);
+    if (adw * ZK * 2048.0f * RW < 1.0e9f && wmax * ZK * 2048.0f < 1.0e9f) {
+        *sh = 11; *zfr = 2048.0f; *zdq = (int32_t)(dwdx * ZK * 2048.0f);
+        const float e = ZK * 5.9604645e-8f * (4 * wmax + 18 * RW * adw) + (RW + 2) / 2048.0f;
+        *m = (int)(e * 1.5f) + 1;
+    } else {
+        *sh = 8; *zfr = 256.0f; *zdq = (int32_t)(dwdx * ZK * 256.0f); *m = Z_MARGE;
+    }
+}
+#endif
 /* ceil(v - 0,5) sans appel de bibliothèque (|v| < 8192) */
 static inline int ceil_half(float v) { return 8192 - (int)(8192.5f - v); }
 
@@ -2324,7 +2755,11 @@ static inline int ceil_half(float v) { return 8192 - (int)(8192.5f - v); }
    varie de moins de 12 % (polygones lointains, la plupart), u et v sont interpolés directement (affine, aucune
    division) ; sinon la texture exacte est recalculée tous les SUB pixels. Dessin de l'avant vers le fond : les pixels
    déjà couverts sont sautés par plages ; chaque plage repart des valeurs exactes de son premier pixel. */
+#if ENG_RECT
+#define AFFINE_RATIO 1.25f   /* (LDK : plus de surfaces sans correction de perspective, « perspective allégée ») */
+#else
 #define AFFINE_RATIO 1.12f
+#endif
 typedef struct { int i, j; float sx, sl, sf; } edge_t;   /* bord du sommet i au sommet j : pentes par ligne */
 static inline void edge_set(const sv_t *v, edge_t *e) {
     float dy = v[e->j].y - v[e->i].y, inv = dy > 1e-6f ? 1.0f / dy : 0;
@@ -2429,7 +2864,45 @@ static inline __attribute__((always_inline)) unsigned opaque_boucle(uint16_t *o,
                                                                     const uint16_t *r1, int32_t F16, int32_t dF16, int32_t D8, int32_t dD8, int melange, int swp) {
     unsigned acc = 0;
     const uint16_t *r2 = r1 + 256;
+#if ENG_RECT_OPT
+    int k = 0;
+    /* Écran rectangulaire (LDK) : deux pixels par tour, couleur et profondeur écrites en un mot de 32 bits chacune (moitié
+       moins d'écritures) ; o et zr ont le même alignement (lignes de RW pixels de 16 bits) ; mêmes valeurs */
+    #define OPAQUE_PX(cc_) do { \
+        const int id_ = tex[((Vs >> 16) & mvs) | ((U >> 16) & m)]; \
+        cc_ = r1[id_]; \
+        if (melange) { \
+            const uint32_t fr_ = ((uint32_t)F16 >> 12) & 15, fb_ = 16 - fr_; \
+            uint16_t c_ = cc_, t_ = r2[id_]; \
+            if (swp) { c_ = (uint16_t)((c_ >> 8) | (c_ << 8)); t_ = (uint16_t)((t_ >> 8) | (t_ << 8)); } \
+            const uint32_t x_ = (c_ | (uint32_t)c_ << 16) & ECARTE565, y_ = (t_ | (uint32_t)t_ << 16) & ECARTE565; \
+            const uint32_t mm_ = ((x_ * fb_ + y_ * fr_) >> 4) & ECARTE565; \
+            cc_ = (uint16_t)(mm_ | mm_ >> 16); \
+            if (swp) cc_ = (uint16_t)((cc_ >> 8) | (cc_ << 8)); \
+        } } while (0)
+    if (n > 0 && ((uintptr_t)o & 2)) {   /* premier pixel seul jusqu'à un mot aligné */
+        uint16_t cc; OPAQUE_PX(cc);
+        o[0] = cc; zr[0] = (uint16_t)(D8 >> 8); acc |= cv[0];
+        U += dU; Vs += dVs; D8 += dD8; F16 += dF16; k = 1;
+    }
+    if (!(((uintptr_t)(o + k) | (uintptr_t)(zr + k)) & 3))
+        for (; k + 1 < n; k += 2) {
+            uint16_t ca, cb;
+            OPAQUE_PX(ca);
+            const uint32_t za = (uint16_t)(D8 >> 8);
+            U += dU; Vs += dVs; D8 += dD8; F16 += dF16;
+            OPAQUE_PX(cb);
+            const uint32_t zb2 = (uint16_t)(D8 >> 8);
+            U += dU; Vs += dVs; D8 += dD8; F16 += dF16;
+            *(uint32_t *)(void *)(o + k) = ca | (uint32_t)cb << 16;   /* (petit-boutiste : o[k] dans les 16 bits du bas) */
+            *(uint32_t *)(void *)(zr + k) = za | zb2 << 16;
+            acc |= cv[k] | cv[k + 1];
+        }
+    #undef OPAQUE_PX
+    for (; k < n; k++) {
+#else
     for (int k = 0; k < n; k++) {
+#endif
         const int id = tex[((Vs >> 16) & mvs) | ((U >> 16) & m)];
         uint16_t cc = r1[id];
         if (melange) {   /* mele565(cc, r2[id], fr, swp), l'ordre des octets fixé à la compilation ; fraction du pixel (08/11/2026 : plus de sous-plage par seizième de niveau) */
@@ -2511,6 +2984,18 @@ static inline __attribute__((always_inline)) int plage_simple(uint16_t *o, uint8
 #ifdef ENG_PROFILE
 int eng_xp;
 #endif
+/* Île du jeu des héroïnes (ile.c ; 09/11/2026, demande de l'utilisateur : « spécialiser une version du moteur pour maintenir les
+   30 i/s ») : mesures sur la montre (SDX XP, firmware de profilage), jungle et lagon : polygones en affine jusqu'à 60 % d'écart
+   de profondeur (au lieu de 12 %) : + 1 à 2,5 i/s ; le corps de l'eau du lagon (opaque à 7 % : 0,02 de profondeur pour 0,3)
+   faisait passer chaque pixel par le mélange translucide (fondu_px, puis attente565 sous le fond) : 4 i/s ; sous ILE_EAU_MIN
+   (opacité × 16) il n'est plus peint, le fond (tuiles à la couleur de l'eau) se dessine seul ; les reflets restent. Le 11/11/2026, le
+   lagon a pris sa vraie profondeur (jusqu'à 1 m, mer et lagon d'un seul corps d'eau opaque à 4,5 : opacité 5 / 16 au plus dans le lagon) :
+   seuil relevé à 7, le lagon reste sans corps peint sur la montre comme avant, la mer profonde au-delà du récif l'a toujours.
+   Même jour, lagon profond (environ 2 m) et eau opaque à 4,5 (à 7, la limite du fond sombre de la mer et du sable du lagon se voyait
+   à travers l'eau) : seuil 11, la même profondeur (3 m) qu'au seuil 7 avec l'eau opaque à 7. L'émulateur de l'île mêle désormais le
+   corps à son opacité exacte ; ici, les huit niveaux d'ATT_A restent (bandes au-delà du seuil) */
+#define ILE_AFFINE 1.6f
+#define ILE_EAU_MIN 11
 ENG_HOT static void raster_poly(worker_t *K, const sv_t *v, int n, const uint8_t *tex, int sh, int m, int mv, int alpha, int fade, int corps) {
 #ifdef ENG_PROFILE
     if (eng_xp & 2) { m &= 1; mv &= 1; }   /* essai : coût des lectures de textures (2 × 2 texels de chaque texture) */
@@ -2539,7 +3024,7 @@ ENG_HOT static void raster_poly(worker_t *K, const sv_t *v, int n, const uint8_t
     if (det > -1e-6f && det < 1e-6f) return;
     float dx1 = b->x - a->x, dy1 = b->y - a->y, dx2 = c->x - a->x, dy2 = c->y - a->y;
     float idet = 1.0f / det;
-    const int affine = wmax < wmin * AFFINE_RATIO;
+    const int affine = wmax < wmin * (E.w.ile[0] ? ILE_AFFINE : AFFINE_RATIO);
 #if ENG_DOF
     float wsum = 0;
     for (int i = 0; i < n; i++) wsum += v[i].w;
@@ -2560,6 +3045,7 @@ ENG_HOT static void raster_poly(worker_t *K, const sv_t *v, int n, const uint8_t
        corps ; 08/11/2026, retour de jeu : à pleine opacité dès que la profondeur dépassait zéro, leur zone avait le contour en
        marches des cases d'eau, très visible dans le souterrain) ; lumière fixe */
     int surf = alpha == 2;
+    const int eau_min = E.w.ile[0] ? ILE_EAU_MIN : 0;   /* île : corps de l'eau presque transparent laissé (le fond seul) */
     int lsurf = (int)(12.0f - RF->rain * 2.5f);
     if (lsurf < 0) lsurf = 0;
     /* alpha 3 : surface d'un bassin, translucide : rien n'est peint, chaque pixel encore libre (et sans autre teinte) prend
@@ -2590,6 +3076,12 @@ ENG_HOT static void raster_poly(worker_t *K, const sv_t *v, int n, const uint8_t
     }
     const float lofs = surf ? 0.0f : (dith ? -0.5f : 0.0f) - RF->rain * 2.5f;   /* pluie : scène assombrie */
     const int zt = RF->ztest;
+#if ENG_RECT_OPT
+    float zfr = 256.0f;
+    int32_t zdq = 0;
+    int zsh = 8, zm = Z_MARGE;
+    if (zt) zmarge_poly(v, n, dwdx, &zfr, &zdq, &zsh, &zm);
+#endif
     const int32_t dD8 = (int32_t)(dwdx * ZK * 256.0f);   /* clé de profondeur × 256 : pas d'une colonne */
     const int32_t adU = (int32_t)(dudx * 65536.0f), adV = (int32_t)(dvdx * 65536.0f);
     /* Bords : chaîne A (sommets suivants depuis le haut) et chaîne B (précédents) */
@@ -2625,8 +3117,13 @@ ENG_HOT static void raster_poly(worker_t *K, const sv_t *v, int n, const uint8_t
         const float wy = a->w + dwdy * oy + dwdx * (0.5f - a->x);   /* 1/z au centre du pixel x : wy + dwdx × x */
         /* Pixel libre : jamais peint, ou peint par plus loin que ce polygone de plus de 1/64 (tampon de profondeur ; clé
            × 256 en entiers depuis xs, le flottant près de la limite : libre_z) */
+#if ENG_RECT_OPT
+        const int32_t zA8 = zt ? (int32_t)((wy + dwdx * xs) * ZK * zfr) : 0, zdA8 = zdq;
+        #define LIBRE(xx) (!(crow[xx] & 1) || (zt && libre_zr(zrow[xx], zA8 + zdA8 * ((xx) - xs), zsh, zm, wy, dwdx, (xx))))
+#else
         const int32_t zA8 = zt ? (int32_t)((wy + dwdx * xs) * ZK * 256.0f) : 0, zdA8 = zt ? (int32_t)(dwdx * ZK * 256.0f) : 0;
         #define LIBRE(xx) (!(crow[xx] & 1) || (zt && libre_z(zrow[xx], zA8 + zdA8 * ((xx) - xs), wy, dwdx, (xx))))
+#endif
         const int32_t *bay = &BAYER16[(y & 3) << 2];
         const unsigned keep = fade ? fade_keep(fade, y) : 0xFu;   /* fondu : pixels laissés libres (on voit derrière) */
         /* fondu translucide (fondu_px) : opacité de la face (16 - fade) / 16 */
@@ -2636,7 +3133,15 @@ ENG_HOT static void raster_poly(worker_t *K, const sv_t *v, int n, const uint8_t
         for (int x = xs; x <= xe;) {
             if (!LIBRE(x)) { x++; while (x <= xe && !LIBRE(x)) x++; continue; }
             int xr2 = x + 1;
+#if ENG_RECT_OPT
+            /* fin de la plage : quatre octets du masque d'un coup tant qu'aucun des quatre pixels n'est peint (libres sans test
+               de profondeur ; 11 % de la 3D sur la LDK, pixel par pixel) ; mêmes plages */
+            while (xr2 <= xe && (xr2 & 3) && LIBRE(xr2)) xr2++;
+            if (!(xr2 & 3)) while (xr2 + 3 <= xe) { uint32_t w4; memcpy(&w4, crow + xr2, 4); if (w4 & 0x01010101u) break; xr2 += 4; }
             while (xr2 <= xe && LIBRE(xr2)) xr2++;
+#else
+            while (xr2 <= xe && LIBRE(xr2)) xr2++;
+#endif
             const int xend = xr2 - 1;
             K->prof[PROF_NRUNS]++;
             const uint32_t pr0 = PROF_T();
@@ -2671,7 +3176,7 @@ ENG_HOT static void raster_poly(worker_t *K, const sv_t *v, int n, const uint8_t
                         }
                         /* translucide (fondu_px) : face en fondu, ou corps de l'eau (opacité de sa profondeur, opaque au-delà ; reflets opaques) */
                         int ta = trans ? 16 - fade : 0, garde = (keep >> (xx & 3)) & 1;
-                        if (surf) { ok = L16 > 0; garde = (L16 >> 4) > bay[(xx + 1) & 3]; if (!id) { const int ga = L16 >> 16; id = corps; ta = ga >= 16 ? 0 : ga < 1 ? 1 : ga; } else { const int ra = L16 >> 14; if (ra < 16) { ta = ra < 1 ? 1 : ra; garde = (L16 >> 2) > bay[(xx + 3) & 3]; } } }
+                        if (surf) { ok = L16 > 0; garde = (L16 >> 4) > bay[(xx + 1) & 3]; if (!id) { const int ga = L16 >> 16; if (ga < eau_min) ok = 0; id = corps; ta = ga >= 16 ? 0 : ga < 1 ? 1 : ga; } else { const int ra = L16 >> 14; if (ra < 16) { ta = ra < 1 ? 1 : ra; garde = (L16 >> 2) > bay[(xx + 3) & 3]; } } }
                         if (ok) {
                             int L = surf ? lsurf : (L16 + (dith ? bay[xx & 3] : 0)) >> 16;
                             L = L < 0 ? 0 : L > 15 ? 15 : L;
@@ -2714,7 +3219,7 @@ ENG_HOT static void raster_poly(worker_t *K, const sv_t *v, int n, const uint8_t
                                 continue;
                             }
                             int ta = trans ? 16 - fade : 0, garde = (keep >> (xx & 3)) & 1;
-                            if (surf) { ok = L16 > 0; garde = (L16 >> 4) > bay[(xx + 1) & 3]; if (!id) { const int ga = L16 >> 16; id = corps; ta = ga >= 16 ? 0 : ga < 1 ? 1 : ga; } else { const int ra = L16 >> 14; if (ra < 16) { ta = ra < 1 ? 1 : ra; garde = (L16 >> 2) > bay[(xx + 3) & 3]; } } }
+                            if (surf) { ok = L16 > 0; garde = (L16 >> 4) > bay[(xx + 1) & 3]; if (!id) { const int ga = L16 >> 16; if (ga < eau_min) ok = 0; id = corps; ta = ga >= 16 ? 0 : ga < 1 ? 1 : ga; } else { const int ra = L16 >> 14; if (ra < 16) { ta = ra < 1 ? 1 : ra; garde = (L16 >> 2) > bay[(xx + 3) & 3]; } } }
                             if (ok) {
                                 int L = surf ? lsurf : (L16 + (dith ? bay[xx & 3] : 0)) >> 16;
                                 L = L < 0 ? 0 : L > 15 ? 15 : L;
@@ -2792,7 +3297,10 @@ ENG_HOT static void draw_sprite(worker_t *K, const prim_t *p) {
     const uint32_t au = fant ? 0x60D8FFu : p->teinte ? eveil_aura(p->teinte - 1) : 0;   /* transformé : couleur de l'aura */
     const int ar = au >> 16 & 255, ag = au >> 8 & 255, ab = au & 255;
     const int zt = RF->ztest, zs = p->tile;   /* clé de profondeur des pieds */
-    int ys = y0 > K->by0 ? y0 : K->by0, ye = y1 < K->by1 ? y1 : K->by1;
+    const int ile = E.w.ile[0] != 0;   /* île : la silhouette de Sera ne compte pas les pixels qu'un autre personnage lui cache (persoVu de l'émulateur de l'île) */
+    /* Réfraction (île) : sous la ligne d'eau yw, les lignes de la planche lues plus vite (tassé vers la surface), la couleur mêlée à l'eau */
+    const int yw = p->v0 && (int)p->v0 - 1 < y1 ? (int)p->v0 - 1 : 0x7FFF, y1e = yw < y1 ? yw + (int)lroundf((y1 - yw) * ILE_REFRAC_K) : y1;
+    int ys = y0 > K->by0 ? y0 : K->by0, ye = y1e < K->by1 ? y1e : K->by1;
     if (p->ry > 0 && ye > (int)lroundf(p->ry)) ye = (int)lroundf(p->ry);
     /* Colonne de la planche sous chaque colonne de l'écran : la même division, une fois par colonne au lieu d'une par
        pixel (division en logiciel sur l'ESP32) */
@@ -2800,7 +3308,8 @@ ENG_HOT static void draw_sprite(worker_t *K, const prim_t *p) {
     int16_t colx[RW_MAX];
     if (ys < ye) for (int x = cx0; x <= cx1; x++) { const int sx = (int)((x - x0) / s); colx[x - cx0] = (int16_t)(sx > fw - 1 ? fw - 1 : sx); }
     for (int y = ys; y < ye; y++) {
-        int sy = (int)((y - y0) / s); if (sy > fh - 1) sy = fh - 1;
+        const int dessous = y >= yw;
+        int sy = dessous ? (int)((yw - y0) / s + (y - yw) / (s * ILE_REFRAC_K)) : (int)((y - y0) / s); if (sy > fh - 1) sy = fh - 1;
         const int tl = sy - ty0, tok = tl >= 0 && tl < th, tro = tl * tw - tx0;   /* ligne du masque du tissu, s'il y en a une ici */
         const uint8_t *src = blk + sy * sw + p->col * fw;
         int xs = x0 > span_l[y] ? x0 : span_l[y], xe = x1 - 1 < span_r[y] ? x1 - 1 : span_r[y];
@@ -2811,6 +3320,11 @@ ENG_HOT static void draw_sprite(worker_t *K, const prim_t *p) {
             const int ti = tro + sx;
             uint16_t c = cmap[row_base | (tok && sx >= tx0 && sx < tx0 + tw && (tbits[ti >> 3] >> (ti & 7) & 1) ? vrm[id] : remap[id])];
             if (au) c = teinte565(c, ar, ag, ab);
+            if (dessous) {   /* sous l'eau : mêlé à la couleur de l'eau */
+                const uint16_t c1 = E.cfg.swap565 ? (uint16_t)((c >> 8) | (c << 8)) : c;
+                const int r = (c1 >> 11) << 3, g = (c1 >> 5 & 63) << 2, b = (c1 & 31) << 3;
+                c = pack565((r * (16 - ILE_EAU_MELE) + ILE_EAU_R * ILE_EAU_MELE) >> 4, (g * (16 - ILE_EAU_MELE) + ILE_EAU_G * ILE_EAU_MELE) >> 4, (b * (16 - ILE_EAU_MELE) + ILE_EAU_B * ILE_EAU_MELE) >> 4);
+            }
             int o = (y - K->by0) * K->bstride + x - K->bx0;
             const int hidden = (K->cov[o] & 1) && !(zt && zs > Z_PLUS(K->zb[o]));   /* peint par plus proche que ses pieds */
             if (!hidden) {
@@ -2818,8 +3332,10 @@ ENG_HOT static void draw_sprite(worker_t *K, const prim_t *p) {
 #if ENG_DOF
                 K->dep[o] = p->zd;
 #endif
+                if (ile && !p->sera) K->per[o >> 3] |= (uint8_t)(1u << (o & 7));
             }
             else if (!p->sera) continue;
+            else if (ile && (K->per[o >> 3] >> (o & 7) & 1)) continue;   /* caché par un personnage, pas par le décor : ni silhouette */
             if (p->sera && K->sil_n < SIL_MAX) {
                 /* Bord : un voisin transparent dans la planche */
                 int edge = sx == 0 || sx == fw - 1 || sy == 0 || sy == fh - 1 || !src[sx - 1] || !src[sx + 1]
@@ -2920,6 +3436,22 @@ static void draw_rain(worker_t *K) {
     }
 }
 
+/* Pixels libres d'une ligne [x0, x1] : la couleur du fond (ou ce qui l'attend, attente565). Écran rectangulaire
+   (ENG_RECT_OPT) : quatre octets du masque lus d'un coup, les groupes de quatre pixels déjà peints sautés (LDK : 4,4 % du
+   temps de la 3D, pixel par pixel) ; mêmes pixels */
+#if ENG_RECT_OPT
+static inline void ciel_ligne(worker_t *K, uint16_t *o, const uint8_t *cv, int x0, int x1, uint16_t col, int swp) {
+    int x = x0;
+    for (; x <= x1 && (x & 3); x++) if (!(cv[x] & 1)) o[x] = cv[x] ? attente565(K, col, cv[x], swp, (size_t)(&cv[x] - K->cov)) : col;
+    for (; x + 3 <= x1; x += 4) {
+        uint32_t w;
+        memcpy(&w, cv + x, 4);
+        if ((w & 0x01010101u) == 0x01010101u) continue;
+        for (int i = x; i < x + 4; i++) if (!(cv[i] & 1)) o[i] = cv[i] ? attente565(K, col, cv[i], swp, (size_t)(&cv[i] - K->cov)) : col;
+    }
+    for (; x <= x1; x++) if (!(cv[x] & 1)) o[x] = cv[x] ? attente565(K, col, cv[x], swp, (size_t)(&cv[x] - K->cov)) : col;
+}
+#endif
 ENG_HOT static void draw_sky(worker_t *K) {
     const camera_t *cam = &E.cam;
     const int swp = E.cfg.swap565;   /* couleurs en attente (faces en fondu) mêlées au ciel */
@@ -2930,7 +3462,11 @@ ENG_HOT static void draw_sky(worker_t *K) {
         for (int y = K->by0; y < K->by1; y++) {
             uint16_t *o = ROW(y);
             const uint8_t *cv = COV(y);
+#if ENG_RECT_OPT
+            ciel_ligne(K, o, cv, span_l[y], span_r[y], col, swp);
+#else
             for (int x = span_l[y]; x <= span_r[y]; x++) if (!(cv[x] & 1)) o[x] = cv[x] ? attente565(K, col, cv[x], swp, (size_t)(&cv[x] - K->cov)) : col;
+#endif
         }
         if (!RF->inside && RF->ciel == 2)   /* étoiles fixes dans le ciel, qui tournent avec le lacet (drawSky de l'émulateur) */
             for (int k = 0; k < 160; k++) {
@@ -2966,7 +3502,11 @@ ENG_HOT static void draw_sky(worker_t *K) {
         }
         uint16_t *o = ROW(y);
         const uint8_t *cv = COV(y);
+#if ENG_RECT_OPT
+        ciel_ligne(K, o, cv, span_l[y], span_r[y], col, swp);
+#else
         for (int x = span_l[y]; x <= span_r[y]; x++) if (!(cv[x] & 1)) o[x] = cv[x] ? attente565(K, col, cv[x], swp, (size_t)(&cv[x] - K->cov)) : col;
+#endif
     }
     if (RF->ciel == 3) return;   /* autre planète : pas de ligne néon */
     const float nu = amb.nuit;
@@ -3124,9 +3664,11 @@ static void render_band(worker_t *K, int y0, int h, uint16_t *dst, int x0, int w
     K->band = dst; K->by0 = y0; K->by1 = y0 + h; K->bx0 = x0; K->bstride = w;
     K->sil_n = 0;
     uint32_t pt = PROF_T();
-    memset(dst, 0, (size_t)w * h * 2);   /* hors du cercle : noir (pixels éteints) */
+    if (!ENG_RECT) memset(dst, 0, (size_t)w * h * 2);   /* hors du cercle : noir (pixels éteints) ; écran rectangulaire : draw_sky
+                                                             peint tout pixel que rien ne couvre (1,5 ms par image sur la LDK) */
     memset(K->cov, 0, (size_t)w * h);
     memset(K->fon, 0, ((size_t)w * h + 7) / 8);
+    if (E.w.ile[0]) memset(K->per, 0, ((size_t)w * h + 7) / 8);
 #if ENG_DOF
     memset(K->dep, 255, (size_t)w * h);
 #endif
@@ -3201,7 +3743,7 @@ void eng_render_band_on(int worker, int y0, int h, uint16_t *dst, int x0, int x1
     uint32_t t0 = E.cfg.clock_us ? E.cfg.clock_us() : 0;
     K->px = K->segs = 0;
     if (RF->noir) memset(dst, 0, sizeof *dst * (size_t)(x1 - x0) * (size_t)h);   /* montre verrouillée : fond noir (AMOLED éteint) */
-    else if (!ENG_DYN && RF->ui_cover > 0 && y0 >= RF->ui_cover) {
+    else if (!ENG_DYN && !ENG_RECT && RF->ui_cover > 0 && y0 >= RF->ui_cover) {   /* (écran rectangulaire : la 3D déborde du panneau) */
         /* Sous le panneau opaque du dialogue : pas de 3D, la couleur du panneau (il est découpé au cercle par bande) */
         const uint16_t c = ui_native(ui_rgb(0x080612));
         for (int y = 0; y < h; y++) {
@@ -3225,6 +3767,63 @@ void eng_render_band_on(int worker, int y0, int h, uint16_t *dst, int x0, int x1
     RF->px_w[worker] += K->px; RF->seg_w[worker] += K->segs;
     if (E.cfg.clock_us) { uint32_t t2 = E.cfg.clock_us(); RF->us3d_w[worker] += t1 - t0; RF->usui_w[worker] += t2 - t1; }
 }
+
+#if ENG_RECT
+/* Écran rectangulaire (RetroFW, 11/11/2026) : lignes internes [y0, y0 + h) (h ≤ ENG_BAND) de l'image de ENG_W × ENG_H_PX,
+   prêtes à afficher dans dst (ENG_W × h). La 3D y est rendue telle quelle ; seulement si l'interface dessine sur ces lignes
+   (ui_band_ops), elle est doublée dans tmp (ENG_IMG_W × 2h), l'interface posée par-dessus en 640 × 480, puis chaque
+   carré de 2 × 2 ramené à sa moyenne. Avant (eng_render_native_band partout, puis réduction par la plateforme) : 4 ms de
+   doublement et 8 ms de réduction par image sur la LDK, pour des pixels 3D qui revenaient identiques */
+#if !ENG_UI_NATIF
+static inline uint16_t moyenne4(uint32_t a, uint32_t b, uint32_t c, uint32_t d) {   /* RGB565 : composantes écartées, additionnées */
+    a = (a | a << 16) & 0x07E0F81Fu; b = (b | b << 16) & 0x07E0F81Fu; c = (c | c << 16) & 0x07E0F81Fu; d = (d | d << 16) & 0x07E0F81Fu;
+    const uint32_t s = ((a + b + c + d) >> 2) & 0x07E0F81Fu;
+    return (uint16_t)(s | s >> 16);
+}
+#endif
+void eng_render_band_rect(int y0, int h, uint16_t *dst, uint16_t *tmp) {
+    worker_t *K = WK[0];
+    uint32_t t0 = E.cfg.clock_us ? E.cfg.clock_us() : 0;
+    K->px = K->segs = 0;
+    if (RF->noir) memset(dst, 0, sizeof *dst * (size_t)RW * (size_t)h);
+    else render_band(K, y0, h, dst, 0, RW);
+    uint32_t t1 = E.cfg.clock_us ? E.cfg.clock_us() : 0;
+#if ENG_UI_NATIF
+    (void)tmp;
+    ui_render_band(y0, h, dst, 0, RW);   /* interface déjà en 320 × 240 (ui.c, ENG_UI_NATIF) : ni doublement ni réduction */
+#else
+    /* Par plages d'opérations séparées par les voiles de toute l'image (menus, fondus, sous-menus : 40 ms par image quand le
+       voile faisait doubler toute la bande) : chaque voile appliqué en 320 × 240 à sa place dans l'ordre de dessin */
+    const int nops = ui_nops();
+    for (int i0 = 0; ; ) {
+        const int iv = ui_voile_suivant(i0);
+        ui_plage_ops(i0, iv);
+        int xs[2 * 8];
+        const int ns = i0 < iv ? ui_band_spans(2 * y0, 2 * h, xs, 8) : 0;   /* seulement les colonnes où l'interface dessine */
+        for (int s = 0; s < ns; s++) {
+            const int nx0 = xs[2 * s] & ~1, nx1 = (xs[2 * s + 1] + 1) & ~1, w = nx1 - nx0;
+            if (w <= 0) continue;
+            double_band(dst, h, tmp, nx0, nx1);
+            ui_render_band(2 * y0, 2 * h, tmp, nx0, nx1);
+            for (int j = 0; j < h; j++) {
+                const uint16_t *a = tmp + 2 * j * w, *b = a + w;
+                uint16_t *o = dst + j * RW + nx0 / 2;
+                for (int i = 0; i < w / 2; i++) {   /* quatre sous-pixels égaux (l'interface n'y a rien dessiné) : recopié */
+                    const uint16_t p0 = a[2 * i];
+                    o[i] = p0 == a[2 * i + 1] && p0 == b[2 * i] && p0 == b[2 * i + 1] ? p0 : moyenne4(p0, a[2 * i + 1], b[2 * i], b[2 * i + 1]);
+                }
+            }
+        }
+        if (iv >= nops) break;
+        for (int j = 0; j < h; j++) ui_voile_bande(iv, dst + j * RW, RW);
+        i0 = iv + 1;
+    }
+    ui_plage_ops(0, -1);
+#endif
+    RF->px_w[0] += K->px; RF->seg_w[0] += K->segs;
+    if (E.cfg.clock_us) { uint32_t t2 = E.cfg.clock_us(); RF->us3d_w[0] += t1 - t0; RF->usui_w[0] += t2 - t1; }
+}
+#endif
 
 #if ENG_DYN
 /* Écran plein (voir eng.h) : la 3D d'une bande de toute la largeur, et sa profondeur (ENG_DOF) ; l'interface ensuite,

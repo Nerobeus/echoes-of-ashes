@@ -7,6 +7,8 @@
  * interface par-dessus, rognée au cercle) et envoyée à l'écran pendant que la suivante se dessine.
  */
 #include <string.h>
+#include <stdio.h>
+#include <unistd.h>
 #include <math.h>
 #include <time.h>
 #include "freertos/FreeRTOS.h"
@@ -307,6 +309,7 @@ static void game_task(void *arg) {
             if (sdx_course(&k, &a)) { const int ok = eng_essai_course(k, a); printf(ok ? "SDX COURSE OK %d %d\n" : "SDX ERR course %d %d\n", k, a); fflush(stdout); }
             float ev[6];
             if (sdx_essai(ev)) { const int ok = eng_essai_monde(ev[0], ev[1], ev[2], (int)ev[3], ev[4], ev[5]); printf(ok ? "SDX ESSAI OK\n" : "SDX ERR essai refusé\n"); fflush(stdout); }
+            if (sdx_etat()) { static char eb[640]; eng_etat_rencontres(eb, sizeof eb); printf("SDX ETAT %s\n", eb); fflush(stdout); }   /* état des rencontres demandé par le PC */
         }
         eng_update(dt, &in);
         int64_t t1 = esp_timer_get_time();
@@ -465,6 +468,133 @@ static void lancer_montre(void) { app_lancer("montre"); }
 static eng_app_t apps[2];
 static int napps;
 
+/* ---------- Monde lancé : Echoes ou l'île du jeu des héroïnes (core/ile.c) ----------
+   L'app montre choisit le monde (APPS : LE CHŒUR DES CENDRES ou ÎLE DE NACRE ; NVS « apps » / « monde », app_lancer_monde).
+   Chacun a son dossier sur la carte (SD_DIR, ILE_DIR : parties, histoire, intérieurs, monde) et son paquet léger, mais la
+   flash n'a qu'une partition « monde » (7 Mo ; plus rien de libre sous 16 Mo pour une seconde) : au lancement, le paquet
+   léger du monde voulu y est recopié depuis la carte s'il n'y est pas déjà (environ 40 s, seulement en changeant de monde ;
+   anneau de chargement). Celui de l'île a la section ILE ; celui d'Echoes, flashé par le PC (envoi_sd.py, flasher.py),
+   n'est que dans la flash : il est d'abord gardé sur la carte (SD_DIR/monde_esp32.pak) pour y revenir */
+#define ILE_DIR "/sd/ile"
+#define LEGER_NOM "monde_esp32.pak"
+#define PROPRE_NOM "monde_propre.pak"   /* monde découpé : le paquet propre de l'île (engine/tools/maj_monde.js --ile) */
+#define LEGER_BLOC 4096                /* lectures et écritures de la flash : par blocs en SRAM interne */
+#define LEGER_PAS (64 * 1024)          /* effacement et anneau : par 64 Ko */
+#define LEGER_BOUTS (64 * 1024)        /* comparaison : les premiers et les derniers 64 Ko */
+static uint8_t *leger_buf, *leger_buf2;
+/* Paquet de la partition : sa longueur (sections jusqu'à END ; 0 : aucun) ; ile : il a la section ILE */
+static size_t leger_flash(const esp_partition_t *pt, int *ile) {
+    uint8_t h[8];
+    size_t o = 8;
+    *ile = 0;
+    if (esp_partition_read(pt, 0, h, 4) != ESP_OK || memcmp(h, "ECHO", 4)) return 0;
+    while (o + 8 <= pt->size) {
+        if (esp_partition_read(pt, o, h, 8) != ESP_OK) return 0;
+        uint32_t l; memcpy(&l, h + 4, 4);
+        if (!memcmp(h, "ILE ", 4)) *ile = 1;
+        o += 8 + (size_t)l;
+        if (!memcmp(h, "END ", 4)) return o <= pt->size ? o : 0;
+    }
+    return 0;
+}
+static long taille_fichier(FILE *f) { return fseek(f, 0, SEEK_END) ? -1 : ftell(f); }
+/* Le fichier f est-il le paquet de la flash (longueur n) : même taille, mêmes premiers et derniers LEGER_BOUTS octets */
+static int leger_pareil(const esp_partition_t *pt, size_t n, const char *f) {
+    FILE *fp = fopen(f, "rb");
+    if (!fp) return 0;
+    int ok = n > 0 && taille_fichier(fp) == (long)n;
+    const size_t bout = n < LEGER_BOUTS ? n : LEGER_BOUTS;
+    for (int k = 0; ok && k < 2; k++)
+        for (size_t o = k ? n - bout : 0, fin = o + bout; ok && o < fin; o += LEGER_BLOC) {
+            const size_t m = fin - o < LEGER_BLOC ? fin - o : LEGER_BLOC;
+            ok = !fseek(fp, (long)o, SEEK_SET) && fread(leger_buf, 1, m, fp) == m && esp_partition_read(pt, o, leger_buf2, m) == ESP_OK && !memcmp(leger_buf, leger_buf2, m);
+        }
+    fclose(fp);
+    return ok;
+}
+/* La flash (n octets) gardée dans le fichier f (écrit à côté, puis mis à sa place) */
+static int leger_garder(const esp_partition_t *pt, size_t n, const char *f) {
+    char t[56]; snprintf(t, sizeof t, "%s.part", f);
+    FILE *fp = fopen(t, "wb");
+    if (!fp) return 0;
+    int ok = 1;
+    for (size_t o = 0; ok && o < n; o += LEGER_BLOC) {
+        const size_t m = n - o < LEGER_BLOC ? n - o : LEGER_BLOC;
+        ok = esp_partition_read(pt, o, leger_buf, m) == ESP_OK && fwrite(leger_buf, 1, m, fp) == m;
+        if (!(o % LEGER_PAS)) anneau_demarrage(0.1f + 0.1f * o / n);
+    }
+    fflush(fp); fsync(fileno(fp)); fclose(fp);
+    if (ok) { unlink(f); ok = !rename(t, f); }
+    if (!ok) unlink(t);
+    ESP_LOGI(TAG, "paquet léger de la flash gardé dans %s (%u Ko)%s", f, (unsigned)(n / 1024), ok ? "" : " : ÉCHEC");
+    return ok;
+}
+/* Le fichier f écrit dans la flash, par 64 Ko effacés puis écrits */
+static int leger_flasher(const esp_partition_t *pt, const char *f) {
+    FILE *fp = fopen(f, "rb");
+    const long t = fp ? taille_fichier(fp) : -1;
+    if (!fp || t <= 8 || t > (long)pt->size || fseek(fp, 0, SEEK_SET)) { if (fp) fclose(fp); ESP_LOGE(TAG, "%s : absent ou trop grand pour la partition « monde »", f); return 0; }
+    const int64_t t0 = esp_timer_get_time();
+    int ok = 1;
+    for (long o = 0; ok && o < t; o += LEGER_PAS) {
+        const long fin = o + LEGER_PAS < t ? o + LEGER_PAS : t;
+        ok = esp_partition_erase_range(pt, o, (size_t)((fin - o + 4095) & ~4095L)) == ESP_OK;
+        for (long q = o; ok && q < fin; q += LEGER_BLOC) {
+            const size_t m = fin - q < LEGER_BLOC ? (size_t)(fin - q) : LEGER_BLOC;
+            ok = fread(leger_buf, 1, m, fp) == m && esp_partition_write(pt, q, leger_buf, m) == ESP_OK;
+        }
+        anneau_demarrage(0.2f + 0.2f * fin / t);
+    }
+    fclose(fp);
+    ESP_LOGI(TAG, "paquet léger %s écrit dans la flash : %ld Ko en %.1f s%s", f, t / 1024, (esp_timer_get_time() - t0) / 1e6, ok ? "" : " (ÉCHEC)");
+    return ok;
+}
+/* La partition « monde » a le paquet léger du monde lancé (recopié au besoin) : 1 ; 0 : impossible (fichier absent de la
+   carte, écriture ratée). Echoes avec son paquet en flash : rien n'est lu sur la carte */
+static int leger_monde(int ile) {
+    const esp_partition_t *pt = esp_partition_find_first(ESP_PARTITION_TYPE_DATA, 0x40, "monde");
+    if (!pt) return 1;   /* (load_pak le dira) */
+    int fl_ile;
+    const size_t n = leger_flash(pt, &fl_ile);
+    if (!ile && n && !fl_ile) return 1;
+    /* Monde découpé : l'île a son paquet propre en PSRAM (ile_paquet), avec les sections communes de la flash, quelle
+       qu'elle soit : rien à y écrire */
+    if (ile && n) { char q[48]; snprintf(q, sizeof q, ILE_DIR "/" PROPRE_NOM); FILE *fp = fopen(q, "rb"); if (fp) { fclose(fp); return 1; } }
+    char f[48]; snprintf(f, sizeof f, "%s/" LEGER_NOM, ile ? ILE_DIR : SD_DIR);
+    if (!ile && !n) { FILE *fp = fopen(f, "rb"); if (!fp) return 1; fclose(fp); }   /* rien de valable en flash, ni sur la carte : load_pak le dira */
+    leger_buf = heap_caps_malloc(LEGER_BLOC, MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT);
+    leger_buf2 = heap_caps_malloc(LEGER_BLOC, MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT);
+    int ok = leger_buf && leger_buf2;
+    if (ok && !(ile && fl_ile && leger_pareil(pt, n, f))) {
+        ESP_LOGI(TAG, "monde %s : son paquet léger va dans la flash (%s)", ile ? "de l'île" : "d'Echoes", f);
+        if (ile && n && !fl_ile && !leger_pareil(pt, n, SD_DIR "/" LEGER_NOM)) ok = leger_garder(pt, n, SD_DIR "/" LEGER_NOM);   /* celui d'Echoes, pour y revenir */
+        if (ok) ok = leger_flasher(pt, f);
+    }
+    free(leger_buf); free(leger_buf2); leger_buf = leger_buf2 = NULL;
+    if (!ok) ESP_LOGE(TAG, "paquet léger du monde %s : impossible de le mettre en flash (envoi : engine/tools/envoi_sd.py%s)", ile ? "de l'île" : "d'Echoes", ile ? " --ile" : " --flash");
+    return ok;
+}
+
+/* Monde découpé (09/11/2026, demande de l'utilisateur : « découper le monde en plus petits paquets spécialisés pour ne pas
+   avoir à copier tout à chaque fois ») : le paquet propre de l'île (ILE_DIR/monde_propre.pak, 1,1 Mo : ses planches,
+   textures, zones…) lu en PSRAM, avec 64 Ko à zéro après lui (les grands décors rognés lisent un peu au-delà de leurs
+   lignes : marge de la copie des textures de world.c) ; ses sections communes (PRIS : sons, polices, icônes, sprites
+   communs) sont prises dans le paquet léger de la flash (eng_config_t.pak_commun). NULL : pas de paquet propre valable */
+static const uint8_t *ile_paquet(size_t *len) {
+    FILE *fp = fopen(ILE_DIR "/" PROPRE_NOM, "rb");
+    if (!fp) { ESP_LOGE(TAG, "pas de " ILE_DIR "/" PROPRE_NOM " (envoi : engine/tools/envoi_sd.py --ile)"); return NULL; }
+    const long t = taille_fichier(fp);
+    uint8_t *p = t > 16 ? heap_caps_malloc((size_t)t + 65536, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT) : NULL;
+    const int64_t t0 = esp_timer_get_time();
+    const int ok = p && !fseek(fp, 0, SEEK_SET) && fread(p, 1, (size_t)t, fp) == (size_t)t && !memcmp(p, "ECHO", 4);
+    fclose(fp);
+    if (!ok) { ESP_LOGE(TAG, ILE_DIR "/" PROPRE_NOM " : illisible ou mémoire insuffisante (%ld octets)", t); free(p); return NULL; }
+    memset(p + t, 0, 65536);
+    *len = (size_t)t;
+    ESP_LOGI(TAG, "paquet propre de l'île : %ld Ko lus en %.2f s (sections communes : paquet léger de la flash)", t / 1024, (esp_timer_get_time() - t0) / 1e6);
+    return p;
+}
+
 /* Le jeu ne peut pas démarrer (paquet absent, monde de la carte SD qui ne va pas avec le paquet léger, mémoire) : la
    copie par l'USB (sdx) reste possible 10 s sans transfert, puis retour à l'accueil de la montre (avant, écran noir sans
    issue jusqu'à ce que le PC rende la main à l'accueil) */
@@ -522,11 +652,23 @@ void app_main(void) {
     sdx_start(sd_init());
     reglages_lire();
     brightness(reglages_luminosite());   /* réglage de la montre, appliqué à la première image */
+    /* Monde lancé par l'app montre : Echoes, ou l'île du jeu des héroïnes (son dossier, son paquet léger en flash) */
+    const int ile = app_valeur("monde") == 1;
+    if (ile) { sd_dossier(ILE_DIR); ESP_LOGI(TAG, "monde : l'île du jeu des héroïnes (%s)", ILE_DIR); }
+    if (!leger_monde(ile)) { echec_demarrage(); return; }
 
     size_t len = 0;
     anneau_demarrage(0.4f);
     const uint8_t *pak = load_pak(&len);
     if (!pak) { echec_demarrage(); return; }
+    /* Île : le paquet propre en PSRAM, celui de la flash comme paquet commun */
+    const uint8_t *commun = NULL; size_t commun_len = 0;
+    if (ile) {
+        commun = pak; commun_len = pak_map_len;
+        if (!(pak = ile_paquet(&len))) { echec_demarrage(); return; }
+        pak_leger = 0;
+        for (size_t o = 8; o + 8 <= len; ) { uint32_t l; memcpy(&l, pak + o + 4, 4); if (!memcmp(pak + o, "SPRX", 4)) pak_leger = 1; o += 8 + (size_t)l; }
+    }
     anneau_demarrage(0.7f);
     anneau_demarrage_fin();
     audio_esp_init();
@@ -543,15 +685,16 @@ void app_main(void) {
     if (manette) { cfg.effet_manette = manette_effet; manette_ambiance(true); }   /* la Poké Ball Plus s'allume et vibre selon le jeu (mêmes numéros), cyan entre deux effets */
     /* Mise en veille passée par l'app montre (veille.c) : la partie sauvegardée reprend aussitôt, sans l'écran titre */
     if (montre) cfg.reprendre = app_drapeau("reprise");
+    cfg.pak_commun = commun; cfg.pak_commun_len = commun_len;   /* île : sons, polices, icônes du paquet de la flash */
     /* Paquet léger : le monde entier sur la carte SD */
     if (pak_leger) {
-        if (!(cfg.pak_size = sd_pak_open())) { ESP_LOGE(TAG, "paquet léger en flash, mais pas de " SD_DIR "/monde.pak sur la carte SD"); echec_demarrage(); return; }
+        if (!(cfg.pak_size = sd_pak_open())) { ESP_LOGE(TAG, "paquet léger en flash, mais pas de %s/monde.pak sur la carte SD", sd_dir()); echec_demarrage(); return; }
         cfg.pak_read = sd_pak_read;
     }
     /* Histoire sur la carte SD si elle y est (sinon la section SCEN du paquet en flash) */
     cfg.scen_size = sd_scen_open();
     if (cfg.scen_size) cfg.scen_read = sd_scen_read;
-    else ESP_LOGI(TAG, "histoire : section SCEN du paquet (pas de " SD_DIR "/histoire.scn)");
+    else ESP_LOGI(TAG, "histoire : section SCEN du paquet (pas de %s/histoire.scn)", sd_dir());
 #if CONFIG_ECHOES_BANC
     cfg.scen_size = 4096; cfg.scen_read = banc_scen_read;
     ESP_LOGI(TAG, "banc d'essai : sans scénario");
@@ -559,7 +702,7 @@ void app_main(void) {
     /* Intérieurs sur la carte SD si elle les a (sinon la section INTR du paquet en flash) */
     cfg.intr_size = sd_intr_open();
     if (cfg.intr_size) cfg.intr_read = sd_intr_read;
-    else ESP_LOGI(TAG, "intérieurs : section INTR du paquet (pas de " SD_DIR "/interieurs.bin)");
+    else ESP_LOGI(TAG, "intérieurs : section INTR du paquet (pas de %s/interieurs.bin)", sd_dir());
     ESP_LOGI(TAG, "avant eng_init : SRAM libre %u Ko (plus grand bloc %u Ko), PSRAM libre %u Ko", (unsigned)(heap_caps_get_free_size(MALLOC_CAP_INTERNAL) / 1024),
              (unsigned)(heap_caps_get_largest_free_block(MALLOC_CAP_INTERNAL) / 1024), (unsigned)(heap_caps_get_free_size(MALLOC_CAP_SPIRAM) / 1024));
     if (eng_init(pak, len, &cfg)) {
@@ -574,7 +717,7 @@ void app_main(void) {
     {   /* musiques sur la carte SD (sinon le jeu reste sans musique) */
         const uint32_t ms = sd_music_open();
         if (ms) eng_music_attach(ms, sd_music_read);
-        else ESP_LOGI(TAG, "pas de " SD_DIR "/musique.bin : pas de musique");
+        else ESP_LOGI(TAG, "pas de %s/musique.bin : pas de musique", sd_dir());
     }
     {   /* tables chaudes du rendu en SRAM interne (render.c, eng_profile_mem) ; cœur 1 = fil 0, cœur 0 = fil 1 */
         const int pm = eng_profile_mem();

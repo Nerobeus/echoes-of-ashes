@@ -26,13 +26,24 @@ static void *alloc(size_t size, int fast) {
 static size_t str_len(const char *s, const char *end) { const char *e = s; while (e < end && *e) e++; return (size_t)(e - s); }
 
 /* Section d'étiquette tag, ou NULL */
-static const uint8_t *section(const uint8_t *pak, size_t len, const char *tag, uint32_t *size) {
+static const uint8_t *section_dans(const uint8_t *pak, size_t len, const char *tag, uint32_t *size) {
     size_t o = 8;
     while (o + 8 <= len) {
         uint32_t l = rd32(pak + o + 4);
         if (!memcmp(pak + o, tag, 4)) { if (size) *size = l; return pak + o + 8; }
         o += 8 + l;
     }
+    return NULL;
+}
+/* Monde découpé (eng_config_t.pak_commun) : une section du paquet passé à eng_init que sa section PRIS (étiquettes de 4
+   octets) donne au paquet commun y est cherchée (maj_monde.js --ile : sons, polices, icônes, sprites communs) */
+static const uint8_t *section(const uint8_t *pak, size_t len, const char *tag, uint32_t *size) {
+    const uint8_t *s = section_dans(pak, len, tag, size);
+    if (s || pak != E.pak || !E.cfg.pak_commun) return s;
+    uint32_t n;
+    const uint8_t *pris = section_dans(pak, len, "PRIS", &n);
+    for (uint32_t k = 0; pris && k + 4 <= n; k += 4)
+        if (!memcmp(pris + k, tag, 4)) return section_dans(E.cfg.pak_commun, E.cfg.pak_commun_len, tag, size);
     return NULL;
 }
 
@@ -59,11 +70,20 @@ static int pak_read(uint32_t off, void *dst, uint32_t len) {
 #define GT_PAR_IMAGE 24
 #endif
 #define ST_NCLASS 6              /* planches : places par taille, une direction (fh lignes de fw × frames) chacune */
-static const uint32_t ST_SIZE[ST_NCLASS] = { 4096, 8192, 16384, 32768, 65536, 131072 };
+static const uint32_t ST_SIZE_ECHOES[ST_NCLASS] = { 4096, 8192, 16384, 32768, 65536, 131072 };
 /* 1,5 Mo. Places servies au plus fort (rendu_test, ECHOES_PLANCHES=1, le 29/10/2026 : rues de Lucerne, combat, course,
    intérieur) : 4 Ko 12, 8 Ko 6, 16 Ko 1 à 2, 32 Ko 4, 64 Ko 3, 128 Ko 0 ; les personnages immobiles (blocs d'attente de
    4 à 8 Ko) prennent le plus de places, ceux qui marchent la classe de 32 Ko (avant : 16, 16, 20, 16, 6, 2, 1,6 Mo) */
-static const int ST_COUNT[ST_NCLASS] = { 24, 16, 8, 16, 6, 2 };
+static const int ST_COUNT_ECHOES[ST_NCLASS] = { 24, 16, 8, 16, 6, 2 };
+/* Île du jeu des héroïnes (core/ile.c, 09/11/2026) : héroïnes du studio (96 × 96 × 8 images : 72 Ko par direction) et ennemis
+   (jusqu'à 107 × 101 × 8 : 85 Ko) dans une classe de 88 Ko ; avec 2 places de 128 Ko, l'héroïne et ses deux compagnes se
+   disputaient le cache : l'une n'était pas dessinée à chaque image (sprites qui clignotent) et les planches étaient relues
+   sans cesse sur la carte SD (rendu_test, ECHOES_PLANCHES=1 : 4 Ko 1, 8 Ko 2, 16 Ko 6, 32 Ko 0, 64 Ko 1, 128 Ko 2/2).
+   2,1 Mo (1,5 Mo pour Echoes) ; 2,2 Mo de PSRAM libres avant sur la carte simulée */
+static const uint32_t ST_SIZE_ILE[ST_NCLASS] = { 4096, 8192, 16384, 32768, 65536, 90112 };
+static const int ST_COUNT_ILE[ST_NCLASS] = { 12, 8, 12, 8, 6, 14 };
+static const uint32_t *ST_SIZE_W = ST_SIZE_ECHOES; static const int *ST_COUNT = ST_COUNT_ECHOES;   /* ceux du monde chargé (stream_init) */
+#define ST_SIZE ST_SIZE_W
 static uint32_t st_base[ST_NCLASS]; static int st_i0[ST_NCLASS + 1];
 
 void stream_frame(void) {
@@ -160,6 +180,7 @@ static int stream_init(void) {
     w->gt_who[0] = -2;
     if (w->gt_n > 0 && pak_read(w->gt_off, w->gt_mem, 1024)) return -1;
     uint32_t tot = 0; int n = 0;
+    ST_SIZE_W = w->ile[0] ? ST_SIZE_ILE : ST_SIZE_ECHOES; ST_COUNT = w->ile[0] ? ST_COUNT_ILE : ST_COUNT_ECHOES;
     for (int c = 0; c < ST_NCLASS; c++) { st_base[c] = tot; st_i0[c] = n; tot += ST_SIZE[c] * (uint32_t)ST_COUNT[c]; n += ST_COUNT[c]; }
     st_i0[ST_NCLASS] = n;
     w->st_nsl = n;
@@ -587,6 +608,40 @@ int eng_init(const uint8_t *pak, size_t len, const eng_config_t *cfg) {
         uint32_t esz;
         const uint8_t *ed = section(pak, len, "EDIT", &esz);
         w->edition = ed && esz >= 1 ? ed[0] : 0;
+        /* Île du jeu des héroïnes (ILE : son nom en UTF-8 sur 32 octets) : mode île (ile.c) */
+        const uint8_t *il = section(pak, len, "ILE ", &esz);
+        memset(w->ile, 0, sizeof w->ile);
+        if (il && esz >= 1) memcpy(w->ile, il, esz < sizeof w->ile - 1 ? esz : sizeof w->ile - 1);
+        w->ile_monstres = w->ile_esprits = w->ile_epuise = 0xFFFF;   /* (paquet d'avant le 10/11/2026 : ni l'un ni l'autre) */
+        if (il && esz >= 36) { w->ile_monstres = (uint16_t)(il[32] | il[33] << 8); w->ile_esprits = (uint16_t)(il[34] | il[35] << 8); }
+        /* puis (11/11/2026) : nombre d'héroïnes u8, de lames u8, 0 u16 ; chaque héroïne : personnage u16, genre u8 (0 féminin, 1 masculin), 0,
+           identifiant du studio (16 octets) ;
+           chaque lame : identifiant (16), nom UTF-8 (24), héroïne u16 (65535 aucune), drapeau u16 (65535 jamais), arme, rôle, de jet, 0 */
+        w->ile_nher = w->ile_nlames = w->ile_nsocles = 0;
+        if (il && esz >= 40) {
+            const int nh = il[36], nl = il[37];
+            const uint8_t *q = il + 40, *fin = il + esz;
+            for (int k = 0; k < nh && q + 20 <= fin; k++, q += 20) if (w->ile_nher < ILE_HER_MAX) {
+                ile_her_t *h = &w->ile_her[w->ile_nher++];
+                h->perso = (uint16_t)(q[0] | q[1] << 8); h->genre = q[2];
+                memcpy(h->id, q + 4, 16); h->id[15] = 0;
+            }
+            for (int k = 0; k < nl && q + 48 <= fin; k++, q += 48) if (w->ile_nlames < ILE_LAMES_MAX) {
+                ile_lame_t *l = &w->ile_lame[w->ile_nlames++];
+                memcpy(l->id, q, 16); l->id[15] = 0; memcpy(l->nom, q + 16, 24); l->nom[24] = 0;
+                l->perso = (uint16_t)(q[40] | q[41] << 8); l->drapeau = (uint16_t)(q[42] | q[43] << 8); l->arme = q[44]; l->role = q[45]; l->jet = q[46];
+            }
+            /* puis (11/11/2026) : statues sur un piédestal en volume : nombre u8, 0, puis personnage u16, socle u16 (1/100 d'unité) */
+            w->ile_nsocles = 0;
+            if (q + 2 <= fin) {
+                const int ns = q[0]; q += 2;
+                for (int k = 0; k < ns && q + 4 <= fin; k++, q += 4) if (w->ile_nsocles < ILE_SOCLES_MAX) {
+                    w->ile_socle_perso[w->ile_nsocles] = (uint16_t)(q[0] | q[1] << 8); w->ile_socle[w->ile_nsocles++] = (q[2] | q[3] << 8) / 100.0f;
+                }
+            }
+            /* puis le drapeau « epuise » u16 (11/11/2026) */
+            if (q + 2 <= fin) w->ile_epuise = (uint16_t)(q[0] | q[1] << 8);
+        }
     }
 #if ECHOES_ENFANT
     if (w->edition != 1) FAIL("paquet 18+ : la version enfant ne lance que monde_enfant.pak");
@@ -687,6 +742,8 @@ int eng_init(const uint8_t *pak, size_t len, const eng_config_t *cfg) {
         for (uint32_t i = 0; i < rd32(p) && (int)i < w->nsheets && 4 + (i + 1) * 2 <= nrmsz; i++) { const int v = rd16(p + 4 + i * 2); w->sheets[i].norm = v ? v / 100.0f : 1.0f; }
     { uint32_t ssz = 0; const uint8_t *ss = section(pak, len, "SURS", &ssz);   /* zones sûres (battle.c, zone_sure) */
       w->sures = ss && ssz >= 4 && 4 + (uint64_t)rd32(ss) * 16 <= ssz ? ss + 4 : NULL; w->nsures = w->sures ? (int)rd32(ss) : 0; }
+    { uint32_t asz = 0; const uint8_t *as = section(pak, len, "AREN", &asz);   /* arènes de combat (battle.c, arene_choisir) */
+      w->aren = as && asz >= 2 ? as : NULL; w->aren_sz = w->aren ? asz : 0; }
     /* Masques du tissu des tenues (TIS2) : entrée de SPRS u16, 0 u16, taille des bits u32, 8 octets par case, les bits (complétés à 4 octets) */
     uint32_t tisz;
     if ((p = section(pak, len, "TIS2", &tisz)) && tisz >= 4) {
@@ -1355,7 +1412,7 @@ int eng_init(const uint8_t *pak, size_t len, const eng_config_t *cfg) {
 
     /* Personnages et caméra, comme l'émulateur */
     E.sera.x = w->start_x; E.sera.z = w->start_z; E.sera.dir = 0.35f + PI_F;
-    E.yaw = 0.35f; E.pitch = 0.6f; E.zoom = w->zoom; E.cam_dist = 12.5f / w->ech / E.zoom; E.talk = -2; E.ride = -1;
+    E.yaw = 0.35f; E.pitch = w->ile[0] ? ILE_PITCH : 0.6f; E.zoom = w->zoom; E.cam_dist = 12.5f / w->ech / E.zoom; E.talk = -2; E.ride = -1;
     E.fog_on = 1; E.dither_on = 0;   /* tramage de la lumière et du brouillard : option (SYSTÈME › TRAMAGE), coupé par défaut depuis le 31/10/2026 */ E.volant = VOLANT_DEFAUT;
     E.commandes = E.cfg.joystick ? COMMANDES_JOYSTICK : COMMANDES_DOUBLES;   /* SYSTÈME › COMMANDES : celles de la plateforme */
     E.team = E.recrues = 15; E.impose = 0;   /* les quatre, jusqu'à une instruction « equipe » du scénario (recrues : en dehors) */
@@ -1405,7 +1462,7 @@ int eng_init(const uint8_t *pak, size_t len, const eng_config_t *cfg) {
             const size_t fin = (size_t)w->big_off + rd32(d) + ((size_t)1 << (d[8] + d[9]));
             if (fin > w->tex_len && fin - w->tex_len > marge) marge = fin - w->tex_len;
         }
-    uint8_t *tex = E.cfg.alloc(w->tex_len + marge, 0);
+    uint8_t *tex = E.cfg.pak_commun ? NULL : E.cfg.alloc(w->tex_len + marge, 0);   /* (paquet propre d'un monde découpé : déjà en mémoire vive) */
     if (tex) { memcpy(tex, w->tex, w->tex_len); memset(tex + w->tex_len, 0, marge); w->tex = tex; w->tex_copied = 1; }
     hud_depart_garder();   /* l'état du départ, pour toute nouvelle partie */
     accueil_debut();   /* écran titre : le jeu commence avec une partie */

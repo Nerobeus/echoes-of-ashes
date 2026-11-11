@@ -1,7 +1,7 @@
 set(core ../../../core)
 idf_component_register(
     SRCS main.c lcd_co5300.c board_power.c touch.c sd.c sdx.c audio_esp.c horloge.c veille.c transfert.c apps.c reglages.c manette.c
-         ${core}/world.c ${core}/game.c ${core}/render.c ${core}/ui.c ${core}/hud.c ${core}/battle.c ${core}/script.c ${core}/audio.c ${core}/course.c ${core}/music.c ${core}/interieur.c ${core}/accueil.c ${core}/police.c ${core}/coffres.c ${core}/pilote.c ${core}/carte.c ${core}/carriere.c ${core}/garage.c ${core}/panneaux.c ${core}/repliques.c ${core}/arene.c
+         ${core}/world.c ${core}/game.c ${core}/render.c ${core}/ui.c ${core}/hud.c ${core}/battle.c ${core}/script.c ${core}/audio.c ${core}/course.c ${core}/music.c ${core}/interieur.c ${core}/accueil.c ${core}/police.c ${core}/coffres.c ${core}/pilote.c ${core}/carte.c ${core}/carriere.c ${core}/garage.c ${core}/panneaux.c ${core}/repliques.c ${core}/arene.c ${core}/ile.c
     INCLUDE_DIRS . ${core}
     REQUIRES driver esp_partition esp_timer fatfs sdmmc vfs hal esp_wifi esp_netif esp_event nvs_flash esp_http_client lwip wifi_provisioning bt app_update)
 

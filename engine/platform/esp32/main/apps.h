@@ -14,5 +14,9 @@ int app_lancer(const char *nom);
 int app_veille(const char *reprise);
 /* 1 si ce drapeau était posé (« veille », « reprise ») ; il est effacé */
 int app_drapeau(const char *cle);
+/* Valeur gardée (« monde ») : lue sans l'effacer, -1 si elle n'est pas posée */
+int app_valeur(const char *cle);
+/* Redémarre dans Echoes (nom : « echoes ») avec le monde choisi : 0 Echoes, 1 l'île du jeu des héroïnes (main.c : leger_monde) */
+int app_lancer_monde(const char *nom, int monde);
 
 #endif

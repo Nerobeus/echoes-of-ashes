@@ -1,8 +1,10 @@
 /* Logique du jeu sur la world map : déplacement de Sera, collisions, caméra, cycle de l'eau, rencontres */
 #include <math.h>
 #include <string.h>
+#include <stdio.h>
 #include "internal.h"
 #include "audio.h"
+#include "ui.h"
 
 static uint32_t rng_s = 0x9E3779B9u;
 static float frand(void) { rng_s ^= rng_s << 13; rng_s ^= rng_s >> 17; rng_s ^= rng_s << 5; return (float)(rng_s >> 8) * (1.0f / 16777216.0f); }
@@ -91,7 +93,8 @@ static int sol_libre(float x, float z, int swim) {
     uint8_t f = c->flags[cell_local(i, j)];
     if (f & F_RAIDE) return 0;
     const int wk = water_kind(f);
-    if (wk && !(swim && (wk == 1 || sera_etanche()))) return 0;
+    if (swim == 2) { if (!wk) return 0; }   /* bateau acteur (scene_libre_r) : l'eau seulement */
+    else if (wk && !(swim && (wk == 1 || sera_etanche()))) return 0;
     /* Rectangles de collision : chacun est rangé dans tous les chunks qu'il touche, marge comprise. Marge (le corps de
        Sera) : MARGE_MUR contre un mur, MARGE_DECOR contre un petit obstacle (tronc, rocher, objet : moins d'une case de
        côté ; avec 0,35 m partout, un tronc de 0,26 case en bloquait 0,8 et une forêt dense ne se traversait pas) */
@@ -963,6 +966,18 @@ int traffic_poursuivant(int perso) {
     return 1;
 }
 
+/* Voiture du trafic dans l'image, à SCENE_TRAF_MARGE pixels de l'interface près (son sprite déborde de son ancrage) ;
+   calme de scène (traffic_update ; trafALecran de l'émulateur, en pixels de l'image 3D : la moitié) */
+#define SCENE_TRAF_MARGE 40.0f
+static int traf_a_lecran(const traffic_t *t) {
+    float sx, sy;
+    if (!project(t->x, ground_y(t->x, t->z), t->z, &sx, &sy)) return 0;
+#if ENG_RECT   /* écran rectangulaire : toute l'image, de part et d'autre du cadre de l'interface */
+    return sx > -ui_ox - SCENE_TRAF_MARGE && sx < ui_img_w - ui_ox + SCENE_TRAF_MARGE && sy > -ui_oy - SCENE_TRAF_MARGE && sy < ui_img_h - ui_oy + 2 * SCENE_TRAF_MARGE;
+#endif
+    return sx > -SCENE_TRAF_MARGE && sx < ui_w + SCENE_TRAF_MARGE && sy > -SCENE_TRAF_MARGE && sy < ui_h + 2 * SCENE_TRAF_MARGE;
+}
+
 static void traffic_update(float dt) {
     const world_t *w = &E.w;
     static int kinds[MAX_PERSOS] ENG_FROID;   /* statique, en PSRAM : la pile du jeu fait 8 Ko sur l'ESP32 */
@@ -973,16 +988,23 @@ static void traffic_update(float dt) {
     }
     if (CR.on || w->carte) { for (int k = 0; k < TRAFFIC_MAX; k++) E.traffic[k].on = 0; return; }   /* trafic : carte 0, hors course */
     const int normal = w->traf_max && nk;   /* sans trafic du paquet, seules les voitures de police poursuivantes roulent */
+    /* Calme de scène (11/11/2026, demande de l'utilisateur : « les voitures qui passent polluent le récit », dans les villages
+       et à Lucerne, où la scène ne peut pas quitter la rue) : pendant une scène (scene_en_cours, hud_scene de hud.c), plus
+       de naissance ; une voiture hors de l'écran, ou toutes pendant un fondu au noir, disparaît ; celle qu'on voit finit son
+       passage et disparaît en sortant de l'image. Les poursuivants de la police ne sont pas concernés (trafCalme de
+       l'émulateur, à garder identique) */
+    const int calme = scene_en_cours();
     int count = 0, pours = 0;
     for (int k = 0; k < TRAFFIC_MAX; k++) {   /* poursuivants : plus loin (POUR_LOIN), et à part du nombre du trafic */
         traffic_t *t = &E.traffic[k];
         if (t->on && (hypotf(t->x - E.sera.x, t->z - E.sera.z) > (t->poursuite ? POUR_LOIN : 22.0f) / w->ech || (!normal && !t->poursuite))) t->on = 0;
+        if (t->on && calme && !t->poursuite && (MISE.fondu >= 0.9f || !traf_a_lecran(t))) t->on = 0;
         count += t->on && !t->poursuite;
         pours += t->on && t->poursuite;
     }
     if (pours) champ_maj(dt); else champ_ok = 0;   /* champ des poursuivants */
     E.traf_spawn_t -= dt;
-    if (normal && count < w->traf_max && E.traf_spawn_t <= 0) {
+    if (normal && !calme && count < w->traf_max && E.traf_spawn_t <= 0) {
         /* Sur un axe de route ou dans une rue (une seule circulation), une fois sur deux chacun ; l'autre si le premier
            échoue */
         E.traf_spawn_t = 0.5f;
@@ -1275,6 +1297,15 @@ static void ride_choc(float perte, float vmax) {
    à fond dès 38 % de la course : ingérable) ; en course, la courbe de la course s'applique (COURSE_EXPO, COURSE_VOLANT) */
 #define MANETTE_VOLANT 0.4f
 #define MANETTE_COURSE 0.8f   /* à pied : Sera court au-delà de cette part de la course du stick, marche en deçà */
+/* Rotation de la caméra aux touches (ENG_KEY_ROT_L / R), en radians par seconde : clavier de la page web (A / E) ; écran
+   rectangulaire (RetroFW, L / R de la LDK, 11/11/2026, demande de l'utilisateur : « tourner beaucoup plus vite ») 4, 45° en
+   0,2 s */
+#ifndef CAM_TOUCHE_V
+#define CAM_TOUCHE_V (ENG_RECT ? 4.0f : 1.6f)
+#endif
+/* Sera conduit (véhicule ou course), sans menu, pause ni combat : la plateforme peut changer ses commandes (RetroFW :
+   accélérer à la gâchette de droite, freiner à celle de gauche) */
+int eng_conduite(void) { return (E.ride >= 0 || CR.on) && !BT.on && !hud_pause(); }
 static float stick_axe(float v, float mort, float plein) {
     const float a = fabsf(v), t = a <= mort ? 0 : fminf(1, (a - mort) / (plein - mort));
     return v < 0 ? -t : t;
@@ -1555,6 +1586,7 @@ static int talk_target(void) {
         if (acteur_de(n->perso) >= 0) continue;   /* remplacé par son acteur, le temps d'une scène */
         if (perso_ennemi(n->perso)) continue;     /* ennemi de l'histoire posé sur la carte (Glaneur blanc, Sentinelle…) : on ne lui parle pas, sa zone lance la scène (02/11/2026 ; talkTarget de l'émulateur) */
         if (E.in.on && is_vehicle(k)) continue;   /* voiture garée d'un garage : ni dialogue ni conduite */
+        if (E.w.ile[0] && is_vehicle(k) && VEH_TYPE(E.w.persos[n->perso].flags) == VEH_BATEAU) continue;   /* île : barque amarrée (pirogue de Maia, 11/11/2026) : on ne la prend pas ; talkTarget de l'émulateur de l'île (sauf le sous-marin, dans le navigateur) */
         if (is_vehicle(k) && veh_noye(n->perso, n->x, n->z)) continue;   /* au fond d'un lac : perdu */
         float d = hypotf(n->x - E.sera.x, n->z - E.sera.z);
         if (d < bd) { bd = d; best = k; }
@@ -1699,7 +1731,7 @@ static int prom_cible(npc_t *n) {
 #define CENDRE_PLANCHER 0.25f
 #define CENDRE_RENC 0.6f
 #define CENDRE_GLANEUR 3.0f
-float cendre_dehors(void) { return !E.w.ciel && (!E.in.on || BT.on) && !neige_ici() ? E.rain : 0; }
+float cendre_dehors(void) { return !E.w.ile[0] && !E.w.ciel && (!E.in.on || BT.on) && !neige_ici() ? E.rain : 0; }   /* île : pluie d'eau, sans cendre (cendreDehors de l'émulateur de l'île) */
 /* Neige (01/11/2026, demande de l'utilisateur) : sur la planète, dehors, dans la classe « neige » (LAND_NEIGE, rang de
    Continent.LAND) de la grille des zones sous Sera, la pluie tombe en neige : flocons (render.c), ni cendre (toux,
    brouillard gris, rencontres) ni éclairs (neigeIci de l'émulateur) */
@@ -1742,7 +1774,7 @@ static void ville_maj(float dt) {
     /* Intérieur (02/11/2026) : ZOOM_INTERIEUR, pris d'un coup au passage de la porte (le fondu le cache) ; code CODE_ZOOM :
        zoom manuel, le lieu ne l'impose plus */
     const int lieu = E.in.on ? 3 : ville ? 2 : 1, porte = (lieu == 3) != (E.zoom_lieu == 3) && E.zoom_lieu;
-    if (lieu != E.zoom_lieu) { E.zoom_lieu = lieu; E.zoom_cible = lieu == 3 ? ZOOM_INTERIEUR : ville ? ZOOM_VILLE : ZOOM_DEHORS; }
+    if (lieu != E.zoom_lieu) { E.zoom_lieu = lieu; E.zoom_cible = lieu == 3 ? (E.w.ile[0] ? ILE_ZOOM_INTERIEUR : ZOOM_INTERIEUR) : E.w.ile[0] ? ILE_ZOOM : ville ? ZOOM_VILLE : ZOOM_DEHORS; }   /* (île : ILE_ZOOM, ILE_ZOOM_INTERIEUR) */
     E.zoom_auto = !E.zoom_libre;
     if (E.zoom_libre) return;
     if (porte && !MISE.cam_on && !carte_plein()) eng_set_zoom(E.zoom_cible);
@@ -1896,7 +1928,7 @@ static int masque_filtre(void) {
 }
 static uint8_t cendre_dit, cendre_averse;
 static void cendre_update(float dt) {
-    if (E.w.ciel || E.rain < CENDRE_SEUIL || neige_ici()) { cendre_averse = 0; E.cendre_t = 0; return; }   /* temps sec, sous terre, ailleurs, neige */
+    if (E.w.ile[0] || E.w.ciel || E.rain < CENDRE_SEUIL || neige_ici()) { cendre_averse = 0; E.cendre_t = 0; return; }   /* temps sec, sous terre, ailleurs, neige ; île : une pluie d'eau (ni annonce ni toux, 11/11/2026 ; cendreMaj de l'émulateur de l'île) */
     if (E.in.on || E.ui_block || script_running() || CR.on) return;   /* à l'abri, ou le temps de la cendre arrêté */
     if (E.ride >= 0 && son_moteur(E.npcs[E.ride].perso) != SON_MOTEUR_MOTO) return;   /* habitacle fermé */
     if (masque_filtre()) {
@@ -2062,6 +2094,7 @@ static void encounter_step(float dist) {
     const float pas = w->renc * RENC_FOIS[E.renc_mode % 5];
     if (pas <= 0 || !w->zone || (E.ride >= 0 && !vol_permanent()) || BT.on || E.ui_block || script_running()) return;   /* en véhicule, jamais, sauf en vol permanent */
     if (zone_sure(E.sera.x, E.sera.z)) return;   /* zone sûre (battle.c) : le chemin n'y compte pas */
+    if (ile_calme()) return;   /* île : pas encore de monstres (prologue, ile.c) */
     if (enc_left <= 0) enc_left = pas * (0.5f - 0.5f * logf(1 - erand()));
     enc_left -= dist * (1 + CENDRE_RENC * cendre_dehors());
     if (enc_left > 0) return;
@@ -2074,6 +2107,23 @@ static void encounter_step(float dist) {
     int g[BT_EMAX];   /* le chef et ses compagnons (groupe de rencontre) */
     const int n = encounter_groupe(k, E.sera.x, E.sera.z, encounter_taille(k, script_niveau(E.sera.x, E.sera.z), membres_equipe()), g);
     battle_start_groupe(g, n, encounter_level(), 0, GROUPE_PARTS, NULL);
+}
+
+/* État des rencontres, à la demande (SDX ETAT du firmware, rendu_test etat ; 08/11/2026, retour de jeu : aucune rencontre sur la montre alors
+   que le PC en trouvait) : tout ce qui décide d'une rencontre à pied, sur une ligne */
+int eng_etat_rencontres(char *b, int n) {
+    const world_t *w = &E.w;
+    const int t = encounter_zone(E.sera.x, E.sera.z), mb = membres_equipe(), sn = script_niveau(E.sera.x, E.sera.z);
+    const int hi = t >= 0 ? enc_histoire(t, sn, mb) : sn;
+    int cand = 0, zon = 0, pat = 0;
+    for (int k = 0; k < w->nenemies && t >= 0; k++) if ((w->enemies[k].zones >> t) & 1) { zon++; cand += enc_ok(&w->enemies[k], hi, mb); }
+    int o = snprintf(b, (size_t)n, "carte %d en %.1f %.1f cap %.2f yaw %.2f | vehicule %d nage %d interieur %d combat %d course %d script %d scene %d bloque %d pause %d vol %d"
+                     " | mode %d pas %.1f reste %.1f sure %d zone %d | niveau %d histoire %d (plafond %d) equipe %d | ennemis de la zone %d, permis %d",
+                     w->carte, E.sera.x, E.sera.z, E.sera.dir, E.yaw, E.ride >= 0, E.nage, E.in.on, BT.on, CR.on, script_running(), mise_bloque(), E.ui_block, hud_pause(), vol_permanent(),
+                     E.renc_mode, w->renc * RENC_FOIS[E.renc_mode % 5], enc_left, zone_sure(E.sera.x, E.sera.z), t, E.level, sn, hi, mb, zon, cand);
+    for (int s = 0; s < PATR_MAX; s++) if (PATR[s].on && o > 0 && o < n) { pat++; o += snprintf(b + o, (size_t)(n - o), " | groupe %d : etat %d a %.1f", s, PATR[s].etat, hypotf(PATR[s].x[0] - E.sera.x, PATR[s].z[0] - E.sera.z)); }
+    if (!pat && o > 0 && o < n) snprintf(b + o, (size_t)(n - o), " | aucun groupe");
+    return o;
 }
 
 /* Passages (PASS) : Sera entre dans la zone d'un passage de sa carte (à pied, hors combat, script et intérieur), condition
@@ -2156,7 +2206,9 @@ static int cam_dedans(float x, float z, float yaw, float zoom, float h);
 static int scene_libre_r(float x, float z, int perso, int acteur, float R) {
     if (E.in.on) return int_libre(x, z);
     if (x < 2 || z < 2 || x > E.w.n - 2 || z > E.w.n - 2 || !chunk_of_cell((int)floorf(x), (int)floorf(z))) return 1;
-    if (!sol_libre(x, z, 0)) return 0;
+    /* un acteur bateau (11/11/2026, île : traversées montrées) va sur l'eau, jamais sur la terre (sceneLibre de l'émulateur) */
+    const int bateau = perso >= 0 && perso < E.w.npersos && (E.w.persos[perso].flags & PERS_VEHICULE) && VEH_TYPE(E.w.persos[perso].flags) == VEH_BATEAU;
+    if (!sol_libre(x, z, bateau ? 2 : 0)) return 0;
     if (acteur >= 0 && E.ride < 0 && hypotf(x - E.sera.x, z - E.sera.z) < R) return 0;
     for (int k = 0; k < ACT_MAX; k++) {
         const acteur_t *a = &MISE.act[k];
@@ -2544,6 +2596,7 @@ static void defi_maj(float dt) {
    véhicule, autre carte) */
 static struct { int on, renc, weather; float cap, fin, px, pz, pt, x0, z0, heure, rain; } ESM;   /* x0 … rain : l'état d'avant l'essai, rendu à la fin */   /* px, pz, pt : position il y a une seconde (bloquée : elle tourne) */
 int eng_essai_monde(float x, float z, float cap, int pluie, float heure, float s) {
+    if (accueil_on() && E.w.ile[0]) accueil_fin();   /* île (essais de la montre) : une partie neuve depuis l'écran titre, jamais sauvegardée (essai_mesure) */
     if (BT.on || CR.on || script_running() || E.ride >= 0 || E.w.carte || accueil_on()) return 0;
     if (E.in.on) int_reset();
     if (!ESM.on) { ESM.renc = E.renc_mode; ESM.x0 = E.sera.x; ESM.z0 = E.sera.z; ESM.heure = E.heure; ESM.weather = E.weather; ESM.rain = E.rain; }
@@ -2557,6 +2610,10 @@ int eng_essai_monde(float x, float z, float cap, int pluie, float heure, float s
     return 1;
 }
 int eng_essai_actif(void) { return ESM.on; }   /* un essai en cours : la montre ne s'endort pas (main.c, veille_image) */
+/* Une sauvegarde pendant un essai (la veille de SDX VEILLE avant un flash, une sauvegarde automatique) prend l'état d'avant l'essai :
+   le réglage des rencontres et la place de Sera (08/11/2026, retour de jeu : RENCONTRES restées à AUCUNE dans la partie après les
+   essais de la passe de performance, plus un seul combat). Rencontres d'avant l'essai (sa place en *x, *z), sinon -1 */
+int essai_partie(float *x, float *z) { if (!ESM.on) return -1; *x = ESM.x0; *z = ESM.z0; return ESM.renc; }
 static void essai_monde_maj(void) {
     if (!ESM.on) return;
     if (E.clock > ESM.fin || BT.on || CR.on || script_running() || E.ride >= 0) {
@@ -2624,8 +2681,8 @@ void eng_update(float dt, const eng_input_t *in) {
     if (hud_pause()) return;
     casse_clock += dt;
     if (!CR.on) course_fx_maj(dt);   /* éclats, feuilles et poussière des décors cassés */
-    if ((in->keys & ENG_KEY_ROT_L) && !mise_bloque()) E.yaw -= dt * 1.6f;
-    if ((in->keys & ENG_KEY_ROT_R) && !mise_bloque()) E.yaw += dt * 1.6f;
+    if ((in->keys & ENG_KEY_ROT_L) && !mise_bloque()) E.yaw -= dt * CAM_TOUCHE_V;
+    if ((in->keys & ENG_KEY_ROT_R) && !mise_bloque()) E.yaw += dt * CAM_TOUCHE_V;
     /* Pas magnétiques (01/11/2026, demande de l'utilisateur) : à pied, caméra lâchée, elle glisse vers le multiple de 45°
        le plus proche, où les 8 directions des planches tombent juste (en véhicule, elle reste derrière lui ; caméras de
        scène : mise_camera) */
@@ -2656,6 +2713,7 @@ void eng_update(float dt, const eng_input_t *in) {
         const chunk_t *c = E.ride < 0 && !CR.on && !E.in.on ? chunk_of_cell(i, j) : NULL;
         const int avant = E.nage;
         E.nage = E.in.on ? int_case(s->x, s->z) == 5 : c ? water_kind(c->flags[cell_local(i, j)]) : 0;   /* intérieur : l'eau d'un bassin */
+        if (E.nage && E.w.ile[0] && !E.in.on && eau_prof(s->x, s->z) <= ILE_GUE) E.nage = 0;   /* île : pas assez de fond, elle marche dans l'eau */
         if (E.nage && !avant && E.ride < 0) son_jouer(SON_PLOUF, 0.45f, 1.1f);   /* elle entre dans l'eau */
     }
     /* Pose du scénario (instruction « pose ») : Sera reste sur place le temps de son animation */
@@ -2675,10 +2733,11 @@ void eng_update(float dt, const eng_input_t *in) {
            maintenu loin d'elle) ou si le stick de la manette est poussé à fond (MANETTE_COURSE), marche sinon ; avec les
            deux animations, 3,0 et 5,2 unités par seconde, avec une seule l'allure d'origine de 4,2 */
         const int ps = member_sheet_mouv(0), both = !E.nage && has_anim(ps, ANIM_WALK) && has_anim(ps, ANIM_RUN);   /* (tenue de pose : sa planche de base) */
-        const int far = (E.has_dest && E.dest_court) || (in->manette && hypotf(in->stick_x, in->stick_y) >= MANETTE_COURSE);
+        const int far = ((E.has_dest && E.dest_court) || (in->manette && hypotf(in->stick_x, in->stick_y) >= MANETTE_COURSE)) && !ile_epuisee();   /* (île : épuisée, marche seulement) */
         const int st = both && far ? 2 : 1;
         if (s->state != st) { s->state = st; s->frame = 0; s->anim = 0; }
-        float sp = (E.nage ? 2.2f : both ? (far ? 5.2f : 3.0f) : 4.2f) / E.w.ech * dt * (E.in.on && int_pente(s->x, s->z) ? INT_MARCHE_ESC : 1), nx = s->x + vx * sp, nz = s->z + vz * sp;   /* (escalier : plus lentement) */
+        float sp = (E.nage ? 2.2f : both ? (far ? 5.2f : 3.0f) : 4.2f) / E.w.ech * dt * (E.in.on && int_pente(s->x, s->z) ? INT_MARCHE_ESC : 1)   /* (escalier : plus lentement) */
+            * (E.w.ile[0] && !E.nage && !E.in.on && eau_prof(s->x, s->z) > 0.1f ? ILE_GUE_ALLURE : 1), nx = s->x + vx * sp, nz = s->z + vz * sp;   /* (île : dans l'eau, plus lente) */
         const float ox = s->x, oz = s->z;
         int moved = 0;
         if (sera_pas(nx, s->z)) { s->x = nx; moved = 1; }
@@ -2717,6 +2776,7 @@ void eng_update(float dt, const eng_input_t *in) {
     UP(UPROF_COURSE);
     /* Dans un intérieur, le monde ne bouge pas autour de lui (personnages, fenêtre de chunks, trafic) */
     if (!E.in.on) update_npcs(dt);
+    ile_compagnes_maj(dt);   /* île du jeu des héroïnes : ses compagnes sur la trace de ses pas (ile.c) */
     if (!E.in.on) patrouille_maj(dt);   /* patrouilles hostiles (battle.c) : elles rôdent, chassent Sera, engagent le combat */
     UP(UPROF_PNJ);
     mise_update(dt);   /* mise en scène du scénario : caméra, acteurs, fondu, fuite */

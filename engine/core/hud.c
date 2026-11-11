@@ -81,8 +81,8 @@ static void cadre(int on) { if (PORTRAIT) ui_translate(on ? (UW - ENG_SCREEN) / 
    cadre centré (cadre(1) : le décalage est retiré) ; voiles des sorts, éclair, cut-ins, entrée et fin de combat, fondus,
    pause et menu de course, fond des sous-menus et des menus */
 static void voile_ecran(uint16_t c, int a) {
-#if ENG_DYN
-    ui_voile_image(c, a);   /* marges de la barre d'état et de la barre de navigation comprises */
+#if ENG_DYN || ENG_RECT
+    ui_voile_image(c, a);   /* marges de la barre d'état et de la barre de navigation comprises ; écran rectangulaire : toute l'image */
 #else
     ui_rect(0, 0, ENG_SCREEN, ENG_SCREEN, c, a);
 #endif
@@ -289,8 +289,41 @@ static int elision(char *buf, int o, int cap, int vn, int maj) {
     }
     return o;
 }
-static const char *nom_echange(const char *s, char *buf, int cap) {
-    if (!s || E.heroine < 0 || E.heroine >= E.w.npersos || !E.w.persos[E.heroine].nom || !E.w.persos[E.heroine].nom[0]) return s;
+/* Hauteur de la bulle « parler » d'un personnage dont le haut est à top (écran) : 50 px au-dessus de lui, jamais à moins de
+   BULLE_HAUT du haut de l'écran (11/11/2026, retour de l'utilisateur : devant la Gardienne de jade, statue de taille 400 sur
+   son piédestal, la bulle sortait de l'écran et l'histoire semblait bloquée) ; bulleY de l'émulateur, à garder identique */
+#define BULLE_HAUT 72
+static float bulle_y(float top) { return top - 50 > BULLE_HAUT ? top - 50 : BULLE_HAUT; }
+/* Texte selon le genre du ou de la protagoniste (11/11/2026, Île de Nacre : protagonistes femmes ou hommes) : « {petite|petit} » prend la
+   première forme, la seconde pour un protagoniste masculin (son genre dans la table des héroïnes de la section ILE) ; sans accolades,
+   le texte tel quel. genreTexte de l'émulateur de l'île, à garder identique */
+static int protagoniste_masculin(void) {
+    for (int k = 0; k < E.w.ile_nher; k++) if ((int)E.w.ile_her[k].perso == E.heroine) return E.w.ile_her[k].genre == 1;
+    return 0;
+}
+static int genre_texte(const char *s, char *buf, int cap) {   /* 1 : le texte de buf (formes résolues), 0 : s tel quel */
+    if (!s || !strchr(s, '{')) return 0;
+    const int m = protagoniste_masculin();
+    int o = 0;
+    for (const char *p = s; *p && o < cap - 1; ) {
+        const char *fin = *p == '{' ? strchr(p, '}') : NULL, *bar = fin ? (const char *)memchr(p, '|', (size_t)(fin - p)) : NULL;
+        if (bar) {   /* {féminin|masculin} */
+            const char *a = m ? bar + 1 : p + 1, *z = m ? fin : bar;
+            while (a < z && o < cap - 1) buf[o++] = *a++;
+            p = fin + 1;
+        } else buf[o++] = *p++;
+    }
+    buf[o] = 0;
+    return 1;
+}
+static const char *nom_echange(const char *s0, char *buf, int cap) {
+    char g[256];
+    const int gen = genre_texte(s0, g, (int)sizeof g);   /* d'abord les formes selon le genre (dans g, recopié dans buf s'il faut le rendre) */
+    const char *s = gen ? g : s0;
+    if (!s0 || E.heroine < 0 || E.heroine >= E.w.npersos || !E.w.persos[E.heroine].nom || !E.w.persos[E.heroine].nom[0]) {   /* sans héroïne choisie */
+        if (!gen) return s0;
+        snprintf(buf, (size_t)cap, "%s", g); return buf;
+    }
     const char *S = PARTY[0].name, *N = E.w.persos[E.heroine].nom;
     char st[24], nt[24];
     nom_titre(S, st, sizeof st); nom_titre(N, nt, sizeof nt);
@@ -318,10 +351,12 @@ static const char *nom_echange(const char *s, char *buf, int cap) {
         if (o + n >= cap) break;
         memcpy(buf + o, s + i, (size_t)n); o += n; i += n;
     }
-    if (!chg) return s;
+    if (!chg) { if (!gen) return s0; snprintf(buf, (size_t)cap, "%s", g); return buf; }
     buf[o] = 0;
     return buf;
 }
+/* Texte tel qu'il s'affiche (formes selon le genre, noms échangés) : essais de rendu_test (« filtre:TEXTE ») */
+const char *hud_texte_affiche(const char *s, char *buf, int cap) { return nom_echange(s, buf, cap); }
 /* Couleur du membre m (son nom, ses lignes, la frise du combat) : avec une recrue montrée en Sera (membre_en_sera), le
    joueur prend celle de la recrue et la recrue celle de Sera, comme leurs auras (couleurs de leurs cut-ins) */
 static uint32_t membre_couleur(int m) {
@@ -555,7 +590,8 @@ static struct { int att, carte, lieu, us, vu; float libre, depuis, vu_t, lieu_t;
 static void sv_remplir(save_t *sv) {
     memset(sv, 0, sizeof *sv);
     int_position(&sv->x, &sv->z, &sv->yaw); sv->dir = E.sera.dir;   /* dans un intérieur : devant sa porte, dans la rue */
-    sv->theme = (uint8_t)E.theme; sv->fog = (uint8_t)(E.fog_on | (E.volant + 1) << 1); sv->dither = (uint8_t)E.dither_on; sv->bright = (uint8_t)(H.bright | E.eveil_essai << 3 | E.renc_mode << 4 | E.essai << 7);   /* fog, bits 1 à 3 : DIRECTION + 1 (0 : sauvegarde d'avant) ; bright, bit 3 : ÉVEIL, 4 à 6 : rencontres, 7 : mode d'essai */
+    int renc = essai_partie(&sv->x, &sv->z); if (renc < 0) renc = E.renc_mode;   /* essai de fluidité en cours : l'état d'avant lui (game.c) */
+    sv->theme = (uint8_t)E.theme; sv->fog = (uint8_t)(E.fog_on | (E.volant + 1) << 1); sv->dither = (uint8_t)E.dither_on; sv->bright = (uint8_t)(H.bright | E.eveil_essai << 3 | renc << 4 | E.essai << 7);   /* fog, bits 1 à 3 : DIRECTION + 1 (0 : sauvegarde d'avant) ; bright, bit 3 : ÉVEIL, 4 à 6 : rencontres, 7 : mode d'essai */
     for (int i = 0; i < 4; i++) { sv->hp[i] = PARTY[i].hp; sv->mp[i] = PARTY[i].mp; }
     for (int i = 0; i < n_items; i++) sv->items[i] = (uint8_t)ITEMS[i].count;
     sv->level = E.level; sv->exp = E.exp; sv->credits = E.credits;
@@ -870,6 +906,7 @@ static void regl_appliquer(const uint8_t *r, int lum);
 static void partie_appliquer(save_t *s, int p) {
     E.partie = p; H.seq = (int)s->seq;
     s->heroine[15] = 0; E.heroine = heroine_de(s->heroine);   /* avant les tenues : elles sont à elle */
+    ile_equipe(0);   /* île : ses compagnes et leurs fiches, avant le niveau, les PV et l'équipe de la sauvegarde */
     E.temps_jeu = (float)s->temps;
     int_reset();   /* on reprend dans la rue, sans alarme */
     police_reset();   /* ni recherche ni poursuite (pas sauvegardées) */
@@ -3707,6 +3744,7 @@ static int hud_scene(void) {
     if (CR.on || RM.on) return 0;
     return !carriere_on() && ((script_running() && !MISE.fuite_on) || H.dialog || CHX.on || mise_bloque());   /* (mode course : l'histoire est arrêtée, son script ne cache rien) */
 }
+int scene_en_cours(void) { return hud_scene(); }   /* calme du trafic pendant une scène (traffic_update de game.c) */
 /* Éclair de couleur d'une boîte de nuit (club_age de game.c) : voile magenta, cyan, violet ou blanc, fort puis qui
    s'éteint en 0,18 s, sous le reste de l'interface (drawClub de l'émulateur) */
 static void draw_club(void) {
@@ -3757,7 +3795,7 @@ static void draw_marques(void) {
         const npc_t *pn = &E.npcs[ks[a]];
         const int m = marque_de(pn->perso);
         if (ds[a] < 6 && ((ob && hypotf(pn->x - ox, pn->z - oz) < 0.3f) || (gp && hypotf(pn->x - gx, pn->z - gz) < 0.3f))) continue;
-        if (ks[a] == E.talk && bulle) { marque_dessin(E.scr_npc.cx + 34, E.scr_npc.top - 50 - 30, m, 0.8f); MV.npc[MV.n] = (int16_t)ks[a]; MV.x[MV.n] = E.scr_npc.cx + 34; MV.y[MV.n++] = E.scr_npc.top - 80; continue; }
+        if (ks[a] == E.talk && bulle) { marque_dessin(E.scr_npc.cx + 34, bulle_y(E.scr_npc.top) - 30, m, 0.8f); MV.npc[MV.n] = (int16_t)ks[a]; MV.x[MV.n] = E.scr_npc.cx + 34; MV.y[MV.n++] = bulle_y(E.scr_npc.top) - 30; continue; }
         const perso_t *pe = &E.w.persos[pn->perso];
         const float h = 2.0f / E.w.ech * E.w.sprite_scale * (pe->taille > 0 ? pe->taille : 1);
         float sx, sy;
@@ -3768,6 +3806,67 @@ static void draw_marques(void) {
         MV.npc[MV.n] = (int16_t)ks[a]; MV.x[MV.n] = sx; MV.y[MV.n++] = sy;
     }
 }
+#if ENG_RECT
+/* Écran rectangulaire (RetroFW, 11/11/2026, demande de l'utilisateur : « revoir l'UI, notamment le cadran de montre, on ne
+   l'a pas dans la version Android ») : plus de graduations du pourtour, de boussole ni de jauges sur le cercle ; comme le
+   haut de portrait_world du téléphone, aux bords de toute l'image (x de -ui_ox à ui_img_w - ui_ox) : lieu et heure en
+   haut à gauche, boussole en bande au milieu, quête suivie à droite ; Sera, son niveau et ses jauges en bas à gauche.
+   Le reste de l'interface paysage suivra la maquette maquettes/interface_paysage.html, une fois validée */
+static void rect_world(void) {
+    const float x0 = (float)-ui_ox + 20, x1 = (float)(ui_img_w - ui_ox) - 20, yb = (float)(ui_img_h - ui_oy);
+    const uint16_t ink = ui_rgb(INK);
+    char t[96];
+    /* Pas de bandeau semi-transparent (sur la LDK, un mélange par pixel : 80 000 pixels par image pour les deux fonds, une
+       dizaine de ms) : textes ombrés */
+    #define OMBRE(f, x, y, al, col, s) do { ui_text(f, (x) + 2, (y) + 2, al, ink, 200, s); ui_text(f, x, y, al, col, 255, s); } while (0)
+    if (E.in.on && E.in.etage) snprintf(t, sizeof t, "ÉTAGE %d", E.in.etage);
+    else snprintf(t, sizeof t, "%s", E.in.on ? "INTÉRIEUR" : E.w.carte ? E.w.cartes[E.w.carte].nom : E.w.ile[0] ? E.w.ile : "SECTEUR 6");
+    OMBRE(ui_fit(FONT_DISP, t, 230, 28, 20), x0, 36, UI_LEFT, ui_rgb(WHITE), t);
+    const unsigned hr = (unsigned)(E.horloge / 3600) % 24u, mn = (unsigned)(E.horloge / 60) % 60u;
+    if (E.horloge >= 0) snprintf(t, sizeof t, "%.1f · %.1f · %02u:%02u", E.sera.x, E.sera.z, hr, mn);
+    else snprintf(t, sizeof t, "%.1f · %.1f", E.sera.x, E.sera.z);
+    OMBRE(ui_font(FONT_MONO, 20), x0, 64, UI_LEFT, ui_rgb(0xB8C6D6), t);
+    /* Boussole en bande : les points cardinaux défilent avec la caméra, le nord en teinte 2 (portrait_world) */
+    const float bx = CX;
+    ui_line(bx - 96, 58, bx + 96, 58, 2, C1, 90);
+    static const char *const CARD[4] = { "N", "E", "S", "O" };
+    for (int k = 0; k < 4; k++) {
+        float a = (k == 0 ? PI_F : k == 2 ? 0 : k == 1 ? 3 * PI_F / 2 : PI_F / 2) - E.yaw;   /* nord vers -z, sud vers +z, est vers -x (CARTE_X de carte.c) */
+        a = atan2f(sinf(a), cosf(a));
+        if (fabsf(a) > 1.3f) continue;
+        ui_text(ui_font(FONT_DISP, k ? 22 : 26), bx + a / (PI_F / 2) * 76, 46, UI_CENTER, k ? ui_rgb(DIM) : C2, (int)(255 * (1 - fabsf(a) / 1.6f)), CARD[k]);
+    }
+    ui_line(bx, 52, bx, 64, 2, C1, 255);
+    /* Quête suivie et distance de son objectif, à droite */
+    if (E.qtrack >= 0 && E.qtrack < script_quest_count() && !H.dialog) {
+        const int q = E.qtrack, st = E.quests[q] >= 1 && E.quests[q] < 255 ? E.quests[q] - 1 : 0;
+        const char *txt = script_quest_text(q, st);
+        snprintf(t, sizeof t, "%s", script_quest_name(q));
+        OMBRE(ui_fit(FONT_DISP, t, 220, 22, 18), x1, 34, UI_RIGHT, C2, t);
+        float ox, oz;
+        const int dm = objective_pos(&ox, &oz) ? (int)hypotf(ox - E.sera.x, oz - E.sera.z) : -1;
+        if (dm >= 0 && txt[0]) snprintf(t, sizeof t, "%s · %d m", txt, dm);
+        else if (dm >= 0) snprintf(t, sizeof t, "%d m", dm);
+        else snprintf(t, sizeof t, "%s", txt);
+        OMBRE(ui_fit(FONT_MONO, t, 230, 20, 16), x1, 62, UI_RIGHT, ui_rgb(WHITE), t);
+    }
+    if (H.dialog || CR.on || RM.on) return;
+    /* Sera (ou l'héroïne choisie) : portrait, nom, niveau, PV et PM, en bas à gauche */
+    const float pr = 30, py = yb - 24 - pr, jw = 200;
+    ui_circle(x0 + pr, py, pr, ui_rgb(0x080612), 255);
+    ui_image(portrait_px[0], portrait_mask[0], 24, 24, x0, py - pr + pr / 9, pr * 2 / 24, x0 + pr, py, pr - 1);
+    ui_ring(x0 + pr, py, pr, 3, C2, 255);
+    const float tx = x0 + 2 * pr + 14;
+    snprintf(t, sizeof t, "%s  NIV. %d", PARTY[0].name, E.level);
+    OMBRE(ui_fit(FONT_DISP, t, jw + 40, 22, 18), tx, py - 12, UI_LEFT, ui_rgb(WHITE), t);
+    const float fh = PARTY[0].max > 0 ? fminf(1, (float)PARTY[0].hp / PARTY[0].max) : 0, fm = PARTY[0].maxmp > 0 ? fminf(1, (float)PARTY[0].mp / PARTY[0].maxmp) : 0;
+    ui_rect(tx, py + 2, jw, 12, ui_rgb(WHITE), 26); if (fh > 0) ui_rect(tx, py + 2, jw * fh, 12, C2, 255);
+    ui_rect(tx, py + 20, jw, 8, ui_rgb(WHITE), 26); if (fm > 0) ui_rect(tx, py + 20, jw * fm, 8, C1, 255);
+    const float tc = E.clock - E.cendre_coup;   /* coup de la pluie de cendre : la jauge des PV pulse en gris cendre */
+    if (E.cendre_coup > 0 && tc >= 0 && tc < 0.6f && fh > 0) ui_rect(tx, py + 2, jw * fh, 12, ui_rgb(0xC8C4BC), (int)(200 * (1 - tc / 0.6f)));
+    #undef OMBRE
+}
+#endif
 static void draw_world_hud(void) {
     draw_eclair();
     draw_club();
@@ -3779,6 +3878,9 @@ static void draw_world_hud(void) {
     }
 #if ENG_DYN
     if (!CR.on && !RM.on) portrait_world();   /* en course et au menu de course : rien de l'exploration (portrait_course) */
+    if (0) {
+#elif ENG_RECT
+    if (!CR.on && !RM.on) rect_world();   /* écran rectangulaire : pas de cadran de montre */
     if (0) {
 #endif
     rim_ticks(E.yaw, 115);
@@ -3792,7 +3894,7 @@ static void draw_world_hud(void) {
     ui_poly(tri, 3, C2, 255);
     ui_text(ui_font(FONT_DISP, 20), bx - 24 * s, by + 24 * c + 7, UI_CENTER, C2, 255, "N");
     if (!H.dialog && !CR.on && !RM.on) {
-        char t[32];
+        char t[48];
         /* PV et PM de Sera : jauges sans chiffres (les valeurs sont dans les menus et en combat), remplies du bas */
         const float fh = PARTY[0].max > 0 ? fminf(1, (float)PARTY[0].hp / PARTY[0].max) : 0, fm = PARTY[0].maxmp > 0 ? fminf(1, (float)PARTY[0].mp / PARTY[0].maxmp) : 0;
         ui_arc(CX, CY, 205, 2.06f, 2.96f, 4, C2, 60);
@@ -3809,13 +3911,14 @@ static void draw_world_hud(void) {
         if (E.horloge >= 0) {
             if (E.in.on && E.in.etage) snprintf(t, sizeof t, "ÉTAGE %d // %02u:%02u", E.in.etage, hr, mn);
             else if (E.in.on) snprintf(t, sizeof t, "INTÉRIEUR // %02u:%02u", hr, mn);
+            else if (!E.w.carte && E.w.ile[0]) snprintf(t, sizeof t, "%.24s // %02u:%02u", E.w.ile, hr, mn);   /* île : son nom entier (UTF-8) */
             else snprintf(t, sizeof t, "%.12s // %02u:%02u", E.w.carte ? E.w.cartes[E.w.carte].nom : "SEC-06", hr, mn);
         }
-        else if (E.in.on && E.in.etage) snprintf(t, sizeof t, "ÉTAGE %d", E.in.etage); else if (E.in.on) snprintf(t, sizeof t, "INTÉRIEUR"); else if (E.w.carte) snprintf(t, sizeof t, "%.12s // %.1f %.1f", E.w.cartes[E.w.carte].nom, E.sera.x, E.sera.z); else snprintf(t, sizeof t, "SEC-06 // %.1f %.1f", E.sera.x, E.sera.z);
+        else if (E.in.on && E.in.etage) snprintf(t, sizeof t, "ÉTAGE %d", E.in.etage); else if (E.in.on) snprintf(t, sizeof t, "INTÉRIEUR"); else if (E.w.carte) snprintf(t, sizeof t, "%.12s // %.1f %.1f", E.w.cartes[E.w.carte].nom, E.sera.x, E.sera.z); else snprintf(t, sizeof t, "%.24s // %.1f %.1f", E.w.ile[0] ? E.w.ile : "SEC-06", E.sera.x, E.sera.z);
         ui_text_arc(ui_font(FONT_MONO, 20), CX + 1, CY + 1, 214, PI_F / 2 - 0.12f, 1, ui_rgb(0x05080E), 170, t);
         ui_text_arc(ui_font(FONT_MONO, 20), CX, CY, 214, PI_F / 2 - 0.12f, 1, ui_rgb(0x7F93A8), 255, t);
     }
-#if ENG_DYN
+#if ENG_DYN || ENG_RECT
     }
 #endif
     draw_marques();   /* « ! » et « ? » au-dessus des personnages (panneaux.c), sous les bulles */
@@ -3898,8 +4001,8 @@ static void draw_world_hud(void) {
     else if (CR.on) { draw_course(); if (CR.pause && accueil_regl_on()) { nbtn = 0; accueil_regl_build(); } else if (CR.pause) draw_course_pause(); }   /* (RÉGLAGES de la pause : la page d'accueil.c) */
     if (RM.on || CR.on) {}
     else if (near_npc() && E.scr_npc.vis && !H.dialog && !H.menu && !(E.ride >= 0 && (fabsf(E.ride_v) > 0.3f || E.ride_phase))) {
-        float x = E.scr_npc.cx, y = E.scr_npc.top - 50;
-        ui_line(x, y + 36, x, E.scr_npc.top, 1, C1, 153);
+        float x = E.scr_npc.cx, y = bulle_y(E.scr_npc.top);
+        if (E.scr_npc.top > y + 36) ui_line(x, y + 36, x, E.scr_npc.top, 1, C1, 153);
         float q[12]; ui_hex_path(x, y, 76, 66, q);
         ui_poly(q, 6, ui_rgb(0x060E1A), 235);
         glow_outline(q, 6, 2, C1);
@@ -3943,7 +4046,7 @@ static void draw_world_hud(void) {
     if (E.coffre >= 0 && E.ride < 0 && !BUT.on && !H.dialog && !H.menu && !CHX.on && !RM.on && !CR.on && coffre_position(&kx, &ky, &kz)) {
         if (!project(kx, ky, kz, &sx, &sy)) { sx = E.scr_sera.cx; sy = E.scr_sera.top; }
         float x = sx, y = sy - 46;
-        if (near_npc() && E.scr_npc.vis && fabsf(E.scr_npc.cx - x) < 84 && fabsf(E.scr_npc.top - 50 - y) < 70) x = E.scr_npc.cx + (x >= E.scr_npc.cx ? 84 : -84);
+        if (near_npc() && E.scr_npc.vis && fabsf(E.scr_npc.cx - x) < 84 && fabsf(bulle_y(E.scr_npc.top) - y) < 70) x = E.scr_npc.cx + (x >= E.scr_npc.cx ? 84 : -84);
         if (E.porte >= 0 && E.scr_sera.vis && fabsf(E.scr_sera.cx - x) < 84 && fabsf(E.scr_sera.top - 50 - y) < 70) x = E.scr_sera.cx + (x >= E.scr_sera.cx ? 84 : -84);
         float q[12]; ui_hex_path(x, y, 76, 66, q);
         ui_poly(q, 6, ui_rgb(0x060E1A), 235);
@@ -3958,7 +4061,7 @@ static void draw_world_hud(void) {
     if (E.panneau >= 0 && E.ride < 0 && !BUT.on && !H.dialog && !H.menu && !CHX.on && !RM.on && !CR.on && panneau_position(&kx, &ky, &kz)) {
         if (!project(kx, ky, kz, &sx, &sy)) { sx = E.scr_sera.cx; sy = E.scr_sera.top; }
         float x = sx, y = sy - 46;
-        if (near_npc() && E.scr_npc.vis && fabsf(E.scr_npc.cx - x) < 84 && fabsf(E.scr_npc.top - 50 - y) < 70) x = E.scr_npc.cx + (x >= E.scr_npc.cx ? 84 : -84);
+        if (near_npc() && E.scr_npc.vis && fabsf(E.scr_npc.cx - x) < 84 && fabsf(bulle_y(E.scr_npc.top) - y) < 70) x = E.scr_npc.cx + (x >= E.scr_npc.cx ? 84 : -84);
         if (E.porte >= 0 && E.scr_sera.vis && fabsf(E.scr_sera.cx - x) < 84 && fabsf(E.scr_sera.top - 50 - y) < 70) x = E.scr_sera.cx + (x >= E.scr_sera.cx ? 84 : -84);
         const uint16_t or_ = ui_rgb(MQ_RGB);
         float q[12]; ui_hex_path(x, y, 76, 66, q);
@@ -4048,8 +4151,9 @@ static void backdrop(void) {
 #if ENG_DYN
     voile_ecran(ui_rgb(INK), 222); return;   /* toute l'image (les sous-menus sont décalés en x) */
 #endif
-    ui_rect(0, 0, ENG_SCREEN, ENG_SCREEN, ui_rgb(INK), 222);
+    voile_ecran(ui_rgb(INK), 222);   /* (écran rond : le cercle ; rectangulaire : toute l'image) */
     ui_circle(CX, CY, 150, ui_rgb(0x0D1428), 110);
+    if (ENG_RECT) return;   /* écran rectangulaire : pas de pourtour de cadran */
     dashed_ring(226, 1.5f, 10.33f, 5, C1, 102);
     ui_ring(CX, CY, 215, 1, C1, 46);
 }
@@ -4060,7 +4164,7 @@ static void draw_menu(void) {
 #endif
     backdrop();
     dashed_ring(160, 4, 6, 1, C1, 56);
-    ui_arc(CX, CY, 226, -PI_F / 2 - 0.13f, -PI_F / 2 + 0.13f, 5, C2, 255);
+    if (!ENG_RECT) ui_arc(CX, CY, 226, -PI_F / 2 - 0.13f, -PI_F / 2 + 0.13f, 5, C2, 255);   /* (repère sur le pourtour du cadran) */
     for (int k = 0; k < NMENU; k++) {
         float a = (k - H.sel) / (float)NMENU * 2 * PI_F, x = CX + sinf(a) * 160, y = CY - cosf(a) * 160;
         int sel = k == H.sel;
@@ -5181,7 +5285,7 @@ static int wrap_chord(const ui_font_t *f, const char *text, float y0, float lh, 
     const char *start = text, *p = text, *last_fit = NULL;
     char buf[96];
     while (n < 6) {
-        const char *e = p; while (*e && *e != ' ') e++;
+        const char *e = ui_fin_mot(p);
         int len = (int)(e - start);
         if (len > 95) len = 95;
         memcpy(buf, start, (size_t)len); buf[len] = 0;
@@ -5199,14 +5303,24 @@ static int wrap_chord(const ui_font_t *f, const char *text, float y0, float lh, 
     return n;
 }
 
+/* Panneau du bas (dialogue, choix) et son filet : de DLG_TOP au bas de l'écran rond ; écran rectangulaire (ENG_RECT) : sur
+   toute la largeur et jusqu'au bas de l'image */
+static void panneau_bas(int a) {
+#if ENG_RECT
+    ui_rect((float)-ui_ox, DLG_TOP, (float)ui_img_w, (float)(ui_img_h - ui_oy) - DLG_TOP, ui_rgb(0x080612), a);
+    ui_line((float)-ui_ox, DLG_TOP, (float)(ui_img_w - ui_ox), DLG_TOP, 2, C2, 255);
+#else
+    ui_rect(0, DLG_TOP, ENG_SCREEN, ENG_SCREEN - DLG_TOP, ui_rgb(0x080612), a);
+    ui_line(0, DLG_TOP, ENG_SCREEN, DLG_TOP, 2, C2, 255);
+#endif
+}
 /* Choix : panneau du dialogue, réponses en rangées (la surlignée en teinte 2) ; toucher une fois surligne, deux fois
    répond (drawChoice de l'émulateur) */
 static void draw_choice(void) {
 #if ENG_DYN
     portrait_choice(); return;
 #endif
-    ui_rect(0, DLG_TOP, ENG_SCREEN, ENG_SCREEN - DLG_TOP, ui_rgb(0x080612), 245);
-    ui_line(0, DLG_TOP, ENG_SCREEN, DLG_TOP, 2, C2, 255);
+    panneau_bas(245);
     char ti[48]; snprintf(ti, sizeof ti, "%s", CHX.titre[0] ? CHX.titre : "CHOISIR");   /* sans ▸ : absent des polices du paquet */
     ui_text(ui_font(FONT_MONO, 18), CX, DLG_TOP + 34, UI_CENTER, C2, 255, ti);
     /* Confirmation (vol, effraction) : ce qui est en jeu sous le titre, les réponses un peu plus bas */
@@ -5250,8 +5364,7 @@ static void draw_dialog(void) {
         if (!talking) ui_circle(x, y, r, ui_rgb(0x080612), 150);
         if (talking) { ui_ring(x, y, r, 8, C2, 60); ui_ring(x, y, r, 3, C2, 255); } else ui_ring(x, y, r, 2, C1, a);
     }
-    ui_rect(0, DLG_TOP, ENG_SCREEN, ENG_SCREEN - DLG_TOP, ui_rgb(0x080612), 255);   /* opaque : 50 ms de mélange en moins par image */
-    ui_line(0, DLG_TOP, ENG_SCREEN, DLG_TOP, 2, C2, 255);
+    panneau_bas(255);   /* opaque : 50 ms de mélange en moins par image */
     int right = !strcmp(who, D.right);
     ui_text(ui_font(FONT_DISP, 26), right ? 420 : 46, DLG_TOP + 36, right ? UI_RIGHT : UI_LEFT, C2, 255, who);
     const ui_filtre_t f0 = ui_filtre(NULL);   /* texte déjà filtré (dlg_texte) */
@@ -5309,7 +5422,7 @@ static void portrait_world(void) {
     const uint16_t ink = ui_rgb(INK);
     char t[96];
     ui_rect(0, 0, UW, 76, ink, 150); ui_rect(0, 76, UW, 36, ink, 60);
-    if (E.in.on && E.in.etage) snprintf(t, sizeof t, "ÉTAGE %d", E.in.etage); else snprintf(t, sizeof t, "%s", E.in.on ? "INTÉRIEUR" : "SECTEUR 6");
+    if (E.in.on && E.in.etage) snprintf(t, sizeof t, "ÉTAGE %d", E.in.etage); else snprintf(t, sizeof t, "%s", E.in.on ? "INTÉRIEUR" : E.w.ile[0] ? E.w.ile : "SECTEUR 6");
     ui_text(ui_font(FONT_DISP, 26), 24, 46, UI_LEFT, ui_rgb(WHITE), 255, t);
     snprintf(t, sizeof t, "%.1f · %.1f", E.sera.x, E.sera.z);
     ui_text(ui_font(FONT_MONO, 18), 24, 76, UI_LEFT, ui_rgb(0x7F93A8), 255, t);
@@ -5958,8 +6071,7 @@ static int wrap2(const ui_font_t *f, const char *text, float max_w, char out[2][
     while (*p && n < 2) {
         const char *best = NULL, *e = p;
         for (;;) {
-            const char *w = e;
-            while (*w && *w != ' ') w++;
+            const char *w = ui_fin_mot(e);
             char buf[72];
             int l = (int)(w - p); if (l > 71) l = 71;
             memcpy(buf, p, (size_t)l); buf[l] = 0;
@@ -6845,7 +6957,7 @@ static void draw_battle_hud(void) {
                 seg_bar(es->cx - 21, by - 2, 44, 4, (float)BT.en[k].hp / BT.en[k].max, ui_rgb(RED_HEX));
             }
             if (vise) {
-                const float p = sinf(now * 6), rx = 26 + 3 * p;
+                const float p = sinf(now * 6);
                 static const float FL[14] = { 0, 0, 11, -12, 4, -12, 4, -24, -4, -24, -4, -12, -11, -12 };   /* pointe en bas */
                 float q[14];
                 const float hy = fmaxf(30, es->cy - (es->foot - es->top) * 0.3f) + 3 * p;   /* haut de la cellule : souvent vide au-dessus de la tête */
@@ -6880,7 +6992,7 @@ static void draw_battle_hud(void) {
     }
     if (0) {
 #else
-    rim_ticks(0, 102);
+    if (!ENG_RECT) rim_ticks(0, 102);   /* (écran rectangulaire : pas de graduations du cadran) */
     {
 #endif
     /* Timeline CTB sur l'arc en haut à droite : les 7 prochains tours, le premier en grand */
@@ -6923,7 +7035,7 @@ static void draw_battle_hud(void) {
         const member_t *m = &PARTY[i];
         const int act = BT.phase == BP_ALLIE ? BT.allie == i : BT.actor == i && choosing;
         if (act) {   /* celui qui choisit (ou le camarade proposé pour l'objet) : anneau qui pulse sous lui (render.c), flèche qui flotte au-dessus de sa tête */
-            const float p = sinf(now * 6), rx = 24 + 3 * p;
+            const float p = sinf(now * 6);
             static const float FL[14] = { 0, 0, 13, -14, 5, -14, 5, -28, -5, -28, -5, -14, -13, -14 };   /* pointe en bas */
             float q[14];
             const float hy = cs->top - 8 + 4 * p;
@@ -7026,8 +7138,8 @@ static void draw_battle_hud(void) {
         if (!n) fan_button(1, "RIEN À DONNER", NULL, dim, BC_BACK, 0, NULL, 1);
         if (n > 4) { char sub[16]; snprintf(sub, sizeof sub, "%d / %d", first / 3 + 1, np); fan_button(4, "SUITE", "next", C1, BC_SUITE, 0, sub, 0); }
         fan_button(2, "RETOUR", "back", dim, BC_BACK, 0, NULL, 0);
-    } else if (BT.phase == BP_ALLIE && BT.allie >= 0 && BT.obj >= 0 && BT.obj < n_items) {
-        /* À qui ? Son nom et son état ; SUIVANT, ou toucher son sprite (battle_tap) */
+    } else if (BT.phase == BP_ALLIE && BT.allie >= 0 && BT.obj < n_items) {
+        /* À qui ? (objet, ou action en attente : obj -1, cible_choisir de battle.c) Son nom et son état ; SUIVANT, ou toucher son sprite (battle_tap) */
         char sub[24];
         if (BT.allie >= BT_ENEMY) {
             const bt_en_t *ce = &BT.en[(BT.allie - BT_ENEMY) % BT_EMAX];
@@ -7035,8 +7147,8 @@ static void draw_battle_hud(void) {
             fan_button(1, ce->name, NULL, ui_rgb(RED_HEX), BC_ALLIE_OK, 0, sub, 0);
         } else {
             const member_t *cq = &PARTY[BT.allie];
-            if (ITEMS[BT.obj].releve) snprintf(sub, sizeof sub, "À TERRE");   /* relève (08/11/2026) */
-            else if (ITEMS[BT.obj].hp > 0) snprintf(sub, sizeof sub, "%d PV", cq->hp); else snprintf(sub, sizeof sub, "%d PM", cq->mp);
+            if (BT.obj < 0 ? BT.pend_sorte == CIBLE_RELEVE : ITEMS[BT.obj].releve) snprintf(sub, sizeof sub, "À TERRE");   /* relève (08/11/2026) */
+            else if (BT.obj < 0 || ITEMS[BT.obj].hp > 0) snprintf(sub, sizeof sub, "%d PV", cq->hp); else snprintf(sub, sizeof sub, "%d PM", cq->mp);
             fan_button(1, cq->name, NULL, green, BC_ALLIE_OK, 0, sub, 0);
         }
         fan_button(0, "SUIVANT", "next", C1, BC_ALLIE_SUIV, 0, NULL, 0);
@@ -7068,7 +7180,8 @@ static void draw_battle_hud(void) {
         fan_button(2, "RETOUR", "back", dim, BC_BACK, 0, NULL, 0);
     }
     /* Clavier : à chaque changement de phase ou de membre, le premier bouton présent */
-    if (H.bsel < 0 || !H.bslot_cmd[H.bsel]) { H.bsel = 0; while (H.bsel < 4 && !H.bslot_cmd[H.bsel]) H.bsel++; }
+    /* (« À qui ? » : la cible proposée, OK la confirme ; 11/11/2026) */
+    if (H.bsel < 0 || !H.bslot_cmd[H.bsel]) { H.bsel = BT.phase == BP_ALLIE && H.bslot_cmd[1] ? 1 : 0; while (H.bsel < 4 && !H.bslot_cmd[H.bsel]) H.bsel++; }
     draw_cutin();
     draw_intro_combat();
     draw_victoire();
@@ -7356,6 +7469,8 @@ static void draw_sauve_vu(void);
 static void cible_cadre(float *cx, float *cy, float *r) {
 #if ENG_DYN
     *cx = UW / 2; *cy = ui_img_h / 2.0f - ui_oy; *r = fminf(UW / 2 - 35, *cy - 200);
+#elif ENG_RECT
+    *cx = CX; *cy = CY; *r = 140;   /* écran rectangulaire : autour de Sera, entre la barre du haut et son cadre en bas (rect_world) */
 #else
     *cx = CX; *cy = CY; *r = CIBLE_R;
 #endif
@@ -7419,6 +7534,28 @@ static void draw_echo_signal(void) {
     const int al = (int)((pret ? 210 : 90) * (1 - ph));
     const float an = atan2f(-cosf(a), sinf(a)), l = 0.16f + 0.3f * (1 - d / ECHO_R);
     ui_arc(cx0, cy0, R + 18 + ph * 8, an - l, an + l, 5, pret ? ui_rgb(0x7FE8FF) : ui_rgb(0x5A7A96), al);
+}
+/* Indicateur de menace (08/11/2026, demande de l'utilisateur : « comme l'indicateur d'écho », pour fuir ou anticiper une rencontre) : un
+   arc rouge qui bat au bord de l'écran vers chaque groupe d'ennemis à moins de MENACE_R cases (patrouilles de battle.c), plus vite et plus
+   large à mesure qu'il approche ; vif quand il chasse Sera, moins quand il rôde, terne au repos après une fuite (drawMenace de
+   l'émulateur, à garder identiques) */
+#define MENACE_R 20.0f
+#define MENACE_RGB 0xFF3B4A
+static void draw_menace(void) {
+    float cx0 = 0, cy0 = 0, R = 0;
+    int cadre = 0;
+    for (int s = 0; s < PATR_MAX; s++) {
+        const patr_t *p = &PATR[s];
+        if (!p->on) continue;
+        const float dx = p->x[0] - E.sera.x, dz = p->z[0] - E.sera.z, d = hypotf(dx, dz);
+        if (d >= MENACE_R || d < 1.2f) continue;
+        if (!cadre) { cible_cadre(&cx0, &cy0, &R); cadre = 1; }
+        const float a = atan2f(dx * cosf(E.yaw) - dz * sinf(E.yaw), dx * sinf(E.yaw) + dz * cosf(E.yaw)), k = 1 - d / MENACE_R;
+        const float vite = 1.0f + 3.0f * k, ph = H.now * vite - floorf(H.now * vite);
+        const float an = atan2f(-cosf(a), sinf(a)), l = 0.14f + 0.3f * k;
+        const int al = (int)((p->etat == 1 ? 230 : p->etat == 2 ? 70 : 150) * (1 - ph));
+        ui_arc(cx0, cy0, R + 18 + ph * 8, an - l, an + l, 5, ui_rgb(MENACE_RGB), al);
+    }
 }
 static void cible_distances(const float *an, const float *d, const uint16_t *co, int n) {
     float cx0, cy0, R;
@@ -7489,6 +7626,7 @@ static void draw_objective(void) {
     int n = 0;
     const int ob = objective_pos(&ox, &oz);
     draw_echo_signal();
+    draw_menace();
     if (ob && draw_cible(ox, oz, C2, 0, &an[n])) { d[n] = hypotf(ox - E.sera.x, oz - E.sera.z); co[n++] = C2; }
     if (guide_ici()) {   /* le lieu suivi, sur sa carte (guideIci de l'émulateur) */
         const guide_t *g = &E.w.guides[E.guide];
@@ -7753,7 +7891,7 @@ void hud_build(void) {
     img_trame();
     if (V.on) { verrou_build(); return; }   /* montre verrouillée : son cadran seul */
     if (accueil_on()) { accueil_build(); return; }
-    ui_filtre(E.heroine >= 0 ? nom_echange : NULL);   /* héroïne choisie : noms échangés dans tout ce qui s'écrit */
+    ui_filtre(nom_echange);   /* héroïne choisie : noms échangés dans tout ce qui s'écrit ; formes selon le genre (genre_texte) */
     if (BT.on) draw_battle_hud();   /* combat : ni menu, ni dialogue, ni bulle d'interaction */
     else hud_world_layers();
     /* Fondu au noir de 0,45 s au début et à la fin d'un combat */

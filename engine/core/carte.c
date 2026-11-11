@@ -164,6 +164,7 @@ static int brou_bit(int k, int bx, int bz) {
     const int nb = BR.nb[k];
     if (!nb) return 1;
     if (bx < 0 || bz < 0 || bx >= nb || bz >= nb) return 0;
+    if (E.tele_tout && E.w.ile[0]) return 1;   /* île, code CODE_TELE : toute la carte vue (11/11/2026, demande de l'utilisateur ; brouBit de l'émulateur de l'île) */
     const uint32_t i = (uint32_t)bz * (uint32_t)nb + (uint32_t)bx;
     return BR.mem[BR.off[k] + (i >> 3)] >> (i & 7) & 1;
 }

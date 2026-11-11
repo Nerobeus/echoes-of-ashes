@@ -6,7 +6,7 @@
  * Énergie : fréquence dynamique 40 à 160 MHz (240 écran allumé), veille légère automatique écran
  * éteint ; le cadran est redessiné à chaque seconde, les gestes et les glissés sans limite, les autres pages seulement
  * quand quelque chose change ; thème des menus d'Echoes (theme.c) ; écran éteint (veille) par
- * PWR, BOOT ou l'inactivité ; seuls PWR et BOOT, tenus 0,1 s, le rallument (ni le doigt, ni une notification, ni un
+ * PWR, BOOT ou l'inactivité ; seuls PWR et BOOT le rallument, au premier appui (ni le doigt, ni une notification, ni un
  * appel) ; rallumé ainsi et pas touché, il se rendort après 5 s (le temps de lire l'heure).
  * Écran éteint, sans « BT EN VEILLE » (réglage, non par défaut) : Bluetooth coupé et veille profonde (réveil par PWR,
  * puis redémarrage sur le cadran) ; avec lui, veille légère et notifications du téléphone écran éteint. Après la mise en
@@ -257,10 +257,12 @@ static void dessiner_notifs(int det) {
     th_points(P_NOTIFS, P_NB);
 }
 
-#define APPS_N 5
-static const char *APPS_NOMS[APPS_N] = { "LE CHŒUR DES CENDRES", "PC DOS", "CONSOLES", "STOCKAGE USB", "RÉGLAGES" };
-static const char *APPS_INFOS[APPS_N] = { "JEU", "DOS 6", "GB · NES · DOOM", "CARTE SD", "" };
-/* Rangées de la page APPS : cinq, serrées comme les listes */
+/* ÎLE DE NACRE (09/11/2026) : le monde du jeu des héroïnes dans le firmware d'Echoes (app_lancer_monde, monde 1 ; son paquet
+   léger remplace celui d'Echoes dans la flash au lancement : leger_monde de engine/platform/esp32/main/main.c) */
+#define APPS_N 6
+static const char *APPS_NOMS[APPS_N] = { "LE CHŒUR DES CENDRES", "ÎLE DE NACRE", "PC DOS", "CONSOLES", "STOCKAGE USB", "RÉGLAGES" };
+static const char *APPS_INFOS[APPS_N] = { "JEU", "HÉROÏNES", "DOS 6", "GB · NES · DOOM", "CARTE SD", "" };
+/* Rangées de la page APPS : six, serrées comme les listes */
 #define APPS_Y0 140
 #define APPS_PAS 44
 #define APPS_HT 38
@@ -593,6 +595,13 @@ static void lancer(const char *app) {
     if (reglages_changes) reglages_ecrire();
     if (!app_lancer(app)) dire("APPLICATION ABSENTE");
 }
+/* Echoes avec son monde (0) ou l'île du jeu des héroïnes (1) ; changer de monde recopie son paquet léger dans la flash */
+static void lancer_monde(int monde) {
+    dire("LANCEMENT…");
+    dessiner();
+    if (reglages_changes) reglages_ecrire();
+    if (!app_lancer_monde("echoes", monde)) dire("APPLICATION ABSENTE");
+}
 
 /* ---------- Doigt ---------- */
 static void toucher(int x, int y) {
@@ -655,11 +664,12 @@ static void toucher(int x, int y) {
         }
         {
             const int k = y < APPS_Y0 || (y - APPS_Y0) % APPS_PAS >= APPS_HT ? -1 : (y - APPS_Y0) / APPS_PAS;
-            if (k == 0) lancer("echoes");
-            else if (k == 1) { dos_lire(); dos_ouvert = true; }
-            else if (k == 2) { gb_console = -1; gb_ouvert = true; }
-            else if (k == 3) { if (!usb_stockage()) dire("STOCKAGE USB INDISPONIBLE"); }
-            else if (k == 4) pg_page = P_REGLAGES;
+            if (k == 0) lancer_monde(0);
+            else if (k == 1) lancer_monde(1);
+            else if (k == 2) { dos_lire(); dos_ouvert = true; }
+            else if (k == 3) { gb_console = -1; gb_ouvert = true; }
+            else if (k == 4) { if (!usb_stockage()) dire("STOCKAGE USB INDISPONIBLE"); }
+            else if (k == 5) pg_page = P_REGLAGES;
         }
         break;
     case P_REGLAGES: {
@@ -771,13 +781,9 @@ static bool tenu(bool (*lire)(void)) {
 #else
 #define PWR_TENU() true
 #endif
-/* Réveil (écran éteint) : le bouton doit rester tenu REVEIL_TENU_MS depuis qu'il a été vu ; un effleurement ne rallume
-   plus la montre (02/11/2026, demande de l'utilisateur : PWR trop sensible). Pas de 10 ms (veille légère entre deux) */
-#define REVEIL_TENU_MS 100   /* 0,3 s jugé trop long */
-static bool reveil_tenu(bool (*lire)(void)) {
-    for (int t = 40; t < REVEIL_TENU_MS; t += 10) { vTaskDelay(pdMS_TO_TICKS(10)); if (!lire()) return false; }
-    return true;
-}
+/* Réveil (écran éteint) : au premier appui confirmé (tenu, 40 ms), comme l'extinction (08/11/2026, demande de l'utilisateur : plus de
+   délai d'appui). Du 02/11 au 08/11, il fallait tenir le bouton 0,1 s (REVEIL_TENU_MS) : PWR semblait trop sensible, mais les
+   réveils intempestifs venaient de la minuterie de la veille légère restée armée (dormir_profond) */
 
 void app_main(void) {
     tache = xTaskGetCurrentTaskHandle();
@@ -800,8 +806,7 @@ void app_main(void) {
     gpio_config(&pa);
     gpio_set_level(CONFIG_ECHOES_PA_GPIO, 0);
 #endif
-    /* Réveil de la veille profonde par PWR : écran allumé pour 5 s (le démarrage prend environ 0,4 s, plus long que
-       l'appui de REVEIL_TENU_MS : pas de contrôle de l'appui ici) */
+    /* Réveil de la veille profonde par PWR : écran allumé pour 5 s (pas de contrôle de l'appui : le démarrage prend environ 0,4 s) */
     bref = esp_sleep_get_wakeup_cause() == ESP_SLEEP_WAKEUP_EXT0;
     /* Tout autre réveil de la veille profonde (minuterie restée armée) : retour en veille sans allumer l'écran */
     if (esp_reset_reason() == ESP_RST_DEEPSLEEP && !bref && !usb_serial_jtag_is_connected()) dormir_profond();
@@ -872,7 +877,7 @@ void app_main(void) {
         if (p || b) {
             pg_annuler();
             if (ecran) { ecran_eteindre(); if (!bt_veille && !usb_serial_jtag_is_connected()) dormir_profond(); }
-            else if (reveil_tenu(p ? pwr_bas : boot_bas)) { journal("écran allumé par %s", p ? "PWR" : "BOOT"); ecran_allumer(); bref = true; }
+            else { journal("écran allumé par %s", p ? "PWR" : "BOOT"); ecran_allumer(); bref = true; }
             derniere = now;
         }
         {

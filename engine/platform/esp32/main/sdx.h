@@ -14,6 +14,7 @@ void sdx_oublier(const char *nom);
 int sdx_course(int *piste, int *allege);
 int sdx_essai(float *v);   /* SDX ESSAI x z cap pluie heure s : 1 et les six valeurs, une fois */
 int sdx_ecran(void);
+int sdx_etat(void);   /* SDX ETAT : 1, une fois (état des rencontres demandé) */
 int sdx_xp(void);    /* essais de mesure (SDX XP n, firmware -DECHOES_PROFIL=1 seulement) : bits de main.c et render.c */
 
 #endif

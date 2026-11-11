@@ -15,6 +15,10 @@
 /* Carte microSD en SDMMC 1 bit, montée sur /sd ; sauvegardes dans /sd/echoes/sauve0.bin et sauve1.bin, histoire dans
    /sd/echoes/histoire.scn */
 int sd_init(void);
+/* Dossier du monde lancé (parties, histoire, intérieurs, monde, musiques) : SD_DIR, sinon celui donné à sd_dossier avant
+   la lecture de ses fichiers (l'île du jeu des héroïnes : /sd/ile, main.c) */
+const char *sd_dir(void);
+void sd_dossier(const char *d);
 /* Démonter et remonter la carte (retirée puis remise) : 1 si elle est de nouveau là ; redémarrer ensuite */
 int sd_remonter(void);
 /* Remonter à une autre fréquence (kHz) et phase d'échantillonnage (0 à 3) ; fréquence obtenue (kHz, 0 sans carte) */

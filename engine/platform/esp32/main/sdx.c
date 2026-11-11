@@ -50,7 +50,7 @@ static const char *TAG = "sdx";
 
 #define BLOC_MAX (32 * 1024)      /* bloc reçu, en PSRAM */
 #define ECRIT_MAX 4096            /* morceau écrit d'un coup, depuis la SRAM interne (la carte lit en DMA) */
-#define FICHIERS_MAX 16
+#define FICHIERS_MAX 32   /* (09/11/2026 : 16 ne suffisaient plus avec Echoes, le PC DOS et l'île ; le dernier reçu n'était pas noté) */
 #define NOM_MAX 40
 #define EMP_MAX 41
 #define ATTENTE_US 10000000       /* rien pendant 10 s au milieu d'un fichier : copie annulée */
@@ -87,11 +87,16 @@ static void ecrire_liste(const char *chemin, const entree_t *t, int n) {
     fclose(f);
 }
 /* Chemin d'un fichier du dossier du jeu (ext : "" ou ".nouveau") ; 0 si le nom ne tient pas */
-/* « pcdos/<nom> » : dossier du PC DOS (tiny386, partition pcdos) à la racine de la carte, à côté de celui du jeu */
-#define PCDOS "pcdos/"
-static int pcdos_nom(const char *nom) { return !strncmp(nom, PCDOS, 6); }
+/* Dossiers voisins de celui du jeu, à la racine de la carte : « pcdos/<nom> » (PC DOS : tiny386, partition pcdos), « ile/<nom> »
+   (île du jeu des héroïnes, lancée par APPS › ÎLE DE NACRE de l'app montre : core/ile.c, sd_dossier de main.c) ; frere : la
+   longueur du préfixe (0 : dossier du jeu) */
+static const char *const FRERES[] = { "pcdos/", "ile/" };
+static int frere(const char *nom) {
+    for (size_t k = 0; k < sizeof FRERES / sizeof FRERES[0]; k++) if (!strncmp(nom, FRERES[k], strlen(FRERES[k]))) return (int)strlen(FRERES[k]);
+    return 0;
+}
 static int chemin(char *p, int n, const char *nom, const char *ext) {
-    return (pcdos_nom(nom) ? snprintf(p, n, "/sd/%s%s", nom, ext) : snprintf(p, n, SD_DIR "/%s%s", nom, ext)) < n;
+    return (frere(nom) ? snprintf(p, n, "/sd/%s%s", nom, ext) : snprintf(p, n, SD_DIR "/%s%s", nom, ext)) < n;
 }
 static void noter(entree_t *t, int *n, const entree_t *e) {
     for (int k = 0; k < *n; k++) if (!strcmp(t[k].nom, e->nom)) { t[k] = *e; return; }
@@ -242,9 +247,10 @@ static void annuler(void) {
 
 static void recevoir(const char *nom, uint32_t taille, const char *emp) {
     if (!carte_ok) { reponse("SDX ERR pas de carte"); return; }
-    const char *base = pcdos_nom(nom) ? nom + 6 : nom;
+    const int fr = frere(nom);
+    const char *base = nom + fr;
     if (strchr(base, '/') || strchr(base, '\\') || base[0] == '.' || !base[0]) { reponse("SDX ERR nom"); return; }
-    if (pcdos_nom(nom)) mkdir("/sd/pcdos", 0775);
+    if (fr) { char d[24]; snprintf(d, sizeof d, "/sd/%.*s", fr - 1, nom); mkdir(d, 0775); }
     pause_jeu();
     /* Bloc reçu : le tampon commun du moteur, jeu arrêté (01/11/2026 : rien n'est réservé pendant le jeu, la PSRAM de la
        montre est presque pleine) ; sans jeu en cours, réservé ici une fois */
@@ -323,7 +329,12 @@ static int en_sram(int (*f)(const char *, const char *), const char *a, const ch
     ulTaskNotifyTake(pdTRUE, portMAX_DELAY);
     return t.r;
 }
-static int lancer_app(const char *nom, const char *rien) { (void)rien; return app_lancer(nom); }
+/* « ile » : Echoes dans le monde de l'île du jeu des héroïnes, « echoes » : dans le sien (app_lancer_monde) ; sinon l'application */
+static int lancer_app(const char *nom, const char *rien) {
+    (void)rien;
+    if (!strcmp(nom, "ile") || !strcmp(nom, "echoes")) return app_lancer_monde("echoes", nom[0] == 'i');
+    return app_lancer(nom);
+}
 /* Essais depuis le PC (SDX MANETTE 0|1) : le réglage RÉGLAGES › MANETTE d'Echoes (NVS echoes/manette), puis redémarrage */
 static int manette_regler(const char *v, const char *rien) {
     (void)rien;
@@ -332,7 +343,7 @@ static int manette_regler(const char *v, const char *rien) {
     nvs_set_i8(h, "manette", (int8_t)(v[0] == '1')); nvs_commit(h); nvs_close(h);
     return 1;
 }
-static int app_la(const char *nom, const char *rien) { (void)rien; return app_presente(nom); }
+static int app_la(const char *nom, const char *rien) { (void)rien; return app_presente(strcmp(nom, "ile") ? nom : "echoes"); }
 
 static volatile int course_dem = -1, course_all = 1, ecran_dem;
 int sdx_course(int *piste, int *allege) {
@@ -341,6 +352,8 @@ int sdx_course(int *piste, int *allege) {
     return 1;
 }
 int sdx_ecran(void) { const int d = ecran_dem; ecran_dem = 0; return d; }
+static volatile int etat_dem;
+int sdx_etat(void) { const int d = etat_dem; etat_dem = 0; return d; }
 static volatile int xp_val;
 int sdx_xp(void) { return xp_val; }
 static volatile int essai_dem;
@@ -356,6 +369,7 @@ static void commande(const char *l) {
     }
     else if (!strncmp(l, "SDX COURSE", 10)) { int k = 0, a = 1; sscanf(l + 10, "%d %d", &k, &a); course_all = a; course_dem = k < 0 ? 0 : k; }   /* réponse : boucle du jeu */
     else if (!strcmp(l, "SDX ECRAN")) ecran_dem = 1;
+    else if (!strcmp(l, "SDX ETAT")) etat_dem = 1;   /* état des rencontres (eng_etat_rencontres) ; réponse : boucle du jeu */
     else if (!strncmp(l, "SDX XP ", 7)) { xp_val = atoi(l + 7); printf("SDX XP OK %d\n", xp_val); fflush(stdout); }   /* essais de mesure (main.c, render.c : eng_xp) */
     else if (!strncmp(l, "SDX MANETTE ", 12)) {
         if (!en_sram(manette_regler, l + 12, NULL)) reponse("SDX ERR manette");

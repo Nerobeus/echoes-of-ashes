@@ -125,6 +125,9 @@ void eng_audio_mix(int16_t *out, int n, int rate) {
         const son_t *s = &S[v->son];
         if (!s->pcm) { v->actif = 0; continue; }
         const uint32_t fin = s->n << 16, pas = (uint32_t)(v->hauteur * (float)s->rate / (float)rate * 65536.0f);
+        /* Voix reprise par le jeu pendant ce mixage (son_jouer, autre fil ou autre cœur) : le nouveau son avec la position de l'ancien
+           lirait hors de son tableau (11/11/2026, crash au lancement d'un combat sur la LDK) ; la position est vérifiée avant toute lecture */
+        if (v->pos >= fin) { v->actif = 0; continue; }
         const float g = general * canal[canal_de(v->son)];
         float vol = v->vol;
         for (int k = 0; k < n; k++) {

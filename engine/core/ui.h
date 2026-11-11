@@ -42,6 +42,13 @@ void ui_translate(float x, float y);
 float ui_tx(void);
 float ui_ty(void);
 void ui_render_band(int y0, int h, uint16_t *dst, int x0, int x1);   /* dst : (x1 - x0) × h pixels */
+int ui_band_spans(int y0, int h, int *xs, int max);   /* colonnes de l'image où l'interface dessine sur ces lignes : intervalles [xs[2k], xs[2k + 1]) */
+/* Écran rectangulaire (render.c, eng_render_band_rect) : opérations dessinées par ui_render_band et ui_band_spans, de i0 à
+   i1 exclu (i1 < 0 : toutes) ; voiles de toute l'image (ui_voile_image) appliqués en 320 × 240 entre deux plages */
+void ui_plage_ops(int i0, int i1);
+int ui_nops(void);
+int ui_voile_suivant(int i);
+void ui_voile_bande(int i, uint16_t *dst, int n);
 
 /* Couleurs RGB565 natives (sans inversion d'octets) */
 uint16_t ui_native(uint16_t c);
@@ -68,6 +75,9 @@ void ui_chamfer_path(float x, float y, float w, float h, float c, float *xy12);
 
 const ui_font_t *ui_font(int style, int size);   /* plus grande taille disponible ≤ size */
 float ui_text_width(const ui_font_t *f, const char *s);
+/* Fin du mot qui commence en p, pour couper un texte en lignes : la ponctuation haute séparée par une espace (« ? », « ! »,
+   « : », « ; », « » ») reste avec le mot d'avant (11/11/2026 : « Qui en descend » puis « ? » seul sur sa ligne) */
+const char *ui_fin_mot(const char *p);
 /* Taille la plus grande (≤ size, ≥ min) pour que le texte tienne dans max_w */
 const ui_font_t *ui_fit(int style, const char *s, float max_w, int size, int min);
 float ui_text(const ui_font_t *f, float x, float y, int align, uint16_t c, int alpha, const char *s);

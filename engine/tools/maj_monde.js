@@ -12,6 +12,10 @@
 //     --enfant     édition enfant (Atelier v4, onglet Jouer, édition « Enfant ») : monde_enfant.pak (section EDIT vérifiée)
 //                  -> engine/data/enfant/, page build/moteur_enfant.html, apps *_enfant.apk avec --montre ou --telephone ;
 //                  carte SD : echoes_enfant/ ; firmware : platform/esp32/idf_enfant.cmd build
+//     --ile        monde de l'île tropicale (jeu des héroïnes : generateur-ile, node serveur/ile-paquet.js) : monde.pak
+//                  de projets/ile/sorties -> engine/data/ile/, page build/moteur_ile.html ; carte SD de la montre : ile/
+//                  (tools/envoi_sd.py --ile), lancé par APPS › ÎLE DE NACRE de l'app montre (firmware d'Echoes, paquet
+//                  léger échangé dans la partition « monde » au lancement)
 //
 // Le navigateur renomme les doublons (« monde (1).json ») : on prend le fichier le plus récent de chaque sorte.
 const { execFileSync } = require('child_process');
@@ -46,8 +50,12 @@ const run = script => execFileSync(process.execPath, script, { stdio: 'inherit' 
 
 // Édition enfant : son paquet (monde_enfant.pak) et ses données à part (engine/data/enfant)
 const enfant = flags.includes('--enfant'), pakNom = enfant ? 'monde_enfant.pak' : 'monde.pak';
-const data = path.join(root, 'engine', 'data', ...(enfant ? ['enfant'] : [])), dataRel = enfant ? 'engine/data/enfant' : 'engine/data';
-const sdDir = enfant ? 'echoes_enfant' : 'echoes';
+// Île (--ile) : ses données à part elles aussi (engine/data/ile), jamais à la place de celles d'Echoes
+const ile = flags.includes('--ile');
+if (ile && (enfant || flags.some(f => ['--montre', '--telephone', '--emulateur'].includes(f)))) { console.error('--ile : ni --enfant, ni les apps Android'); process.exit(1); }
+const sous = enfant ? ['enfant'] : ile ? ['ile'] : [];
+const data = path.join(root, 'engine', 'data', ...sous), dataRel = ['engine/data', ...sous].join('/');
+const sdDir = enfant ? 'echoes_enfant' : ile ? 'ile' : 'echoes';
 fs.mkdirSync(data, { recursive: true });
 // Section d'un paquet (null si absente)
 const sectionDe = (buf, tag) => {
@@ -57,13 +65,13 @@ const sectionDe = (buf, tag) => {
 };
 const editionDe = buf => { const e = sectionDe(buf, 'EDIT'); return e && e.length ? e[0] : 0; };
 
-const pak = newest(enfant ? /^monde_enfant( \(\d+\))?\.pak$/ : /^monde( \(\d+\))?\.pak$/), json = enfant ? null : newest(/^monde( \(\d+\))?\.json$/);
+const pak = newest(enfant ? /^monde_enfant( \(\d+\))?\.pak$/ : /^monde( \(\d+\))?\.pak$/), json = enfant || ile ? null : newest(/^monde( \(\d+\))?\.json$/);
 if (!pak && !json) {
     console.error(`${pakNom} introuvable dans ${src} : exporte d'abord le monde (Atelier v4 : onglet Jouer, ${enfant ? 'édition « Enfant », ' : ''}« Paquet moteur »),
 ou donne le dossier où le navigateur l'a enregistré : node engine/tools/maj_monde.js "D:\\mon dossier"${enfant ? ' --enfant' : ''}`);
     process.exit(1);
 }
-console.log(`Source : ${src}${enfant ? ' (édition enfant)' : ''}\n`);
+console.log(`Source : ${src}${enfant ? ' (édition enfant)' : ile ? ' (île)' : ''}\n`);
 if (pak && mtime(pak) >= mtime(json)) {
     // Le moteur de l'édition enfant ne lance que les paquets de l'édition enfant : autant le dire tout de suite
     const ed = editionDe(fs.readFileSync(pak));
@@ -72,7 +80,7 @@ if (pak && mtime(pak) >= mtime(json)) {
     console.log(`[1/2] ${path.basename(pak)} (${date(pak)}) -> ${dataRel}/monde.pak`);
     fs.copyFileSync(pak, path.join(data, 'monde.pak'));
     console.log('\n[2/2] page du moteur');
-    run([path.join(__dirname, 'build_web.js'), ...(enfant ? ['--enfant'] : [])]);
+    run([path.join(__dirname, 'build_web.js'), ...(enfant ? ['--enfant'] : ile ? ['--ile'] : [])]);
 } else {
     const wanted = [
         ['monde.json', /^monde( \(\d+\))?\.json$/],
@@ -121,9 +129,42 @@ if (intr && /^INT[12]$/.test(intr.toString('latin1', 0, 4))) {
     console.log(`\nIntérieurs : ${intr.readUInt32LE(4)} niveaux, ${(intr.length / 1024) | 0} Ko -> ${dataRel}/interieurs.bin
   (à copier sur la carte SD : ${sdDir}/interieurs.bin ; le paquet de la flash, ${dataRel}/monde_esp32.pak, ne les a pas)`);
 } else console.log('\nIntérieurs : pas de section INTR dans le paquet (réexporter depuis l\'Atelier).');
-// Partition « monde » de l'ESP32 : 13 Mo
+// Partition « monde » de l'ESP32 : 7 Mo (platform/esp32/partitions.csv)
 console.log(`\nPaquet léger de la flash ESP32 : ${(esp32.length / 1048576).toFixed(2)} Mo -> ${dataRel}/monde_esp32.pak (${leger.planches} planches et ${leger.textures} textures du sol sur la carte)`);
-if (esp32.length > 13 * 1024 * 1024) console.log(`ATTENTION : plus grand que la partition « monde » de l'ESP32 (13 Mo)`);
+if (esp32.length > 7 * 1024 * 1024) console.log(`ATTENTION : plus grand que la partition « monde » de l'ESP32 (7 Mo)`);
+// Monde découpé (09/11/2026, demande de l'utilisateur : « découper le monde en plus petits paquets spécialisés pour ne
+// pas avoir à copier tout à chaque fois ») : monde_propre.pak = le paquet léger de l'île sans les sections communes avec
+// celui d'Echoes (COMMUNES : sons, polices, icônes, sprites communs), listées dans une section PRIS. Sur la montre, le
+// firmware d'Echoes le charge en PSRAM et prend les sections communes dans le paquet léger d'Echoes de la flash : la
+// partition « monde » n'est plus réécrite en changeant de monde (avant : 26 s à chaque fois)
+if (ile) {
+    const COMMUNES = ['AUDI', 'FONT', 'ICON', 'SPRT'];
+    const echo = path.join(root, 'engine', 'data', 'monde_esp32.pak'), ref = fs.existsSync(echo) ? fs.readFileSync(echo) : null;
+    const parts = [esp32.subarray(0, 8)], pris = [];
+    for (let o = 8; o + 8 <= esp32.length; o += 8 + esp32.readUInt32LE(o + 4)) {
+        const tag = esp32.toString('latin1', o, o + 4), l = esp32.readUInt32LE(o + 4);
+        if (tag === 'END ') break;
+        if (COMMUNES.includes(tag)) {
+            pris.push(tag);
+            const r = ref && sectionDe(ref, tag);
+            if (!r || Buffer.compare(r, esp32.subarray(o + 8, o + 8 + l))) console.log(`  (section ${tag} : ${r ? 'différente de' : 'absente de'} celle d'Echoes : la montre prendra celle de sa flash)`);
+            continue;
+        }
+        parts.push(esp32.subarray(o, o + 8 + l));
+    }
+    const tete = Buffer.alloc(8); tete.write('PRIS', 0, 'latin1'); tete.writeUInt32LE(pris.length * 4, 4);
+    const fin = Buffer.alloc(8); fin.write('END ', 0, 'latin1');
+    const propre = Buffer.concat([...parts, tete, Buffer.from(pris.join(''), 'latin1'), fin]);
+    fs.writeFileSync(path.join(data, 'monde_propre.pak'), propre);
+    console.log(`\nPaquet propre de l'île : ${(propre.length / 1048576).toFixed(2)} Mo -> ${dataRel}/monde_propre.pak (sans ${pris.join(', ')} : ceux du paquet léger d'Echoes en flash)`);
+    console.log(`
+Terminé (île). À ouvrir dans le navigateur :
+  ${path.join(root, 'engine', 'build', 'moteur_ile.html')}
+Sur la montre : tools/.venv/Scripts/python.exe engine/tools/envoi_sd.py --ile   (fichiers de ${dataRel} dans ile/ de la carte SD,
+  paquet propre compris : le firmware d'Echoes le charge en PSRAM quand on lance l'île depuis l'app montre ; essai sur PC :
+  ECHOES_COMMUN=engine/data/monde_esp32.pak ECHOES_SD=${dataRel}/monde.pak rendu_test ${dataRel}/monde_propre.pak …)`);
+    process.exit(0);
+}
 
 // Apps Android (montre Wear OS, téléphone) : le même paquet dans l'APK
 const tel = flags.includes('--telephone'), quoi = (tel ? 'App téléphone' : 'App montre') + (enfant ? ' (édition enfant)' : '');

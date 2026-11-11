@@ -296,6 +296,17 @@ typedef struct { char nom[24]; int carte, vers; uint16_t visite; float x, z, r, 
 /* Passage (PASS) : zone (x, z, r) de la carte carte vers la carte vers, arrivée (ax, az), sorte (0 passage, 1 puits,
    2 égout, 3 ascenseur, 4 faille, 5 astroport), condition (drapeau du scénario, 65535 aucune) */
 typedef struct { int carte, vers, sorte, cond; float x, z, r, ax, az; } passage_t;
+#define ILE_HER_MAX 32      /* île : héroïnes du studio dans le paquet (section ILE) */
+#define ILE_LAMES_MAX 40    /* île : lames (js/lames-ile.js : 35) */
+typedef struct { uint16_t perso; uint8_t genre; char id[16]; } ile_her_t;
+#define ILE_SOCLES_MAX 40   /* statues posées sur un piédestal en volume (section ILE, 11/11/2026 : la Gardienne et une par lame) */   /* genre : 0 féminin, 1 masculin (texte {f|m} : genre_texte de hud.c) */
+/* Île, eau (11/11/2026, le lagon à sa vraie profondeur ; retour de l'utilisateur : « la ligne d'eau est énorme ») : jusqu'à ILE_GUE de fond,
+   on marche dans l'eau, pieds au fond (allure × ILE_GUE_ALLURE) ; au-delà, on nage, enfoncé de ILE_NAGE_SINK de sa hauteur (render.c ;
+   ILE_GUE, ILE_GUE_ALLURE, ILE_NAGE_SINK de l'émulateur de l'île, à garder identiques) */
+#define ILE_GUE 0.55f
+#define ILE_GUE_ALLURE 0.75f
+#define ILE_NAGE_SINK 0.55f   /* (0,38 un moment le 11/11/2026 : trop peu immergée à côté du sous-marin) */
+typedef struct { uint16_t perso, drapeau; uint8_t arme, role, jet; char id[16], nom[28]; } ile_lame_t;
 
 /* Monde (paquet) */
 typedef struct {
@@ -353,6 +364,7 @@ typedef struct {
     const route_t *routes; int nroutes;   /* axes des routes (ROUT) */
     const guide_t *guides; int nguides;   /* lieux du menu GUIDAGE (GUID) */
     const uint8_t *sures; int nsures;     /* zones sûres (SURS, 16 octets chacune : carte u8, 0 × 3, x, z, r f32) */
+    const uint8_t *aren; uint32_t aren_sz;   /* arènes de combat de chaque carte (AREN, battle.c : arene_choisir ; NULL : celle de la carte) */
     /* Ouverture (OUVR) : écran titre (titre, sous-titre, musique, lieu du fond), cartons de l'introduction (lieu x, z en
        cases, x < 0 : noir ; heure, < 0 : celle du départ ; texte), question et héroïnes au choix (index PERS), après Sera.
        Chaînes dans le paquet ; sans OUVR, titre d'office, ni cartons ni choix. ouv_her18 : héroïne proposée seulement
@@ -384,6 +396,16 @@ typedef struct {
     int traf_max;                /* véhicules du trafic autour de Sera (TRAF) */
     float sprite_scale;          /* échelle globale des sprites (personnages, véhicules, décors) par rapport au monde */
     int edition;                 /* édition du paquet (EDIT) : 0 18+, 1 enfant, 2 unique (le 18+ sous code : verrou18) */
+    char ile[32];                /* île tropicale du jeu des héroïnes (section ILE) : son nom ; vide : Echoes (ile.c) */
+    uint16_t ile_monstres, ile_esprits;   /* île : drapeaux de l'histoire (section ILE, octets 32 à 35 ; 65535 : aucun) qui ouvrent les rencontres et font paraître les compagnes (ile.c) */
+    /* île (11/11/2026, section ILE après les drapeaux) : héroïnes du studio (personnage, identifiant : fiches de combat d'ile.c, sans
+       dépendre du nom, que l'accueil de l'Île de Nacre change) ; lames (js/lames-ile.js du générateur) : héroïne (65535 : aucune),
+       drapeau levé quand on la trouve (65535 : jamais), arme, rôle, de jet ; les compagnes sont les esprits des lames éveillées */
+    uint8_t ile_nher, ile_nlames;
+    ile_her_t ile_her[ILE_HER_MAX];
+    ile_lame_t ile_lame[ILE_LAMES_MAX];
+    uint8_t ile_nsocles; uint16_t ile_socle_perso[ILE_SOCLES_MAX]; float ile_socle[ILE_SOCLES_MAX];   /* statue : hauteur de sa base (unités) */
+    uint16_t ile_epuise;   /* drapeau « epuise » (section ILE, 11/11/2026 ; 65535 : aucun) : pas de course tant qu'il est levé (ile_epuisee) */
     int rain_freq, rain_int;    /* météo (METE) : part du temps sous la pluie et intensité, en % */
     float jour_s, jour_debut;    /* cycle jour / nuit (CYCL) : durée d'une journée (s), heure de départ (0..1) */
     /* Rencontres : distance moyenne entre deux (RENC, unités du monde × ech, 0 : aucune), ennemis (ENNE), terrain par
@@ -859,11 +881,28 @@ int project(float x, float y, float z, float *sx, float *sy);
 #define BAT_EG 0.6f
 #define BAT_ETAILLE 1.0f
 #define BAT_PAS 0.45f
+#define ILE_BAT_PAS 0.62f
+#define ILE_BAT_TAILLE 0.75f   /* île : les héroïnes en combat, à 75 % de leur taille (09/11/2026, demande de l'utilisateur ; BCAM.ctaille de l'émulateur de l'île) */
+#define ILE_ZOOM_INTERIEUR 2.0f   /* île : zoom 200 % dans un intérieur (10/11/2026, demande de l'utilisateur ; 350 % dans Echoes) */
+/* Bâtiments et murs qui cachent l'héroïne : coupés, pas estompés (île le 10/11/2026, puis Echoes le même jour, demande de l'utilisateur ;
+   render.c : coupe_hauteur, couverture) */
+#define COUPE_MUR_BASE 0.1f      /* un mur d'intérieur qui cache l'héroïne est coupé à cette hauteur au-dessus du pied des murs (cases ; quelques pixels : la limite reste visible) */
+#define COUPE_PORTE_H 2.1f       /* les portes d'un bâtiment coupé restent entières (battant, cadre : à moins de cette hauteur au-dessus de son pied, dans la boîte de la porte) */
+#define COUPE_FONDATION 0.2f     /* un bâtiment qui cache l'héroïne est coupé en entier à cette hauteur au-dessus de son pied : sa fondation reste */
+#define COUPE_SOL_OMBRE 0.6f     /* sol sous un bâtiment coupé (sol_noir de render.c) : celui de la case, à cette part de sa lumière (plus le noir de T_DARK) */
+#ifndef ILE_PITCH
+#define ILE_PITCH 0.85f        /* île : caméra plus plongeante (11/11/2026, demande de l'utilisateur : « le problème de l'île c'est l'angle de vision près de la mer, il faudrait un angle plus élevé comme Echoes ») : 0,6 rad dans Echoes, mais au zoom de 150 % la caméra est deux fois plus haute qu'à 300 % et voyait jusqu'à l'horizon ; à 0,85 rad (49°), le haut de l'image touche le sol aussi loin qu'Echoes à 300 % (ILE_PITCH_DEF de l'émulateur de l'île) */
+#endif
+#define ILE_ZOOM 1.5f          /* île : zoom 150 % dehors et dans les villages (09/11/2026, demande de l'utilisateur ; ILE_ZOOM_DEF de l'émulateur de l'île) */
+#define ILE_BAT_DECAL 0.32f
 #define BAT_CONTACT 0.7f
 static inline void battle_center(float *x, float *z) { *x = E.w.arena_x; *z = E.w.arena_z + 2.5f; }
 static inline void battle_member(int i, float *x, float *z) {
     float cx, cz; battle_center(&cx, &cz);
-    const float fx = sinf(BAT_YAW), fz = cosf(BAT_YAW), rx = cosf(BAT_YAW), rz = -sinf(BAT_YAW), b = -0.2f - (i & 1) * 0.12f, r = 0.15f + i * BAT_PAS;
+    /* Île du jeu des héroïnes (ile.c) : les héroïnes du studio sont plus larges que l'équipe d'Echoes, écartées pour ne pas se
+       masquer (BCAM.pas et BCAM.decal de l'émulateur de l'île : ILE_BAT_PAS, ILE_BAT_DECAL) */
+    const int ile = E.w.ile[0] != 0;
+    const float fx = sinf(BAT_YAW), fz = cosf(BAT_YAW), rx = cosf(BAT_YAW), rz = -sinf(BAT_YAW), b = -0.2f - (i & 1) * (ile ? ILE_BAT_DECAL : 0.12f), r = 0.15f + i * (ile ? ILE_BAT_PAS : BAT_PAS);
     *x = cx + (fx * b + rx * r) / E.w.ech; *z = cz + (fz * b + rz * r) / E.w.ech;
 }
 /* Planche de l'animation a du personnage dont la planche de base est base (base si elle n'existe pas) */
@@ -1111,7 +1150,12 @@ typedef struct {
        (reac_img, -1 aucune), montrée à la fin de son attaque */
     uint8_t degres_vus[NMEMB]; int reac_img;
     int mpage;                   /* page du menu MAGIE, ou du menu OBJETS */
-    int obj, allie;              /* BP_ALLIE : l'objet choisi, le camarade proposé */
+    int obj, allie;              /* BP_ALLIE : l'objet choisi (-1 : une action, pend_*), l'unité proposée (camarade, ou BT_ENEMY + k) */
+    /* Cible d'une action (11/11/2026, retour de jeu : « pour les sorts de soin on ne peut pas choisir la cible ; pour tous les sorts
+       et attaques il faut pouvoir choisir ») : attaque, technique ou sort qui attend la sienne en BP_ALLIE (cible_choisir) : sa commande
+       et son argument, la phase d'où il vient, sa sorte (CIBLE_*), puis le camarade choisi (-1 : un ennemi, BT.cible) et le drapeau
+       qui la relance une fois choisie (cible_prise) */
+    int pend_cmd, pend_arg, pend_phase, pend_sorte, pend_allie, cible_prise;
     float shake, shake_amp, fade_t;   /* secousse restante (s), sa force (× l'écart de 4 pixels), début du fondu au noir */
     float hurt_t[BT_UNITS];      /* dernier coup reçu (E.clock), animation « touché » */
     float ret_x, ret_z;          /* position de Sera avant le combat */
@@ -1127,6 +1171,7 @@ static inline int bt_choix(void) { return BT.phase == BP_CMD || BT.phase == BP_T
 #define ELAN_MAX 0.6f
 #define ELAN_CYCLE 0.54f                 /* s par cycle de l'animation de course (à pied : 8 × 0,09) */
 #define ELAN_FRAPPE 0.65f                /* s entre le contact et le départ du retour */
+#define ELAN_DEVANT 1.0f                 /* l'attaquant passe devant l'ennemi qu'il frappe à moins de BAT_CONTACT + ELAN_DEVANT mètres de lui (render.c) */
 #define PAS_ACTIF 0.6f                   /* le membre qui choisit avance d'autant (mètres) vers l'ennemi */
 /* Ce pas, marché (07/11/2026, demande de l'utilisateur : il glissait, « comme l'élan, avec une marche rapide ») : à PAS_V m/s, l'image de la marche
    d'après la distance parcourue (PAS_FOULEE m par cycle ; en revenant, la marche à l'envers, face à l'ennemi) ; il reste en avant pendant son
@@ -1145,6 +1190,11 @@ static inline int bt_choix(void) { return BT.phase == BP_CMD || BT.phase == BP_T
    (boss = 2) × BOSS_RW_ANNEXE au lieu de BOSS_RW, ses crédits restent × BOSS_RW ; rencontres, patrouilles, police, arène (boss = 0)
    × RENC_XP ; reward de battle_update, BOSS_RW_ANNEXE et RENC_XP de l'émulateur et de progression.js, à garder identiques */
 #define BOSS_RW_ANNEXE 4
+/* Quêtes annexes (11/11/2026, demande de l'utilisateur : « le niveau progresse beaucoup trop vite et déséquilibre l'histoire ») :
+   leur expérience × ANNEXE_XP, celle de leurs combats (boss = 2, gardiens « fretin » compris) et leurs récompenses « experience »
+   (OP_EXP d'un événement d'une quête secondaire ou hors quête : script.c) ; crédits inchangés. ANNEXE_XP de l'émulateur et de
+   progression.js, à garder identiques */
+#define ANNEXE_XP 0.8f
 #define RENC_XP 0.45f
 void battle_start(int k, int lvl, int boss);
 /* Combat contre un groupe : ks[0..n-1] ennemis de ENNE (BT_EMAX au plus ; le premier est le chef, au niveau de sa fiche si
@@ -1162,6 +1212,7 @@ void battle_update(float dt);
 /* Commandes de l'éventail (BC_*, arg : technique), toucher hors des boutons (ennemi en ciblage, continuer), retour */
 enum { BC_ATTACK, BC_TECHS, BC_ITEMS, BC_DEFEND, BC_FLEE, BC_TECH, BC_POTION, BC_BACK, BC_MAGIES, BC_SORT, BC_SUITE, BC_EVEIL, BC_ULTIME,
        BC_CIBLE, BC_ALLIE_OK, BC_ALLIE_SUIV };   /* BC_CIBLE : viser l'ennemi arg du groupe (-1 : le suivant) ; BC_POTION : l'objet arg de la page ; BC_ALLIE_* : à ce camarade, au suivant */
+enum { CIBLE_ENNEMI, CIBLE_SOIN, CIBLE_RELEVE };   /* BT.pend_sorte : l'action en attente va à un ennemi, à un camarade debout, à un camarade à terre */
 /* Sorts du membre m (index dans E.w.sorts, dans l'ordre du catalogue) : ceux de son job et ceux de son équipement
    (accessoire, arme magique), même sans le job ; renvoie leur nombre. Menu MAGIE : quatre à la fois, au-delà trois
    par page et SUITE (sorts_page : premier sort et nombre de la page BT.mpage) */
@@ -1470,6 +1521,8 @@ void script_load(const uint8_t *p, uint32_t len);
 void script_update(float dt);
 int script_talk(int target);
 int script_running(void);
+int scene_en_cours(void);   /* scène en cours (hud_scene de hud.c : script, dialogue, choix, caméra ou marche de scène, arrestation) */
+int essai_partie(float *x, float *z);   /* essai de fluidité en cours : rencontres et place de Sera d'avant lui (sauvegarde ; game.c), sinon -1 */
 int script_lire(uint32_t off, void *dst, uint32_t len);   /* octets du scénario (carte SD ou section SCEN) ; 0 : lus */
 int script_ev_ok(int k);                /* l'événement k peut-il partir (une fois, condition, 18+, étape de sa quête) */
 int script_panneau(int k);              /* lance l'événement k (quête d'affichage choisie sur un panneau) ; 1 : parti */
@@ -1895,5 +1948,20 @@ void accueil_build(void);
 int heroine_de(const char *nom);       /* index PERS de l'héroïne de ce nom (-1 : Sera, ou inconnue)  */
 uint32_t hud_theme_c1(void);
 uint32_t hud_theme_c2(void);
+
+/* ---------- Île tropicale du jeu des héroïnes (ile.c ; section ILE du paquet : E.w.ile, son nom) ---------- */
+#define ILE_COMPAGNES 2
+#define ILE_VISIBLES 1   /* compagnes visibles hors combat : la première (09/11/2026, décision de l'utilisateur ; ILE_VISIBLES de l'émulateur de l'île) */
+typedef struct { int perso; float x, z, dir, anim, v; uint16_t frame; uint8_t st; } ile_comp_t;   /* st : 0 arrêt, 1 marche, 2 course */
+extern ile_comp_t ILE_COMP[ILE_COMPAGNES];
+extern int ile_ncomp;
+void ile_equipe(int nouvelle);           /* l'héroïne jouée et ses deux compagnes dans PARTY (nouvelle partie : niveau 1) */
+int ile_niveau(float x, float z);        /* niveau de la région sous (x, z), quand aucune quête n'en donne (script_niveau) */
+void ile_compagnes_maj(float dt);        /* chaque image (game.c) : les compagnes sur la trace des pas de l'héroïne */
+int ile_calme(void);
+int ile_epuisee(void);                   /* île : drapeau epuise levé (naufrage, avant le premier sommeil) : marche seulement */                     /* île : pas encore de monstres (drapeau ile_monstres baissé) : ni rencontre ni patrouille */
+int ile_compagnes_vues(void);            /* à dessiner (render.c, hors combat) */
+void ile_point(float d, float *q);       /* point de la trace à la distance de chemin d derrière l'héroïne */
+void ile_trace_oublier(void);            /* compagnes reposées dans son dos à la prochaine image */
 
 #endif

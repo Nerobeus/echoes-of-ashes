@@ -8,6 +8,7 @@
  * Broches : menuconfig > Echoes of Ashes (valeurs du projet tiny386, à vérifier sur la carte 1,75").
  */
 #include <stdio.h>
+#include <string.h>
 #include <unistd.h>
 #include <sys/stat.h>
 #include "esp_vfs_fat.h"
@@ -19,6 +20,11 @@
 static const char *TAG = "sd";
 static int ok;
 static sdmmc_card_t *carte;
+/* Dossier du monde lancé : SD_DIR, ou /sd/ile pour l'île du jeu des héroïnes (sd_dossier, main.c) ; parties, histoire,
+   intérieurs, monde y sont lus et écrits (les réglages de la montre et les envois par l'USB restent dans SD_DIR) */
+static char dossier[24] = SD_DIR;
+const char *sd_dir(void) { return dossier; }
+void sd_dossier(const char *d) { snprintf(dossier, sizeof dossier, "%s", d); if (ok) mkdir(dossier, 0775); }
 
 /* Carte retirée puis remise (copie par l'USB, sdx.c) : démontée et remontée ; les fichiers ouverts par le jeu ne
    valent plus rien, la carte doit redémarrer ensuite */
@@ -58,13 +64,14 @@ int sd_init(void) {
     esp_err_t e = esp_vfs_fat_sdmmc_mount("/sd", &host, &slot, &mount, &card);
     if (e != ESP_OK) { ESP_LOGW(TAG, "pas de carte SD (%s) : sauvegarde désactivée", esp_err_to_name(e)); return 0; }
     mkdir(SD_DIR, 0775);
+    if (strcmp(dossier, SD_DIR)) mkdir(dossier, 0775);
     ok = 1; carte = card;
     ESP_LOGI(TAG, "carte SD montée : %llu Mo, %d bit%s à %d kHz", (unsigned long long)card->csd.capacity * card->csd.sector_size / (1024 * 1024),
              slot.width, slot.width > 1 ? "s" : "", card->real_freq_khz);
     return 1;
 }
 
-static void path(int slot, char *p, int n) { snprintf(p, n, SD_DIR "/sauve%d.bin", slot); }   /* parties : sauve0 à sauve5 (partie × 2 + séquence & 1) */
+static void path(int slot, char *p, int n) { snprintf(p, n, "%s/sauve%d.bin", dossier, slot); }   /* parties : sauve0 à sauve5 (partie × 2 + séquence & 1) */
 
 int sd_save_write(int slot, const void *data, int len) {
     if (!ok) return -1;
@@ -80,11 +87,12 @@ int sd_save_write(int slot, const void *data, int len) {
 /* Histoire : taille du fichier (0 : pas de carte ou pas de fichier, le moteur prend alors la section SCEN du paquet) */
 static FILE *scn;
 uint32_t sd_scen_open(void) {
-    if (!ok || !(scn = fopen(SD_DIR "/histoire.scn", "rb"))) return 0;
+    char f[48]; snprintf(f, sizeof f, "%s/histoire.scn", dossier);
+    if (!ok || !(scn = fopen(f, "rb"))) return 0;
     if (fseek(scn, 0, SEEK_END)) { fclose(scn); scn = NULL; return 0; }
     const long n = ftell(scn);
     if (n <= 0) { fclose(scn); scn = NULL; return 0; }
-    ESP_LOGI(TAG, "histoire : " SD_DIR "/histoire.scn, %ld octets", n);
+    ESP_LOGI(TAG, "histoire : %s, %ld octets", f, n);
     return (uint32_t)n;
 }
 int sd_scen_read(uint32_t off, void *dst, uint32_t len) {
@@ -95,11 +103,12 @@ int sd_scen_read(uint32_t off, void *dst, uint32_t len) {
 /* Intérieurs des bâtiments : taille du fichier (0 : le moteur prend la section INTR du paquet) ; lus à l'entrée */
 static FILE *intr;
 uint32_t sd_intr_open(void) {
-    if (!ok || !(intr = fopen(SD_DIR "/interieurs.bin", "rb"))) return 0;
+    char f[48]; snprintf(f, sizeof f, "%s/interieurs.bin", dossier);
+    if (!ok || !(intr = fopen(f, "rb"))) return 0;
     if (fseek(intr, 0, SEEK_END)) { fclose(intr); intr = NULL; return 0; }
     const long n = ftell(intr);
     if (n <= 0) { fclose(intr); intr = NULL; return 0; }
-    ESP_LOGI(TAG, "intérieurs : " SD_DIR "/interieurs.bin, %ld Ko", n / 1024);
+    ESP_LOGI(TAG, "intérieurs : %s, %ld Ko", f, n / 1024);
     return (uint32_t)n;
 }
 int sd_intr_read(uint32_t off, void *dst, uint32_t len) {
@@ -110,11 +119,12 @@ int sd_intr_read(uint32_t off, void *dst, uint32_t len) {
 /* Monde entier (monde.pak) : taille du fichier (0 : absent) ; lu par le cœur 0 (préparation des images) */
 static FILE *monde;
 uint32_t sd_pak_open(void) {
-    if (!ok || !(monde = fopen(SD_DIR "/monde.pak", "rb"))) return 0;
+    char f[48]; snprintf(f, sizeof f, "%s/monde.pak", dossier);
+    if (!ok || !(monde = fopen(f, "rb"))) return 0;
     if (fseek(monde, 0, SEEK_END)) { fclose(monde); monde = NULL; return 0; }
     const long n = ftell(monde);
     if (n <= 0) { fclose(monde); monde = NULL; return 0; }
-    ESP_LOGI(TAG, "monde : " SD_DIR "/monde.pak, %ld Mo", n / (1024 * 1024));
+    ESP_LOGI(TAG, "monde : %s, %ld Mo", f, n / (1024 * 1024));
     return (uint32_t)n;
 }
 int sd_pak_read(uint32_t off, void *dst, uint32_t len) {
@@ -125,11 +135,14 @@ int sd_pak_read(uint32_t off, void *dst, uint32_t len) {
 /* Musiques : taille du fichier (0 : pas de musique) */
 static FILE *mus;
 uint32_t sd_music_open(void) {
-    if (!ok || !(mus = fopen(SD_DIR "/musique.bin", "rb"))) return 0;
+    /* (l'île sans musiques à elle : celles d'Echoes) */
+    char f[48]; snprintf(f, sizeof f, "%s/musique.bin", dossier);
+    if (ok && !(mus = fopen(f, "rb"))) { snprintf(f, sizeof f, SD_DIR "/musique.bin"); mus = fopen(f, "rb"); }
+    if (!ok || !mus) return 0;
     if (fseek(mus, 0, SEEK_END)) { fclose(mus); mus = NULL; return 0; }
     const long n = ftell(mus);
     if (n <= 0) { fclose(mus); mus = NULL; return 0; }
-    ESP_LOGI(TAG, "musiques : " SD_DIR "/musique.bin, %ld Ko", n / 1024);
+    ESP_LOGI(TAG, "musiques : %s, %ld Ko", f, n / 1024);
     return (uint32_t)n;
 }
 int sd_music_read(uint32_t off, void *dst, uint32_t len) {

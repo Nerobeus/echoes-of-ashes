@@ -23,6 +23,8 @@ const fs = require('fs');
 const C = require('./combat.js'), PL = require('./plan.js'), M = require('./monde.js'), Q = require('./equipement.js');
 const P = Q.P;
 const OUV = JSON.parse(fs.readFileSync(__dirname + '/ouverture.json', 'utf8')).etapes;
+// ANNEXE_XP (11/11/2026, internal.h) : expérience des quêtes annexes × 0,8, combats et récompenses « experience »
+const ANNEXE_XP = +(process.env.ANNEXE_XP || 0.8);
 const BOSS_RW_ANNEXE = +(process.env.BOSS_RW_ANNEXE || 4), RENC_XP = +(process.env.RENC_XP || 0.45), CRISTAL_RENC = +(process.env.CRISTAL_RENC || 0.5);
 
 // Hypothèses du modèle (rapport du 02/11/2026)
@@ -217,7 +219,7 @@ function run(opt = {}) {
         const parts = noms.length > 1 ? C.partGroupe(noms.length) : 1, rw = scripted ? C.BOSS_RW : 1;
         // 06/11/2026 (internal.h) : expérience d'un combat d'annexe × BOSS_RW_ANNEXE (ses crédits restent × BOSS_RW), rencontres × RENC_XP
         const xp0 = Math.round(C.exp_of(L) * parts), princ = !!(tag && PL.QUETE[tag.split('#')[0]] && PL.QUETE[tag.split('#')[0]].type === 'principale');
-        const xp = opt.ancien ? xp0 * rw : scripted ? xp0 * (princ && !fretin ? C.BOSS_RW : BOSS_RW_ANNEXE) : Math.round(xp0 * RENC_XP), cr = Math.round(C.credits_of(L) * parts) * rw;
+        const xp = opt.ancien ? xp0 * rw : scripted ? (princ && !fretin ? xp0 * C.BOSS_RW : Math.round(xp0 * BOSS_RW_ANNEXE * ANNEXE_XP)) : Math.round(xp0 * RENC_XP), cr = Math.round(C.credits_of(L) * parts) * rw;
         gain(xp); g.xp_combat += xp; g.cr += cr; g.cr_combat += cr; if (scripted) g.xp_histoire = (g.xp_histoire || 0) + xp;
         const coeurs = ens.filter(e => e.coeur).length * (noms.length > 1 ? parts / noms.length : 1) * (scripted ? 1 : CRISTAL_RENC);
         g.cr += Math.round(coeurs * CRISTAL); g.cr_cristaux += Math.round(coeurs * CRISTAL);
@@ -337,7 +339,7 @@ function run(opt = {}) {
         let m;
         if (/^[A-ZÉÈÀÂÎÔÛÇ'’ -]+:/.test(l)) { g.t += HYP.T_PARLE; g.t_parle += HYP.T_PARLE; }
         else if ((m = /^combat\s+(.+)$/i.exec(l))) { const c = PL.combatGroupe(m[1]); fight(c.noms, c.mode, niv, true, q + '#' + st, c.fretin); }
-        else if ((m = /^(?:experience|expérience)\s+(\d+)/i.exec(l))) { const v = xpLigne(ev, +m[1], niv); gain(v); g.xp_quete += v; }
+        else if ((m = /^(?:experience|expérience)\s+(\d+)/i.exec(l))) { const v = Math.round(xpLigne(ev, +m[1], niv) * (PL.QUETE[q] && PL.QUETE[q].type === 'principale' ? 1 : ANNEXE_XP)); gain(v); g.xp_quete += v; }
         else if ((m = /^donner credits\s+(-?\d+)/i.exec(l))) { g.cr = Math.max(0, g.cr + +m[1]); if (+m[1] > 0) g.cr_quete += +m[1]; }
         else if ((m = /^donner POTION\s+(\d+)/i.exec(l))) g.potions += +m[1];
         else if ((m = /^donner\s+(.+?)\s+(\d+)$/i.exec(l)) && parNom(m[1])) { const o = parNom(m[1]); for (const k of team()) { const sl = Q.SLOT(o.cat), cur = g.eq[k][sl]; if ((C.jobDe(k).aff[Q.CATS.indexOf(o.cat)] | 0) && (!cur || cur.palier < o.palier)) { g.eq[k][sl] = o; break; } } }

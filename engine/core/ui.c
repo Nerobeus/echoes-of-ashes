@@ -16,7 +16,7 @@
 #endif
 #define MAX_X 96
 
-enum { OP_POLY, OP_MASK, OP_IMAGE, OP_RMASK, OP_SPRITE, OP_HALO, OP_BORD };   /* OP_SPRITE : image indexée, index 0 transparent, lignes de c octets ; OP_BORD : halo des bords de l'image (plein écran) */
+enum { OP_POLY, OP_MASK, OP_IMAGE, OP_RMASK, OP_SPRITE, OP_HALO, OP_BORD, OP_VOILE };   /* OP_VOILE : polygone de ui_voile_image (toute l'image, uni) */   /* OP_SPRITE : image indexée, index 0 transparent, lignes de c octets ; OP_BORD : halo des bords de l'image (plein écran) */
 typedef struct {
     uint8_t kind, a;
     uint16_t c;
@@ -46,12 +46,19 @@ static void circle_spans(void) {
 }
 /* Origine de l'interface dans l'image : (0, 0) sur l'écran rond ; plein écran (ENG_DYN) : le cadre de 466 × 466 centré,
    posé par eng_set_screen. Les opérations restent dans le repère du cadre, décalées au dessin. */
+#if ENG_RECT
+/* Écran rectangulaire (RetroFW) : le cadre de 466 au milieu de l'image ; le canevas va jusqu'à son bord droit et son bas
+   (panneau du dialogue sur toute la largeur), la mise en page reste celle de la montre (UW, UH de hud.c) */
+int ui_ox = (ENG_IMG_W - ENG_SCREEN) / 2, ui_oy = (ENG_IMG_H - ENG_SCREEN) / 2;
+int ui_w = ENG_IMG_W - (ENG_IMG_W - ENG_SCREEN) / 2, ui_h = ENG_IMG_H - (ENG_IMG_H - ENG_SCREEN) / 2;
+#else
 int ui_ox, ui_oy;
 /* Taille du canevas de l'interface : 466 × 466 (écran rond), ou toute l'image (plein écran : eng_set_screen) */
 int ui_w = ENG_SCREEN, ui_h = ENG_SCREEN;
+#endif
 /* Taille de toute l'image (plein écran : eng_set_screen) ; le canevas peut s'arrêter avant, aux marges de la barre d'état et
    de la barre de navigation (eng_set_safe) */
-int ui_img_w = ENG_SCREEN, ui_img_h = ENG_SCREEN;
+int ui_img_w = ENG_IMG_W, ui_img_h = ENG_IMG_H;
 /* Décalage appliqué à l'enregistrement de chaque opération (ui_translate) : un écran pas encore refait pour le plein
    écran se dessine dans un cadre de 466 × 466 centré */
 static float tx, ty;
@@ -151,12 +158,28 @@ int ui_op_count(void) { return UB->nops; }
 int ui_pts_count(void) { return UB->npts; }
 void ui_present(void) { UR = UB; UB = UB == &UF[0] ? &UF[1] : &UF[0]; }
 
+/* Interface en 320 × 240 natif (ENG_UI_NATIF, écran rectangulaire, 11/11/2026, choix de l'utilisateur : « interface en 320
+   natif » ; avant : dessinée en 640 × 480 sur la 3D doublée, puis réduite de moitié, 4 à 6 ms par image sur la LDK). La mise
+   en page reste dans le repère de l'interface (466 × 466 au milieu de l'image de 640 × 480 : hud.c inchangé) ; chaque
+   opération est enregistrée dans l'image de 320 × 240 (NX, NY : la moitié de la position dans l'image de 640 × 480).
+   Formes, images et halos se dessinent ensuite tels quels (au pixel, sans antialiasing) ; glyphes et icônes gardent leur
+   masque d'origine, moyenné 2 × 2 au dessin (band_mask_demi, band_rmask_demi : le même lissage qu'avant la réduction) */
+#ifndef ENG_UI_NATIF
+#define ENG_UI_NATIF ENG_RECT
+#endif
+#if ENG_UI_NATIF
+#define NX(x) (((x) + ui_ox) * 0.5f)
+#define NY(y) (((y) + ui_oy) * 0.5f)
+#define UI_HAUT ((float)ENG_H_PX)
+#else
+#define UI_HAUT ((float)ui_h)
+#endif
 static op_t *new_op(int kind, uint16_t c, int a, float ymin, float ymax) {
     if (UB->nops >= MAX_OPS || a <= 0) return NULL;
-    if (ymax < 0 || ymin >= ui_h) return NULL;
+    if (ymax < 0 || ymin >= UI_HAUT) return NULL;
     op_t *o = &UB->ops[UB->nops++];
     o->kind = (uint8_t)kind; o->c = c; o->a = (uint8_t)(a > 255 ? 255 : a);
-    o->ymin = (int16_t)floorf(ymin < 0 ? 0 : ymin); o->ymax = (int16_t)ceilf(ymax > ui_h ? ui_h : ymax);
+    o->ymin = (int16_t)floorf(ymin < 0 ? 0 : ymin); o->ymax = (int16_t)ceilf(ymax > UI_HAUT ? UI_HAUT : ymax);
     return o;
 }
 
@@ -164,6 +187,9 @@ void ui_poly(const float *xy, int n, uint16_t c, int alpha) {
     if (n < 3 || UB->npts + n * 3 > MAX_PTS) return;
     float ymin = 1e9f, ymax = -1e9f;
     for (int i = 0; i < n; i++) { ymin = fminf(ymin, xy[i * 2 + 1] + ty); ymax = fmaxf(ymax, xy[i * 2 + 1] + ty); }
+#if ENG_UI_NATIF
+    ymin = NY(ymin); ymax = NY(ymax);
+#endif
     op_t *o = new_op(OP_POLY, c, alpha, ymin, ymax);
     if (!o) return;
     /* Sommets rangés par trois : x, y, pente dx/dy de l'arête vers le suivant (aucune division par ligne au dessin) */
@@ -171,7 +197,11 @@ void ui_poly(const float *xy, int n, uint16_t c, int alpha) {
     for (int i = 0; i < n; i++) {
         int j = i + 1 == n ? 0 : i + 1;
         float dy = xy[j * 2 + 1] - xy[i * 2 + 1];
+#if ENG_UI_NATIF
+        q[i * 3] = NX(xy[i * 2] + tx); q[i * 3 + 1] = NY(xy[i * 2 + 1] + ty);   /* (pente inchangée : même échelle en x et en y) */
+#else
         q[i * 3] = xy[i * 2] + tx; q[i * 3 + 1] = xy[i * 2 + 1] + ty;
+#endif
         q[i * 3 + 2] = dy != 0 ? (xy[j * 2] - xy[i * 2]) / dy : 0;
     }
     o->u.poly.p0 = (uint32_t)UB->npts; o->u.poly.np = (uint32_t)n;
@@ -188,9 +218,13 @@ void ui_rect(float x, float y, float w, float h, uint16_t c, int alpha) {
    des sorts, l'éclair et les fondus laissaient des bandes claires en haut et en bas du téléphone) */
 void ui_voile_image(uint16_t c, int alpha) {
     if (UB->nops >= MAX_OPS || alpha <= 0 || UB->npts + 12 > MAX_PTS) return;
+#if ENG_UI_NATIF
+    const float x0 = 0, x1 = (float)ENG_W, y0 = 0, y1 = (float)ENG_H_PX;   /* toute l'image de 320 × 240 */
+#else
     const float x0 = (float)-ui_ox, x1 = (float)(ui_img_w - ui_ox), y0 = (float)-ui_oy, y1 = (float)(ui_img_h - ui_oy);
+#endif
     op_t *o = &UB->ops[UB->nops++];
-    o->kind = OP_POLY; o->c = c; o->a = (uint8_t)(alpha > 255 ? 255 : alpha);
+    o->kind = ENG_RECT ? OP_VOILE : OP_POLY; o->c = c; o->a = (uint8_t)(alpha > 255 ? 255 : alpha);   /* (dessiné comme un polygone ; écran rectangulaire : en 320 × 240, ui_voile_bande) */
     o->ymin = (int16_t)y0; o->ymax = (int16_t)y1;
     const float xy[8] = { x0, y0, x1, y0, x1, y1, x0, y1 };
     float *q = &UB->pts[UB->npts];
@@ -307,6 +341,16 @@ static float text_w(const ui_font_t *f, const char *s) {
     while (*s) { const ui_mask_t *g = glyph(f, utf8_next(&s)); if (g) w += g->adv16 / 16.0f; }
     return w;
 }
+const char *ui_fin_mot(const char *p) {
+    for (;;) {
+        while (*p && *p != ' ') p++;
+        if (*p != ' ') return p;
+        const uint8_t c = (uint8_t)p[1];
+        const int k = (c == '?' || c == '!' || c == ':' || c == ';') ? 2 : (c == 0xC2 && (uint8_t)p[2] == 0xBB) ? 3 : 0;   /* (0xC2 0xBB : « ») */
+        if (!k || (p[k] && p[k] != ' ')) return p;
+        p += k;
+    }
+}
 float ui_text_width(const ui_font_t *f, const char *s) { return text_w(f, filtrer(s)); }
 
 const ui_font_t *ui_fit(int style, const char *s, float max_w, int size, int min) {
@@ -331,7 +375,12 @@ float ui_text(const ui_font_t *f, float x, float y, int align, uint16_t c, int a
         if (!g) continue;
         if (g->w) {
             float gx = floorf(pen + 0.5f) + g->x0, gy = floorf(y + 0.5f) + g->y0;
+#if ENG_UI_NATIF   /* coin du glyphe dans l'image de 640 × 480 (band_mask_demi) ; lignes de l'image de 320 × 240 */
+            gx += ui_ox; gy += ui_oy;
+            op_t *o = new_op(OP_MASK, c, alpha, gy * 0.5f, (gy + g->h) * 0.5f);
+#else
             op_t *o = new_op(OP_MASK, c, alpha, gy, gy + g->h);
+#endif
             if (o) { o->u.mask.m = g; o->u.mask.x = (int16_t)gx; o->u.mask.y = (int16_t)gy; }
         }
         pen += g->adv16 / 16.0f;
@@ -359,11 +408,19 @@ void ui_text_arc(const ui_font_t *f, float cx, float cy, float r, float a, int b
                 const float x = ox + u * co - v * si, y = oy + u * si + v * co;
                 xmin = fminf(xmin, x); xmax = fmaxf(xmax, x); ymin = fminf(ymin, y); ymax = fmaxf(ymax, y);
             }
+#if ENG_UI_NATIF   /* origine et boîte dans l'image de 320 × 240 ; band_rmask_demi revient au repère du glyphe à l'échelle 2 */
+            op_t *o = new_op(OP_RMASK, c, alpha, NY(ymin), NY(ymax));
+            if (o) {
+                o->u.rmask.m = g; o->u.rmask.ox = NX(ox); o->u.rmask.oy = NY(oy); o->u.rmask.co = co; o->u.rmask.si = si;
+                o->u.rmask.x0 = (int16_t)floorf(NX(xmin)); o->u.rmask.x1 = (int16_t)ceilf(NX(xmax));
+            }
+#else
             op_t *o = new_op(OP_RMASK, c, alpha, ymin, ymax);
             if (o) {
                 o->u.rmask.m = g; o->u.rmask.ox = ox; o->u.rmask.oy = oy; o->u.rmask.co = co; o->u.rmask.si = si;
                 o->u.rmask.x0 = (int16_t)floorf(xmin); o->u.rmask.x1 = (int16_t)ceilf(xmax);
             }
+#endif
         }
         pen += adv;
     }
@@ -379,20 +436,33 @@ void ui_icon(const char *name, float cx, float cy, int size, uint16_t c, int alp
     if (!best && !strcmp(name, "team")) { ui_icon("stat", cx, cy, size, c, alpha); return; }   /* paquet d'avant le menu ÉQUIPE */
     if (!best || !best->w) return;
     float gx = floorf(cx + tx + 0.5f) + best->x0, gy = floorf(cy + ty + 0.5f) + best->y0;
+#if ENG_UI_NATIF
+    gx += ui_ox; gy += ui_oy;
+    op_t *o = new_op(OP_MASK, c, alpha, gy * 0.5f, (gy + best->h) * 0.5f);
+#else
     op_t *o = new_op(OP_MASK, c, alpha, gy, gy + best->h);
+#endif
     if (o) { o->u.mask.m = best; o->u.mask.x = (int16_t)gx; o->u.mask.y = (int16_t)gy; }
 }
 
 /* Carte d'opacité quelconque (m doit rester lisible jusqu'au dessin de l'image suivante), coin à (x0, y0) du centre */
 void ui_masque(const ui_mask_t *m, float cx, float cy, uint16_t c, int alpha) {
     if (!m || !m->w) return;
+#if ENG_UI_NATIF
+    const float gx = floorf(cx + tx + 0.5f) + m->x0 + ui_ox, gy = floorf(cy + ty + 0.5f) + m->y0 + ui_oy;
+    op_t *o = new_op(OP_MASK, c, alpha, gy * 0.5f, (gy + m->h) * 0.5f);
+#else
     const float gx = floorf(cx + tx + 0.5f) + m->x0, gy = floorf(cy + ty + 0.5f) + m->y0;
     op_t *o = new_op(OP_MASK, c, alpha, gy, gy + m->h);
+#endif
     if (o) { o->u.mask.m = m; o->u.mask.x = (int16_t)gx; o->u.mask.y = (int16_t)gy; }
 }
 
 static void image_op(const uint16_t *px, const uint8_t *mask, const uint8_t *rgb, int w, int h, float x, float y, float s, float ccx, float ccy, float cr) {
     x += tx; y += ty; ccx += tx; ccy += ty;
+#if ENG_UI_NATIF
+    x = NX(x); y = NY(y); ccx = NX(ccx); ccy = NY(ccy); s *= 0.5f; cr *= 0.5f;
+#endif
     op_t *o = new_op(OP_IMAGE, 0, 255, fmaxf(y, ccy - cr), fminf(y + h * s, ccy + cr));
     img_der = o ? UB->nops - 1 : -1;
     if (!o) return;
@@ -413,6 +483,9 @@ void ui_image_pal(const uint8_t *ix, const uint16_t *pal, int w, int h, float x,
 
 void ui_sprite(const uint8_t *ix, int stride, const uint16_t *pal, int w, int h, float x, float y, float s, int a, float ccx, float ccy, float cr) {
     x += tx; y += ty; ccx += tx; ccy += ty;
+#if ENG_UI_NATIF
+    x = NX(x); y = NY(y); ccx = NX(ccx); ccy = NY(ccy); s *= 0.5f; cr *= 0.5f;
+#endif
     op_t *o = new_op(OP_SPRITE, (uint16_t)stride, a, fmaxf(y, ccy - cr), fminf(y + h * s, ccy + cr));
     img_der = o ? UB->nops - 1 : -1;
     if (!o) return;
@@ -432,6 +505,9 @@ void ui_miroir(void) {
    étaient des piles de 6 à 15 anneaux, polygones de plus de cent côtés repris ligne à ligne dans chaque bande : la
    moitié des images en moins. Ici, une passe : par ligne, les deux bouts de l'anneau, chaque pixel mélangé une fois. */
 void ui_halo(float cx, float cy, float r0, float r1, uint16_t c, int alpha, int g2) {
+#if ENG_UI_NATIF
+    cx = NX(cx); cy = NY(cy); r0 *= 0.5f; r1 *= 0.5f;
+#endif
     op_t *o = new_op(OP_HALO, c, alpha, cy - r1, cy + r1);
     if (!o) return;
     o->u.halo.cx = cx; o->u.halo.cy = cy; o->u.halo.r0 = r0; o->u.halo.r1 = r1; o->u.halo.g2 = (uint8_t)!!g2;
@@ -552,6 +628,7 @@ ENG_HOT static void band_bord(const op_t *o, const band_t *B) {
 }
 #endif
 
+#if !ENG_UI_NATIF   /* (interface en 320 natif : band_mask_demi) */
 ENG_HOT static void band_mask(const op_t *o, const band_t *B) {
     const ui_mask_t *m = o->u.mask.m;
     int row_bytes = (m->w + 1) >> 1;
@@ -570,6 +647,7 @@ ENG_HOT static void band_mask(const op_t *o, const band_t *B) {
         }
     }
 }
+#endif
 
 /* Glyphe tourné : chaque pixel de la boîte englobante revient dans le repère du glyphe (point le plus proche). Le
    long d'une ligne, (u, v) avance de (co, -si), en virgule fixe 16.16 : un seul test non signé par coordonnée, et la
@@ -577,7 +655,10 @@ ENG_HOT static void band_mask(const op_t *o, const band_t *B) {
    glyphes tournés, étaient près de la moitié du dessin de l'interface ; mêmes pixels). Le plancher sans floorf (un appel
    de bibliothèque sur l'ESP32) : décalé de 2^23, tout reste positif et la troncature vaut le plancher */
 #define FIXE_DECAL 8388608.0f
+#if !ENG_UI_NATIF
 static inline int32_t fixe16(float v) { return (int32_t)(v * 65536 + FIXE_DECAL) - (int32_t)FIXE_DECAL; }
+#endif
+#if !ENG_UI_NATIF   /* (interface en 320 natif : band_rmask_demi) */
 ENG_HOT static void band_rmask(const op_t *o, const band_t *B) {
     const ui_mask_t *m = o->u.rmask.m;
     const int row_bytes = (m->w + 1) >> 1;
@@ -609,6 +690,7 @@ ENG_HOT static void band_rmask(const op_t *o, const band_t *B) {
         }
     }
 }
+#endif
 
 ENG_HOT static void band_image(const op_t *o, const band_t *B) {
     float s = o->u.img.s, r2 = o->u.img.cr * o->u.img.cr;
@@ -620,7 +702,7 @@ ENG_HOT static void band_image(const op_t *o, const band_t *B) {
     if (xe > B->x1) xe = B->x1;
     /* Colonne de l'image sous chaque colonne de la bande (-1 : hors de l'image) : la même division, une fois par colonne
        au lieu d'une par pixel (division en logiciel sur l'ESP32) */
-    int16_t colx[ENG_W > ENG_SCREEN ? ENG_W : ENG_SCREEN];
+    int16_t colx[ENG_W > ENG_IMG_W ? ENG_W : ENG_IMG_W];
     if (ys < ye) for (int x = xs; x < xe; x++) { const int sx = (int)((x + 0.5f - o->u.img.x) / s); colx[x - xs] = (int16_t)(sx < 0 || sx >= o->u.img.w ? -1 : mir ? o->u.img.w - 1 - sx : sx); }
     for (int y = ys; y < ye; y++) {
         int sy = (int)((y + 0.5f - o->u.img.y) / s);
@@ -653,23 +735,161 @@ ENG_HOT static void band_image(const op_t *o, const band_t *B) {
     }
 }
 
+/* Colonnes de l'image où l'interface dessine sur les lignes [y0, y0 + h) (écran rectangulaire : eng_render_band_rect de
+   render.c ne double et ne réduit que celles-là ; 11/11/2026, sur la LDK, doublement et réduction de bandes entières :
+   6 ms par image pour une barre en haut et un cadre en bas) : au plus max intervalles [xs[2k], xs[2k + 1]) disjoints,
+   rangés, en colonnes de l'image (ui_ox compris), rapprochés quand moins de 32 colonnes les séparent ; renvoie leur nombre
+   (0 : rien que la 3D). Étendue de chaque opération d'après sa géométrie, large (cadre englobant) */
+/* Plage d'opérations [plage0, plage1) que dessinent ui_render_band et ui_band_spans (écran rectangulaire : entre deux voiles ;
+   plage1 < 0 : jusqu'à la dernière) */
+static int plage0, plage1 = -1;
+void ui_plage_ops(int i0, int i1) { plage0 = i0; plage1 = i1; }
+int ui_nops(void) { return UR->nops; }
+/* Premier voile de toute l'image (ui_voile_image) à partir de l'opération i ; ui_nops() : aucun */
+int ui_voile_suivant(int i) {
+    for (; i < UR->nops; i++) if (UR->ops[i].kind == OP_VOILE) return i;
+    return UR->nops;
+}
+/* Le voile i sur n pixels (une ligne de l'image réduite) : le même mélange que band_poly, une fois par pixel au lieu de
+   quatre (les quatre pixels doublés sous lui sont identiques) */
+void ui_voile_bande(int i, uint16_t *dst, int n) {
+    const op_t *o = &UR->ops[i];
+    for (int x = 0; x < n; x++) blend(&dst[x], o->c, o->a);
+}
+
+int ui_band_spans(int y0, int h, int *xs, int max) {
+    y0 -= ui_oy;
+    int n = 0;
+    for (int i = plage0; i < (plage1 < 0 ? UR->nops : plage1); i++) {
+        const op_t *o = &UR->ops[i];
+        if (o->ymax <= y0 || o->ymin >= y0 + h) continue;
+        float a, b;
+        switch (o->kind) {
+        case OP_POLY: {
+            const float *q = &UR->pts[o->u.poly.p0];
+            a = b = q[0];
+            for (uint32_t k = 1; k < o->u.poly.np; k++) { a = fminf(a, q[k * 3]); b = fmaxf(b, q[k * 3]); }
+            break;
+        }
+        case OP_MASK: a = o->u.mask.x; b = (float)o->u.mask.x + o->u.mask.m->w; break;
+        case OP_RMASK: a = o->u.rmask.x0; b = o->u.rmask.x1; break;
+        case OP_IMAGE: case OP_SPRITE: { const float s = fabsf(o->u.img.s); a = o->u.img.x; b = o->u.img.x + o->u.img.w * s; break; }
+        case OP_HALO: a = o->u.halo.cx - o->u.halo.r1; b = o->u.halo.cx + o->u.halo.r1; break;
+        default: a = -1e9f; b = 1e9f; break;   /* bords de l'image : toute la largeur */
+        }
+        int x0 = (int)floorf(a) - 1 + ui_ox, x1 = (int)ceilf(b) + 2 + ui_ox;
+        if (x0 < 0) x0 = 0;
+        if (x1 > ui_img_w) x1 = ui_img_w;
+        if (x0 >= x1) continue;
+        /* ajout dans la liste rangée, fusion des intervalles qui se touchent à 32 colonnes près */
+        int k = 0;
+        while (k < n && xs[2 * k + 1] + 32 < x0) k++;
+        if (k < n && xs[2 * k] <= x1 + 32) {
+            if (x0 < xs[2 * k]) xs[2 * k] = x0;
+            if (x1 > xs[2 * k + 1]) xs[2 * k + 1] = x1;
+            while (k + 1 < n && xs[2 * (k + 1)] <= xs[2 * k + 1] + 32) {   /* rejoint les suivants */
+                if (xs[2 * (k + 1) + 1] > xs[2 * k + 1]) xs[2 * k + 1] = xs[2 * (k + 1) + 1];
+                for (int j = k + 1; j + 1 < n; j++) { xs[2 * j] = xs[2 * (j + 1)]; xs[2 * j + 1] = xs[2 * (j + 1) + 1]; }
+                n--;
+            }
+        } else if (n < max) {
+            for (int j = n; j > k; j--) { xs[2 * j] = xs[2 * (j - 1)]; xs[2 * j + 1] = xs[2 * (j - 1) + 1]; }
+            xs[2 * k] = x0; xs[2 * k + 1] = x1; n++;
+        } else {   /* plus de place : un seul intervalle qui couvre tout (jamais deux fois les mêmes colonnes) */
+            xs[0] = x0 < xs[0] ? x0 : xs[0];
+            xs[1] = x1 > xs[2 * n - 1] ? x1 : xs[2 * n - 1];
+            n = 1;
+        }
+    }
+    return n;
+}
+
+#if ENG_UI_NATIF
+/* Glyphe ou icône (coin en (x, y) de l'image de 640 × 480) dans l'image de 320 × 240 : chaque pixel prend la moyenne des
+   quatre niveaux du masque qu'il recouvre (les quatre sous-pixels que la réduction moyennait) */
+static inline int niveau_masque(const ui_mask_t *m, int rb, int r, int c) {
+    if ((unsigned)r >= m->h || (unsigned)c >= m->w) return 0;
+    const uint8_t b = m->data[r * rb + (c >> 1)];
+    return (c & 1) ? b & 15 : b >> 4;
+}
+ENG_HOT static void band_mask_demi(const op_t *o, const band_t *B) {
+    const ui_mask_t *m = o->u.mask.m;
+    const int rb = (m->w + 1) >> 1, gx = o->u.mask.x, gy = o->u.mask.y;
+    int ys = o->ymin > B->by0 ? o->ymin : B->by0, ye = o->ymax < B->by1 ? o->ymax : B->by1;
+    int xs = gx >> 1, xe = (gx + m->w + 1) >> 1;
+    if (xs < B->x0) xs = B->x0;
+    if (xe > B->x1) xe = B->x1;
+    uint8_t at[61];                       /* opacité d'une somme de quatre niveaux (0 à 60) */
+    for (int v = 0; v < 61; v++) at[v] = (uint8_t)(v * 17 * o->a / (4 * 255));
+    const uint16_t solid = swap ? sw16(o->c) : o->c;
+    for (int y = ys; y < ye; y++) {
+        const int r = 2 * y - gy;
+        uint16_t *row = B->dst + (y - B->by0) * B->w - B->x0;
+        for (int x = xs; x < xe; x++) {
+            const int c = 2 * x - gx;
+            const int v = niveau_masque(m, rb, r, c) + niveau_masque(m, rb, r, c + 1) + niveau_masque(m, rb, r + 1, c) + niveau_masque(m, rb, r + 1, c + 1);
+            if (!v) continue;
+            if (at[v] >= 255) row[x] = solid; else blend(&row[x], o->c, at[v]);
+        }
+    }
+}
+/* Glyphe tourné (texte en arc) : origine en coordonnées de l'image de 320 × 240, glyphe à l'échelle de 640 × 480 ; quatre
+   échantillons par pixel (aux centres des quatre sous-pixels), moyennés */
+ENG_HOT static void band_rmask_demi(const op_t *o, const band_t *B) {
+    const ui_mask_t *m = o->u.rmask.m;
+    const int rb = (m->w + 1) >> 1;
+    const float co = o->u.rmask.co, si = o->u.rmask.si;
+    int ys = o->ymin > B->by0 ? o->ymin : B->by0, ye = o->ymax < B->by1 ? o->ymax : B->by1;
+    int xs = o->u.rmask.x0 > B->x0 ? o->u.rmask.x0 : B->x0, xe = o->u.rmask.x1 < B->x1 ? o->u.rmask.x1 : B->x1;
+    for (int y = ys; y < ye; y++) {
+        uint16_t *row = B->dst + (y - B->by0) * B->w - B->x0;
+        for (int x = xs; x < xe; x++) {
+            int v = 0;
+            for (int k = 0; k < 4; k++) {   /* sous-pixels : (x + 0,25 ou 0,75, y + 0,25 ou 0,75), à l'échelle 2 */
+                const float dx = (x + 0.25f + 0.5f * (k & 1) - o->u.rmask.ox) * 2, dy = (y + 0.25f + 0.5f * (k >> 1) - o->u.rmask.oy) * 2;
+                const float u = dx * co + dy * si - m->x0, w = dy * co - dx * si - m->y0;
+                if (u >= 0 && w >= 0) v += niveau_masque(m, rb, (int)w, (int)u);
+            }
+            if (v) blend(&row[x], o->c, v * 17 * o->a / (4 * 255));
+        }
+    }
+}
+#endif
+
 ENG_HOT void ui_render_band(int y0, int h, uint16_t *dst, int x0, int x1) {
+#if ENG_UI_NATIF   /* lignes et colonnes de l'image de 320 × 240, dans le repère des opérations */
+    band_t B = { dst, y0, y0 + h, x0, x1, x1 - x0 };
+#else
     y0 -= ui_oy;   /* la bande dans le repère de l'interface (dst ne bouge pas) */
     band_t B = { dst, y0, y0 + h, x0 - ui_ox, x1 - ui_ox, x1 - x0 };
+#endif
+#if ENG_RECT
+    for (int i = plage0; i < (plage1 < 0 ? UR->nops : plage1); i++) {
+#else
     for (int i = 0; i < UR->nops; i++) {
+#endif
         const op_t *o = &UR->ops[i];
         if (o->ymax <= y0 || o->ymin >= y0 + h) continue;
 #ifdef ENG_COMPTE
         extern unsigned long eng_ui_us[8], eng_ui_n[8]; extern uint32_t (*eng_compte_us)(void);
         const uint32_t tq0 = eng_compte_us ? eng_compte_us() : 0;
 #endif
+#if ENG_RECT
+        if (o->kind == OP_POLY || o->kind == OP_VOILE) band_poly(o, &B);
+#else
         if (o->kind == OP_POLY) band_poly(o, &B);
+#endif
         else if (o->kind == OP_HALO) band_halo(o, &B);
 #if ENG_DYN
         else if (o->kind == OP_BORD) band_bord(o, &B);
 #endif
+#if ENG_UI_NATIF
+        else if (o->kind == OP_MASK) band_mask_demi(o, &B);
+        else if (o->kind == OP_RMASK) band_rmask_demi(o, &B);
+#else
         else if (o->kind == OP_MASK) band_mask(o, &B);
         else if (o->kind == OP_RMASK) band_rmask(o, &B);
+#endif
         else band_image(o, &B);
 #ifdef ENG_COMPTE
         { const int kk = o->kind < 8 ? o->kind : 7; eng_ui_us[kk] += (eng_compte_us ? eng_compte_us() : 0) - tq0; eng_ui_n[kk]++; }

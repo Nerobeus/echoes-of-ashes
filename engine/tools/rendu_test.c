@@ -200,7 +200,8 @@ static void band_window(int y, int h, int *x0, int *x1) {
 
 /* ECHOES_PLANCHES=1 : places du cache des planches (carte SD) servies à l'image ou à la précédente, par classe de taille,
    au plus fort sur tout le scénario (classes et nombres de places : ST_SIZE, ST_COUNT de world.c, recopiés ici) */
-static const int PL_COUNT[6] = { 24, 16, 8, 16, 6, 2 };
+static const int PL_COUNT_E[6] = { 24, 16, 8, 16, 6, 2 }, PL_COUNT_I[6] = { 12, 8, 12, 8, 6, 14 };   /* Echoes, île (core/ile.c) */
+#define PL_COUNT (E.w.ile[0] ? PL_COUNT_I : PL_COUNT_E)
 static int pl_pic[6];
 static void planches_mesure(void) {
     if (!E.w.st_who || !getenv("ECHOES_PLANCHES")) return;
@@ -689,6 +690,21 @@ int main(int argc, char **argv) {
     if (scn && (scn_file = fopen(scn, "rb"))) {
         fseek(scn_file, 0, SEEK_END); cfg.scen_size = (uint32_t)ftell(scn_file); cfg.scen_read = scn_read_pc;
         printf("scénario : %s (%u octets)\n", scn, (unsigned)cfg.scen_size);
+    }
+    /* ECHOES_COMMUN=monde_esp32.pak : le paquet donné est le paquet propre d'un monde découpé (maj_monde.js --ile :
+       monde_propre.pak), ses sections communes (PRIS) prises dans ce paquet-ci (sur la montre : le paquet léger d'Echoes
+       en flash) ; le paquet propre compte dans la PSRAM de la carte simulée (il y est chargé, avec 64 Ko de marge) */
+    const char *commun = getenv("ECHOES_COMMUN");
+    if (commun) {
+        FILE *fc = fopen(commun, "rb");
+        if (!fc) { perror(commun); return 1; }
+        fseek(fc, 0, SEEK_END); const long lc = ftell(fc); fseek(fc, 0, SEEK_SET);
+        uint8_t *pc = malloc(lc);
+        if (fread(pc, 1, lc, fc) != (size_t)lc) { fprintf(stderr, "lecture incomplète\n"); return 1; }
+        fclose(fc);
+        cfg.pak_commun = pc; cfg.pak_commun_len = (size_t)lc;
+        psram_pris += (size_t)len + 65536;
+        printf("paquet commun : %s (%ld octets), paquet propre %ld octets\n", commun, lc, len);
     }
     if (eng_init(pak, len, &cfg)) { fprintf(stderr, "eng_init : %s\n", eng_error()); if (getenv("ECHOES_MEM")) printf("eng_init : %s\n", eng_error()); return 1; }
     if (getenv("ECHOES_MEM")) printf("mémoire du moteur après eng_init : %zu Ko lente (PSRAM sur l'ESP32), %zu Ko rapide\n", mem_lente / 1024, mem_rapide / 1024);
@@ -1826,6 +1842,50 @@ int main(int argc, char **argv) {
             }
             printf("marche : %.0f cases, %d groupes parus, %d combats, mode %d, histoire %d\n", dd, pat, nb, E.renc_mode, script_niveau(E.sera.x, E.sera.z));
         }
+        else if (!strcmp(tok, "passage")) { if (E.w.nence && E.w.ence) { const int f = E.w.ence[8] | E.w.ence[9] << 8; if (f < SC_MAX_FLAGS) E.flags[f >> 3] |= (uint8_t)(1 << (f & 7)); printf("passage : drapeau %d levé%c", f, 10); } continue; }   /* le passage de la première enceinte (Lucerne) : les gardes laissent entrer */
+        else if (!strcmp(tok, "coupes")) { extern int eng_essai_fondus(void); int nm = 0; if (E.in.on) for (int i = 0; i < E.in.npoly; i++) nm += E.in.fade[i] != 0; printf("coupes : %d bâtiment(s) coupé(s), %d face(s) de mur coupée(s), sera %.2f %.2f%c", eng_essai_fondus(), nm, E.sera.x, E.sera.z, 10); continue; }   /* bâtiments coupés (couverture de l'héroïne, 10/11/2026) */
+        else if (!strcmp(tok, "ile")) {   /* île : drapeaux de l'histoire (section ILE), calme (pas de rencontre), équipe */
+            int nm = 0; for (int m = 0; m < NMEMB; m++) if (E.team & (1 << m)) nm++;
+            printf("île : monstres %u (%s), esprits %u (%s), calme %d, équipe %d (%s), script %d%c", E.w.ile_monstres,
+                E.w.ile_monstres < SC_MAX_FLAGS && (E.flags[E.w.ile_monstres >> 3] >> (E.w.ile_monstres & 7) & 1) ? "levé" : "baissé",
+                E.w.ile_esprits, E.w.ile_esprits < SC_MAX_FLAGS && (E.flags[E.w.ile_esprits >> 3] >> (E.w.ile_esprits & 7) & 1) ? "levé" : "baissé",
+                ile_calme(), nm, PARTY[0].name ? PARTY[0].name : "?", script_running(), 10);
+            /* (11/11/2026) héroïnes du studio, lames et leur héroïne, compagnes */
+            printf("  héroïnes %d :", E.w.ile_nher); for (int k = 0; k < E.w.ile_nher; k++) printf(" %s=%u%s", E.w.ile_her[k].id, E.w.ile_her[k].perso, E.w.ile_her[k].genre ? "(m)" : "");
+            int nh = 0; for (int k = 0; k < E.w.ile_nlames; k++) nh += E.w.ile_lame[k].perso != 0xFFFF;
+            printf("%c  lames %d (%d avec leur héroïne) :", 10, E.w.ile_nlames, nh);
+            for (int k = 0; k < E.w.ile_nlames; k++) if (E.w.ile_lame[k].perso != 0xFFFF) printf(" %s (%s) -> %s, drapeau %u", E.w.ile_lame[k].nom, E.w.ile_lame[k].id, E.w.persos[E.w.ile_lame[k].perso].nom, E.w.ile_lame[k].drapeau);
+            printf("%c  compagnes :", 10); for (int m = 1; m < NMEMB; m++) if (E.team & (1 << m)) printf(" %s (PV %d, ATQ %d)", PARTY[m].name ? PARTY[m].name : "?", PARTY[m].max, PARTY[m].atk);
+            printf("%c", 10);
+            continue;
+        }
+        else if (!strncmp(tok, "genre:", 6)) {   /* genre:N : genre de l'héroïne jouée dans la table de l'île (0 féminin, 1 masculin), texte {f|m} (11/11/2026) */
+            int nk = 0; for (int k = 0; k < E.w.ile_nher; k++) if ((int)E.w.ile_her[k].perso == E.heroine) { E.w.ile_her[k].genre = (uint8_t)atoi(tok + 6); nk++; }
+            printf("genre : %d entrée(s) de l'héroïne %d mises à %d%c", nk, E.heroine, atoi(tok + 6), 10);
+            continue;
+        }
+        else if (!strncmp(tok, "filtre:", 7)) {   /* filtre:TEXTE : le texte tel qu'il s'affiche (genre, noms échangés) ; TEXTE sans virgule */
+            extern const char *hud_texte_affiche(const char *s, char *buf, int cap);
+            static char fb[256];
+            printf("filtre : %s -> %s%c", tok + 7, hud_texte_affiche(tok + 7, fb, (int)sizeof fb), 10);
+            continue;
+        }
+        else if (!strcmp(tok, "rencetat")) { static char eb[640]; eng_etat_rencontres(eb, sizeof eb); printf("etat : %s%c", eb, 10); continue; }   /* état des rencontres (SDX ETAT ; « etat » : celui des intérieurs) */
+        else if (sscanf(tok, "manette:%d:%f", &n, &a) == 2) {   /* manette:n:touches : Sera court n images au stick (touches ENG_KEY_*, stick à fond), comme la Poké Ball Plus ; groupes, combats */
+            const int keys = (int)a; int parus = 0, comb = 0, av[PATR_MAX] = { 0 }, bloq = 0; float dd = 0, ox = E.sera.x, oz = E.sera.z;
+            for (int k = 0; k < n; k++) {
+                eng_input_t m = { 0 }; m.manette = 1; m.keys = keys;
+                m.stick_x = (keys & ENG_KEY_RIGHT) ? 0.71f : (keys & ENG_KEY_LEFT) ? -0.71f : 0; m.stick_y = (keys & ENG_KEY_DOWN) ? 0.71f : (keys & ENG_KEY_UP) ? -0.71f : 0;
+                if (!m.stick_x) m.stick_y *= 1.41f; if (!m.stick_y) m.stick_x *= 1.41f;
+                frame(&m);
+                const float p3 = hypotf(E.sera.x - ox, E.sera.z - oz); dd += p3; ox = E.sera.x; oz = E.sera.z;
+                bloq = p3 < 0.01f ? bloq + 1 : 0;
+                if (bloq > 30) { E.yaw += PI_F / 4; bloq = 0; }   /* bloquée : la caméra tourne d'un pas (le joueur ferait le tour) */
+                if (BT.on) { comb++; BT.on = 0; for (int s2 = 0; s2 < PATR_MAX; s2++) PATR[s2].on = 0; E.stream_hold = 1; }
+                for (int s2 = 0; s2 < PATR_MAX; s2++) { if (!PATR[s2].on) { av[s2] = 0; continue; } if (!av[s2]) { av[s2] = 1; parus++; } }
+            }
+            printf("manette %d : %.0f cases en %.0f s, %d groupes parus, %d combats, yaw %.2f%c", keys, dd, n / 30.0f, parus, comb, E.yaw, 10); continue;
+        }
         else if (sscanf(tok, "marchevue:%d:%f", &n, &a) == 2) {   /* marchevue:n:cap : Sera court tout droit (cap en degrés ; un doigt posé loin, elle tourne si elle est bloquée), n images ; groupes d'ennemis parus, vus à l'écran (le chef dans le disque 15 images au moins), combats (gagnés aussitôt) */
             extern int eng_essai_projeter(float x, float z, float *sx, float *sy, float *h);
             int parus = 0, vus3 = 0, comb = 0, comb_vus = 0, bloque = 0, vf[PATR_MAX] = { 0 }, av[PATR_MAX] = { 0 }, cap4[PATR_MAX] = { 0 }; float cap = a * PI_F / 180, dd = 0, ox = E.sera.x, oz = E.sera.z;
@@ -2275,7 +2335,66 @@ int main(int argc, char **argv) {
         else if (sscanf(tok, "technique:%d:%f", &n, &a) == 2 && BT.on && n >= 0 && n < NMEMB) {   /* technique k du membre n */
             BT.actor = n; BT.phase = BP_TECH; PARTY[n].mp = PARTY[n].maxmp; battle_command(BC_TECH, (int)a);
             if (BT.phase == BP_TARGET) { BT.locked = 1; battle_tap(E.scr_enemy[0].cx, E.scr_enemy[0].cy); }
+            if (BT.phase == BP_ALLIE) battle_command(BC_ALLIE_OK, 0);   /* à qui ? la cible proposée (11/11/2026) */
             printf("technique %d du membre %d : phase %d, cut-in %d\n", (int)a, n, BT.phase, BT.cut.img);
+        }
+        else if (!strcmp(tok, "arenes")) {   /* arènes de combat de chaque carte (AREN ; battle.c, arene_choisir) */
+            const uint8_t *p8 = E.w.aren, *f8 = p8 ? p8 + E.w.aren_sz : NULL;
+            if (!p8) printf("arènes : pas de section AREN (celle de la carte)%c", 10);
+            else {
+                const int nc8 = p8[0] | p8[1] << 8; p8 += 2;
+                for (int k8 = 0; k8 < nc8 && p8 + 2 <= f8; k8++) { const int n8 = p8[0] | p8[1] << 8; p8 += 2 + n8 * 4; printf("  carte %d : %d arènes%c", k8, n8, 10); }
+            }
+        }
+        else if (sscanf(tok, "arene:%f:%f", &a, &b) == 2) {   /* arene:x:z : Sera en (x, z), un combat (le premier ennemi) ; l'arène prise, sa distance */
+            E.sera.x = a; E.sera.z = b; BT.on = 0;   /* un combat déjà en cours : remplacé */
+            battle_start(0, 20, 0);
+            printf("arène : Sera en %.1f %.1f, arène %.1f %.1f (%.1f cases)%c", a, b, E.w.arena_x, E.w.arena_z, hypotf(E.w.arena_x - a, E.w.arena_z - b), 10);
+        }
+        else if (sscanf(tok, "planches:%d", &n) == 1 && n >= 0 && n < NMEMB) {   /* planches du membre n par animation : cadre, taille, normalisation, ancrage (ordre d'affichage en combat) */
+            const int b9 = member_sheet(n), mv9 = member_sheet_mouv(n);
+            static const char *NA[] = { "attente", "marche", "course", "attaque", "touché", "défense", "victoire", "KO", "magie", "tir" };
+            static const int AA[] = { ANIM_IDLE, ANIM_WALK, ANIM_RUN, ANIM_ATTACK, ANIM_HURT, ANIM_DEFEND, ANIM_VICTORY, ANIM_KO, ANIM_CAST, ANIM_TIR };
+            for (int k = 0; k < 10; k++) {
+                const int bb = k == 1 || k == 2 ? mv9 : b9;
+                if (!has_anim(bb, AA[k])) continue;
+                const sheet_t *S9 = &E.w.sheets[anim_sheet(bb, AA[k])];
+                printf("  %s %-8s planche %d : cadre %dx%d, taille %.2f, norm %.3f, ancrage %d (bas %.1f px)%c", PARTY[n].name, NA[k], anim_sheet(bb, AA[k]), S9->fw, S9->fh, S9->taille, S9->norm, S9->has_pv,
+                       S9->has_pv ? S9->fh - S9->pv[1][1] / 2.0f : 0.0f, 10);
+                if (S9->has_pv) { printf("    bas par direction :"); for (int r9 = 0; r9 < 8; r9++) printf(" %.1f", S9->fh - S9->pv[r9][1] / 2.0f); printf("%c", 10); }
+            }
+        }
+        else if (!strncmp(tok, "cibler:", 7) && BT.on) {
+            /* cibler:m:quoi:u : le membre m choisit ATTAQUE (quoi = a), la technique k (tk) ou le sort k de sa liste (sk), puis la cible
+               u (membre, ou 100 + k pour l'ennemi k) au toucher ; la phase « À qui ? » (cible proposée, SUIVANT) et le résultat
+               (11/11/2026 : choix de la cible de toute action) */
+            int m8 = 0, u8 = 0, k8 = 0; char q8[8] = "";
+            if (sscanf(tok + 7, "%d:%7[^:]:%d", &m8, q8, &u8) == 3 && m8 >= 0 && m8 < NMEMB) {
+                BT.actor = m8; PARTY[m8].mp = PARTY[m8].maxmp; for (int i = 0; i < NMEMB; i++) BT.avance[i] = 0;
+                if (q8[0] == 'a') { BT.phase = BP_CMD; battle_command(BC_ATTACK, 0); }
+                else if (q8[0] == 't') { k8 = atoi(q8 + 1); BT.phase = BP_TECH; battle_command(BC_TECH, k8); }
+                else if (q8[0] == 's') {
+                    int l8[MAX_SORTS]; const int ns8 = sorts_of(m8, l8); k8 = atoi(q8 + 1);
+                    BT.phase = BP_TECH; battle_command(BC_MAGIES, 0); BT.mpage = 0;
+                    int fi8, np8, c8 = sorts_page(ns8, &fi8, &np8);
+                    for (int g8 = 0; k8 >= fi8 + c8 && g8 < 20; g8++) { battle_command(BC_SUITE, 0); c8 = sorts_page(ns8, &fi8, &np8); }
+                    printf("sort %d (%s) du membre %d%c", k8, k8 < ns8 ? E.w.sorts[l8[k8]].nom : "?", m8, 10);
+                    battle_command(BC_SORT, k8 - fi8);
+                }
+                printf("cibler : phase %s, sorte %d, proposé %d (%s)%c", BT.phase == BP_ALLIE ? "À QUI" : BT.phase == BP_ANIM || BT.phase == BP_CUTIN ? "partie" : "autre", BT.pend_sorte, BT.phase == BP_ALLIE ? BT.allie : -1,
+                       BT.phase != BP_ALLIE ? "-" : BT.allie >= BT_ENEMY ? BT.en[BT.allie - BT_ENEMY].name : PARTY[BT.allie].name, 10);
+                if (BT.phase == BP_ALLIE) {
+                    frame(&none); ecrire_bmp("build/cams/cibler.bmp");
+                    battle_command(BC_ALLIE_SUIV, 0);
+                    printf("  SUIVANT : %d (%s)%c", BT.allie, BT.allie >= BT_ENEMY ? BT.en[BT.allie - BT_ENEMY].name : PARTY[BT.allie].name, 10);
+                    const screen_pos_t *c8p = u8 >= 100 ? &E.scr_enemy[u8 - 100] : &E.scr_party[u8];
+                    frame(&none);
+                    battle_tap(c8p->cx, u8 >= 100 ? c8p->cy : (c8p->top + c8p->foot) / 2);
+                    printf("  toucher %d : phase %s, cibles", u8, BT.phase == BP_ANIM ? "action" : BT.phase == BP_CUTIN ? "cut-in" : BT.phase == BP_ALLIE ? "À QUI" : "autre");
+                    for (int i = 0; i < BT.an.ntarget; i++) printf(" %d", BT.an.targets[i]);
+                    printf(", ennemi visé %d%c", BT.cible, 10);
+                }
+            }
         }
         else if (sscanf(tok, "cutt:%f", &a) == 1 && BT.on && BT.phase == BP_CUTIN) BT.cut.t0 = E.clock - a;
         else if (sscanf(tok, "cutimg:%d:%f", &n, &a) == 2 && BT.on && BT.phase == BP_CUTIN) { BT.cut.img = n; BT.cut.paire = a > 0; BT.cut.plein = 0; }

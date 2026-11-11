@@ -16,6 +16,9 @@ Essais sur la montre par l'USB (firmware Echoes en jeu, commandes SDX de platfor
                                                  1 = en série, 8 = cœur 0 sans bandes, 2 = textures en 2 × 2 texels, 0 = rien
   capture_montre.py demarrage [s] [journal.txt]  journal du démarrage : rouvre le port dès qu'il revient (après un flash
                                                  ou un redémarrage), lignes du journal pendant s secondes (40)
+  capture_montre.py app NOM [--echoes]           lance une application (SDX APP : ile, echoes, pcdos, gameboy…) ; attend que
+                                                 le port revienne (après une copie, la montre redémarre) ; --echoes : Echoes
+                                                 lancé d'abord (l'app montre ne lit pas les commandes)
 
   --port COMx : port de la montre (sinon le premier ESP32-S3 en USB)
 
@@ -142,12 +145,47 @@ def resume(ips):
           f'triangles : moyenne {sum(t) / len(t):.0f}, au plus {max(t)}')
 
 
+def lancer_app(port, nom, echoes):
+    """SDX APP nom, répété jusqu'à la réponse : la montre peut encore redémarrer (fin d'une copie) ou démarrer Echoes"""
+    if echoes:
+        from envoi_sd import lancer_echoes
+        lancer_echoes(port or port_auto())
+    fin = time.time() + 60
+    while True:
+        try:
+            lien = Lien(ouvrir(port or port_auto()))
+            break
+        except (serial.SerialException, SystemExit):
+            if time.time() > fin:
+                sys.exit('montre introuvable sur l\'USB')
+            time.sleep(0.5)
+    fin = time.time() + 45
+    while time.time() < fin:
+        try:
+            lien.envoyer('SDX APP ' + nom)
+        except serial.SerialTimeoutException:
+            sys.exit('la montre ne lit pas les commandes (app montre ?) : --echoes')
+        fin2 = time.time() + 3
+        while time.time() < fin2:
+            l = lien.ligne(0.5)
+            if l and 'SDX APP OK' in l:
+                print(nom + ' lancé sur la montre', flush=True)
+                return
+            if l and 'SDX ERR' in l:
+                sys.exit(l[l.index('SDX ERR'):])
+    sys.exit('pas de réponse de la montre (Echoes en route ?)')
+
+
 def main():
     a = argparse.ArgumentParser()
     a.add_argument('--port')
-    a.add_argument('action', choices=['ecran', 'course', 'journal', 'essai', 'xp', 'demarrage'])
+    a.add_argument('action', choices=['ecran', 'course', 'journal', 'essai', 'xp', 'demarrage', 'etat', 'app'])
     a.add_argument('args', nargs='*')
+    a.add_argument('--echoes', action='store_true')
     o = a.parse_args()
+    if o.action == 'app':   # accueil Île de Nacre (tools/atelier_combat/nacre.js) : « Lancer l'île sur la montre »
+        lancer_app(o.port, o.args[0] if o.args else 'ile', o.echoes)
+        return
     if o.action == 'demarrage':
         global JOURNAL_FICHIER
         JOURNAL_FICHIER = o.args[1] if len(o.args) > 1 else None
@@ -174,6 +212,20 @@ def main():
                 print(l)
                 return
         print('pas de réponse (firmware sans SDX XP ?)')
+    elif o.action == 'etat':   # état des rencontres de la partie en cours (SDX ETAT, eng_etat_rencontres) : etat [n] [secondes entre deux]
+        n, pas = (int(o.args[0]) if o.args else 1), (float(o.args[1]) if len(o.args) > 1 else 2)
+        for i in range(n):
+            lien.envoyer('SDX ETAT')
+            fin = time.time() + 4
+            while time.time() < fin:
+                l = lien.ligne(0.5)
+                if l and 'SDX ETAT' in l:
+                    print(time.strftime('%H:%M:%S'), l[l.index('SDX ETAT') + 9:])
+                    break
+            else:
+                print('pas de réponse (firmware sans SDX ETAT ?)')
+            if i + 1 < n:
+                time.sleep(pas)
     elif o.action == 'journal':
         resume(journal(lien, float(o.args[0]) if o.args else 20))
     elif o.action == 'essai':

@@ -5,7 +5,8 @@
  * dont la pile est en PSRAM ; tout se fait donc dans une petite tâche à pile interne, quelle que soit la tâche appelante.
  * Drapeaux passés d'une application à l'autre (NVS, espace « apps », lus une fois) : « veille » (l'app montre démarre
  * écran éteint, en veille, après la mise en veille d'Echoes, du PC DOS ou du Game Boy), « reprise » (Echoes reprend la dernière
- * partie sans l'écran titre).
+ * partie sans l'écran titre). Valeur gardée : « monde » (Echoes lance son monde, 0, ou l'île du jeu des héroïnes, 1 :
+ * app_lancer_monde ; une reprise après la veille garde le monde d'avant).
  */
 #include <string.h>
 #include "freertos/FreeRTOS.h"
@@ -24,18 +25,21 @@
 static const char *TAG = "apps";
 
 /* lancer : 0 vérifier, 1 lancer ; drapeaux : posés avant de lancer (lancer), ou lus et effacés (lire) */
-typedef struct { const char *nom; int lancer, r; SemaphoreHandle_t fait; const char *poser[2]; const char *lire; } demande_t;
+/* cle, val : valeur posée avant de lancer (« monde ») ; garder : lire sans effacer (-1 : absente) */
+typedef struct { const char *nom; int lancer, r; SemaphoreHandle_t fait; const char *poser[2]; const char *lire; const char *cle; int val, garder; } demande_t;
 
 static void drapeaux(demande_t *d) {
-    if (!d->poser[0] && !d->lire) return;
+    if (!d->poser[0] && !d->lire && !d->cle) return;
     nvs_flash_init();   /* sans effet s'il l'est déjà */
     nvs_handle_t h;
     if (nvs_open("apps", NVS_READWRITE, &h) != ESP_OK) return;
     for (int k = 0; k < 2; k++) if (d->poser[k]) nvs_set_u8(h, d->poser[k], 1);
+    if (d->cle) nvs_set_u8(h, d->cle, (uint8_t)d->val);
     if (d->lire) {
         uint8_t v = 0;
-        d->r = nvs_get_u8(h, d->lire, &v) == ESP_OK && v;
-        if (d->r) nvs_erase_key(h, d->lire);
+        const int la = nvs_get_u8(h, d->lire, &v) == ESP_OK;
+        if (d->garder) d->r = la ? v : -1;
+        else { d->r = la && v; if (d->r) nvs_erase_key(h, d->lire); }
     }
     nvs_commit(h);
     nvs_close(h);
@@ -92,3 +96,9 @@ int app_veille(const char *reprise) {
     return 1;
 }
 int app_drapeau(const char *cle) { demande_t d = { .lire = cle }; return demander(&d); }
+int app_valeur(const char *cle) { demande_t d = { .lire = cle, .garder = 1 }; return demander(&d); }
+int app_lancer_monde(const char *nom, int monde) {
+    demande_t d = { .nom = nom, .lancer = 1, .cle = "monde", .val = monde };
+    if (!demander(&d)) { ESP_LOGE(TAG, "%s : pas d'application dans cette partition", nom); return 0; }
+    return 1;
+}

@@ -46,10 +46,18 @@ enum { AC_CONTINUER, AC_NOUVELLE, AC_CHARGER, AC_REGLAGES, AC_APPS, AC_COURSE };
 /* Nom d'une entrée de l'écran titre (RÉGLAGES renommée par la plateforme : TRANSFERT de l'ESP32) */
 /* Voile sur toute l'image : marges du téléphone comprises (ui_voile_image) ; sur l'écran rond, le canevas */
 static void voile_image(uint16_t c, int a) {
-#if ENG_DYN
-    ui_voile_image(c, a);
+#if ENG_DYN || ENG_RECT
+    ui_voile_image(c, a);   /* (écran rectangulaire : toute l'image) */
 #else
     ui_rect(0, 0, ENG_SCREEN, ENG_SCREEN, c, a);
+#endif
+}
+/* Fondu au noir de l'écran rond (le cercle), ou de toute l'image rectangulaire (ENG_RECT) */
+static void fondu_noir(int a) {
+#if ENG_RECT
+    ui_voile_image(ui_rgb(0), a);
+#else
+    ui_rect(0, 0, ENG_SCREEN, ENG_SCREEN, ui_rgb(0), a);
 #endif
 }
 
@@ -122,6 +130,9 @@ static int her_n(void) { int n = 0; for (int i = 0; i < E.w.ouv_nher; i++) n += 
 static int her_perso(int k) { for (int i = 0; k > 0 && i < E.w.ouv_nher; i++) if (her_vue(i) && --k == 0) return E.w.ouv_her[i]; return -1; }
 static const char *her_nom(int k) { const int p = her_perso(k); return p >= 0 ? E.w.persos[p].nom : PARTY[0].name; }
 static int her_rang(int p) { for (int k = 1; p >= 0 && k <= her_n(); k++) if (her_perso(k) == p) return k; return 0; }   /* rang de l'héroïne p (0 : Sera) */
+/* Île du jeu des héroïnes (ile.c) : pas de Sera parmi les héroïnes (sa planche est celle d'une héroïne de l'île), la première
+   proposée est la 1 */
+static int her_k0(void) { return E.w.ile[0] && her_n() > 0; }
 
 /* ---------- Lieu montré ---------- */
 /* Sur la carte k (l'ouverture : la carte 0 ; le mode course : la carte d'un circuit) */
@@ -164,7 +175,7 @@ static void page(int p) {
     else if (p == AP_APPS) { A.sel = 0; montrer(E.w.ouv_fond[0], E.w.ouv_fond[1], E.w.ouv_fond[2]); }
     else if (p == AP_PARTIES) A.sel = A.nouvelle ? 0 : (derniere_partie() > 0 ? derniere_partie() : 0);
     else if (p == AP_INTRO) { A.carte = 0; A.ct0 = A.t; montrer(E.w.ouv_cartes[0].x, E.w.ouv_cartes[0].z, E.w.ouv_cartes[0].heure); }
-    else if (p == AP_HEROINE) { A.her = 0; A.ht0 = A.t; montrer(E.w.start_x, E.w.start_z, HEURE_AUBE); }
+    else if (p == AP_HEROINE) { A.her = her_k0(); A.ht0 = A.t; montrer(E.w.start_x, E.w.start_z, HEURE_AUBE); }
 }
 
 static void charger(int p);
@@ -189,6 +200,7 @@ void accueil_titre(void) { debut(1); }   /* SYSTÈME › QUITTER (05/11/2026) : 
 static void jouer(int k) {
     hud_nouvelle(A.partie);
     E.heroine = her_perso(k);
+    ile_equipe(1);   /* île : l'héroïne et ses deux compagnes, au niveau 1 */
     if (E.w.carte) world_carte(0, E.w.start_x, E.w.start_z);
     E.sera.x = E.w.start_x; E.sera.z = E.w.start_z; E.sera.dir = 0.35f + PI_F; E.sera_y_ok = 0;
     E.yaw = A.yaw0; E.heure = A.heure0; eng_set_zoom(A.zoom0);
@@ -196,13 +208,13 @@ static void jouer(int k) {
     A.on = 0;
     BT.fade_t = E.clock;   /* sortie du noir, comme après un combat */
 }
-void accueil_fin(void) { if (A.on) { A.partie = 0; jouer(0); } }
+void accueil_fin(void) { if (A.on) { A.partie = 0; jouer(her_k0()); } }
 /* Code CODE_HEROINE (04/11/2026, demande de l'utilisateur : « changer d'héroïne à tout moment ») : la page « Qui es-tu ? »
    en pleine partie, sur le monde arrêté là où il est (rien de montré ailleurs) ; CHOISIR change l'héroïne (E.heroine) sans
    recommencer la partie (sa sauvegarde suivante la garde), RETOUR garde la même ; caméra, zoom et heure rendus
    (accHerChanger de l'émulateur) */
 static void changer_fin(int ok) {
-    if (ok) { E.heroine = her_perso(A.her); hud_toast("Héroïne changée"); }   /* (pas son nom : les noms sont échangés à l'écran) */
+    if (ok) { E.heroine = her_perso(A.her); ile_equipe(0); hud_toast("Héroïne changée"); }   /* (pas son nom : les noms sont échangés à l'écran) */
     E.yaw = A.yaw0; E.heure = A.heure0; eng_set_zoom(A.zoom0);
     A.on = 0; A.changer = 0; A.fondu = 0;
     BT.fade_t = E.clock;   /* sortie du noir, comme après un combat */
@@ -251,7 +263,7 @@ static void carte_suivante(void) {
     A.ct0 = A.t;
     montrer(E.w.ouv_cartes[A.carte].x, E.w.ouv_cartes[A.carte].z, E.w.ouv_cartes[A.carte].heure);
 }
-static void her_pas(int d) { const int n = her_n() + 1; A.her = (A.her + d + n) % n; A.ht0 = A.t; son_jouer(SON_MENU, 0.35f, 1); }
+static void her_pas(int d) { const int k0 = her_k0(), n = her_n() + 1 - k0; A.her = k0 + (A.her - k0 + d + n) % n; A.ht0 = A.t; son_jouer(SON_MENU, 0.35f, 1); }
 /* Application de la plateforme (eng_config_t.apps) : elle prend la main (l'ESP32 redémarre dans l'autre programme) */
 /* Rangées du menu des applications : 0 le jeu (son écran titre), les eng_config_t.apps, puis RÉGLAGES s'il y en a */
 static int napps_menu(void) { const int n = 1 + E.cfg.napps + (E.cfg.nregls > 0); return n < 4 ? n : 4; }
@@ -387,7 +399,7 @@ static void cendres(float a) {
     }
 }
 static void vignette(void) {
-    if (ENG_DYN) return;   /* plein écran : pas de bord rond */
+    if (ENG_DYN || ENG_RECT) return;   /* plein écran, écran rectangulaire : pas de bord rond */
     ui_ring(CX, CY, 222, 30, ui_rgb(INK), 170);
     ui_ring(CX, CY, 196, 22, ui_rgb(INK), 80);
 }
@@ -397,7 +409,7 @@ static int couper(const ui_font_t *f, const char *s, float max_w, char l[6][128]
     for (;;) {
         while (*s == ' ') s++;
         if (!*s) break;
-        const char *e = s; while (*e && *e != ' ') e++;
+        const char *e = ui_fin_mot(s);
         const size_t m = (size_t)(e - s) < 63 ? (size_t)(e - s) : 63, ln = strlen(l[n]);
         char essai[128];
         const char *w0 = s;
@@ -479,7 +491,7 @@ static void draw_titre(void) {
     else snprintf(t, sizeof t, "Reprendre une des %d parties", PARTIES);
     if (A.nopts > 4 && (o == AC_REGLAGES || o == AC_APPS)) snprintf(t, sizeof t, "%s", nom_option(NOM, o));   /* le bouton : son nom */
     ui_text(ui_fit(FONT_MONO, t, 300, 18, 14), CX, A.nopts > 4 ? 404 : 410, UI_CENTER, ui_rgb(DIM), 255, t);
-    if (tp < T_TITRE) ui_rect(0, 0, ENG_SCREEN, ENG_SCREEN, ui_rgb(0), (int)(255 * (1 - tp / T_TITRE)));
+    if (tp < T_TITRE) fondu_noir((int)(255 * (1 - tp / T_TITRE)));
 }
 
 static void draw_parties(void) {   /* sur fond noir, sans 3D (accueil_voile) */
@@ -568,7 +580,7 @@ static void draw_intro(void) {
         if (ix) {
             const float sc = (ENG_SCREEN - 2) / (float)iw;
             ui_image_pal(ix, pal, iw, ih, CX - iw * sc / 2, CY - ih * sc / 2, sc, CX, CY, 233);
-            ui_rect(0, 0, ENG_SCREEN, ENG_SCREEN, ui_rgb(0), (int)(255 * (1 - a)));
+            fondu_noir((int)(255 * (1 - a)));
         }
         bandeau_carton(s, 350, a, at);
     } else if (E.w.ouv_cartes[k].x < 0) {   /* noir (sans 3D : accueil_voile) : braise au bas de l'écran, cendres qui tombent, texte au milieu */
@@ -578,7 +590,7 @@ static void draw_intro(void) {
         texte_centre(FONT_BODY, 28, s, 340, CY, 36, ui_rgb(WHITE), (int)(255 * at));
     } else {                          /* un lieu : bandeau du texte sous lui */
         vignette();
-        ui_rect(0, 0, ENG_SCREEN, ENG_SCREEN, ui_rgb(0), (int)(255 * (1 - a)));
+        fondu_noir((int)(255 * (1 - a)));
         bandeau_carton(s, 300, a, at);
     }
     char c[64]; snprintf(c, sizeof c, "%d / %d · MAINTENIR : PASSER", k + 1, E.w.ouv_ncartes);
@@ -630,7 +642,7 @@ static void draw_heroine(void) {   /* voile du monde (110 / 255) : accueil_voile
         bouton(x - 28, y - 24, 56, 48, d < 0 ? B_PREC : B_SUIV, 0);
     }
     ui_text(ui_fit(FONT_DISP, her_nom(A.her), 260, 30, 20), CX, 354, UI_CENTER, ui_rgb(WHITE), 255, her_nom(A.her));
-    char c[32]; snprintf(c, sizeof c, "%d / %d", A.her + 1, her_n() + 1);
+    char c[32]; snprintf(c, sizeof c, "%d / %d", A.her + 1 - her_k0(), her_n() + 1 - her_k0());
     ui_text(ui_font(FONT_MONO, 18), CX, 376, UI_CENTER, C1, 255, c);
     rangee(CX - 95, 390, 190, 42, 1, "CHOISIR", NULL, ui_rgb(WHITE));
     bouton(CX - 95, 390, 190, 42, B_CHOISIR, 0);

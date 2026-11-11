@@ -8,6 +8,12 @@ firmware est celui de l'édition enfant), et le paquet léger monde_esp32.pak du
 partition « monde ». Seuls les fichiers qui ont changé partent : la carte garde un manifeste
 (taille et empreinte de chaque fichier reçu). Le jeu se met en pause pendant la copie, puis la carte redémarre et met
 les nouveaux fichiers en place ; l'outil attend son retour et vérifie le manifeste.
+
+--ile : monde de l'île du jeu des héroïnes (engine/tools/maj_monde.js --ile) : monde.pak, interieurs.bin, histoire.scn et
+son paquet propre monde_propre.pak de engine/data/ile vers ile/ de la carte, sans rien flasher : le firmware d'Echoes charge
+ce paquet en PSRAM quand on lance ÎLE DE NACRE depuis les applications de la montre, et prend sons, polices, icônes dans
+le paquet léger d'Echoes de la flash (monde découpé). Musiques : la banque de l'île (assets/audio/musique/pistes_ile.json),
+sinon celles d'Echoes.
 """
 import argparse
 import hashlib
@@ -222,6 +228,7 @@ def main():
     ap.add_argument('--heure', action='store_true', help="régler l'horloge de la montre seulement (elle l'est aussi à chaque envoi)")
     ap.add_argument('--wifi', nargs=2, metavar=('RESEAU', 'MOT_DE_PASSE'), help='réseau Wi-Fi du mode Transfert, gardé dans la montre')
     ap.add_argument('--transfert', action='store_true', help='redémarrer la montre en mode Transfert (Wi-Fi : heure et fichiers)')
+    ap.add_argument('--ile', action='store_true', help="monde de l'île du jeu des héroïnes : engine/data/ile vers ile/ de la carte, paquet léger compris, sans flasher")
     ap.add_argument('--pcdos', action='store_true', help='fichiers du PC DOS (tiny386) vers /pcdos de la carte : par défaut '
                     'tout pcdos/carte/pcdos (tiny386.ini), sinon les fichiers donnés (chemins complets acceptés)')
     a = ap.parse_args()
@@ -232,7 +239,7 @@ def main():
     # peut pas démarrer (paquet léger flashé avant la copie du monde) n'attend la copie que 10 s (echec_demarrage de
     # main.c) ; les empreintes de 420 Mo calculées après la réponse de la carte les dépassaient
     if not (a.wifi or a.transfert or a.heure or a.pcdos):
-        avance = a.dossier or os.path.join(RACINE, 'data')
+        avance = a.dossier or os.path.join(RACINE, 'data', 'ile' if a.ile else '')
         for nom in (a.fichiers or FICHIERS) + [LEGER]:
             chemin = nom if os.path.isabs(nom) else os.path.join(avance, nom)
             if os.path.isfile(chemin):
@@ -255,7 +262,10 @@ def main():
     if a.heure:
         return
     enfant = dossier_sd.endswith('_enfant')
-    if a.pcdos:   # dossier du PC DOS à la racine de la carte (noms « pcdos/… » : sdx.c), jamais le paquet léger
+    if a.ile:   # dossier de l'île à la racine de la carte (noms « ile/… » : sdx.c), son paquet léger comme un fichier
+        src = a.dossier or os.path.join(RACINE, 'data', 'ile')
+        liste, a.sans_flash = a.fichiers or FICHIERS + ['monde_propre.pak'], True   # (musique.bin : celle de l'île, pistes_ile.json)
+    elif a.pcdos:   # dossier du PC DOS à la racine de la carte (noms « pcdos/… » : sdx.c), jamais le paquet léger
         src = a.dossier or os.path.join(RACINE, '..', 'pcdos', 'carte', 'pcdos')
         liste, a.sans_flash = a.fichiers or sorted(n for n in os.listdir(src) if os.path.isfile(os.path.join(src, n))), True
     else:
@@ -266,7 +276,7 @@ def main():
     envois = []
     for nom in liste:
         chemin = nom if os.path.isabs(nom) else os.path.join(src, nom)
-        distant = 'pcdos/' + os.path.basename(chemin) if a.pcdos else nom
+        distant = 'pcdos/' + os.path.basename(chemin) if a.pcdos else 'ile/' + os.path.basename(chemin) if a.ile else nom
         if not os.path.isfile(chemin):
             if a.fichiers:
                 sys.exit(f'{chemin} : introuvable')
