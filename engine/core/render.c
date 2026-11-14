@@ -67,11 +67,18 @@ typedef uint16_t zcle_t;
 #define ZK (ZK_PRIM * ZS)
 int eng_sans_z;   /* banc d'essai (rendu_test « sansz ») : tampon de profondeur coupé, l'ordre de la table seul */
 #define Z_PLUS(k) ((k) + ((k) >> 6))
+/* Roulis de la caméra (14/11/2026 : vue cockpit de la course anti-gravité, le dévers de la piste) : versions de la course seulement
+   (build_retrofw.js et build_web.js --antigrav), rien de plus dans to_view ailleurs ; marge AG_ROUL_M des tables du ciel penché */
+#ifndef ENG_ROULIS
+#define ENG_ROULIS 0
+#endif
+#define AG_ROUL_M (ENG_ROULIS ? (RW_MAX + RH_MAX) / 2 + 32 : 0)
 #define LV 16
 #define FV 8
-#if ENG_RECT && !ENG_PREMIUM
+#if ENG_RECT && !ENG_PREMIUM && !ENG_ROULIS
 #define SUB 32   /* écran rectangulaire (LDK, 11/11/2026, choix de l'utilisateur : « perspective allégée ») : une division tous les 32 pixels */
-#else
+#else   /* (course anti-gravité, 14/11/2026, retour de l'utilisateur : « des textures de bâtiment ou de mur qui glissent, elles bougent en
+           fonction de la distance d'affichage » : 16 pixels, et le seuil affine bas, AFFINE_RATIO) */
 #define SUB 16
 #endif
 #if ENG_DYN || ENG_PREMIUM
@@ -272,6 +279,11 @@ typedef struct {
     struct { int16_t x, y; int8_t len, dx; } drops[RAIN_MAX];
     float sky_hy;                             /* horizon de l'image (ligne) */
     float trou_hk, trou_z0, trou_k;           /* fond sous l'horizon (draw_sky, trous) : profondeur × (ligne - horizon), brouillard */
+    /* Horizon de la course anti-gravité (ag_image) : pixels du panorama (0 : le ciel), palettes voilées (4 bandes de 256), largeur
+       (360°), hauteur, ligne posée sur l'horizon, lignes du panorama par ligne de l'image, colonne du panorama de chaque colonne */
+    const uint8_t *hz_px; const uint16_t *hz_pal; int hz_w, hz_h, hz_base; float hz_k; const uint16_t *hz_u;
+    const uint8_t *ck_px; const uint16_t *ck_pal; const int16_t *ck_u; int ck_w, ck_h; float ck_y, ck_k; uint8_t ck_dep;   /* cadre du cockpit (ag_cockpit_band) */
+    int roule; float roul_c, roul_s, roul_x, roul_y; const uint16_t *ciel_tab;   /* caméra penchée (ENG_ROULIS) : cos, sin, centre de projection, couleur du ciel par ligne non penchée */
     eng_stats_t stats;
     int px_w[ENG_WORKERS], seg_w[ENG_WORKERS];   /* pixels et segments de chaque cœur */
     uint32_t us3d_w[ENG_WORKERS], usui_w[ENG_WORKERS];
@@ -522,11 +534,19 @@ static void setup_camera(float tx, float ty, float tz, float yaw, float pitch, f
     c->yaw = yaw; c->pitch = pitch;
     fixe_maj(yaw);
 }
+#if ENG_ROULIS
+static int cam_roule;
+static float cam_rc = 1, cam_rs;
+static uint16_t *ag_ciel_tab[2];   /* (ciel_table, ag_rendu_reserver) */
+#endif
 static inline v3 to_view(float x, float y, float z) {
     const camera_t *c = &E.cam;
     float dx = x - c->x, dy = y - c->y, dz = z - c->z;
     float x1 = dx * c->cy - dz * c->sy, z1 = dx * c->sy + dz * c->cy;
     v3 o = { x1, dy * c->cp + z1 * c->sp, -dy * c->sp + z1 * c->cp };
+#if ENG_ROULIS
+    if (cam_roule) { const float a = o.x, b = o.y; o.x = a * cam_rc - b * cam_rs; o.y = a * cam_rs + b * cam_rc; }
+#endif
     return o;
 }
 static inline float fog_of(float z) {
@@ -540,8 +560,9 @@ static inline float fog_of(float z) {
     float f = (z - fog_z0c) * fog_kc;
     return f < 0 ? 0 : f > 7.99f ? 7.99f : f;
 }
+static float far_z = FAR_Z;   /* profondeur du dernier seau (course anti-gravité : la sienne, ag_image) */
 static inline int bucket_of(float z) {
-    int b = (int)((z - NEAR_Z) / (FAR_Z - NEAR_Z) * OTN);
+    int b = (int)((z - NEAR_Z) / (far_z - NEAR_Z) * OTN);
     return b < 0 ? 0 : b >= OTN ? OTN - 1 : b;
 }
 
@@ -1679,6 +1700,19 @@ static int avant(const int_rect_t *A, const int_rect_t *Bo) {
 typedef struct { int_rect_t r; int npc, haut; } int_perso_t;
 static void draw_int_npc(int k) {
     const npc_t *nc = &E.npcs[k];
+    {   /* île : la succube de la séquence « s'offrir à elle » (ile.c), son animation d'offrande */
+        float ox, oz, od; int op, osh, ofr;
+        const int oi = k == ile_offrande_npc(0) ? 0 : k == ile_offrande_npc(1) ? 1 : -1;   /* (1 : sa partenaire, paire) */
+        const int oa = oi >= 0 ? ile_offrande_acteur(oi, &ox, &oz, &od, &op, &osh, &ofr) : 0;
+        if (oa < 0) return;   /* dans la scène de l'emplacement (ou pendant son cut-in) */
+        if (oa > 0) {
+            const perso_vue_t ov = perso_vue(nc->perso, nc->var);
+            char_bucket = OTN - 1; char_tissu = oa == 2 ? 0 : ov.tissu;
+            add_character(ox, oz, ofr, sera_row(od), oa == 2 ? 0 : ov.remap, osh, 2, ov.taille, 0, 0, ov.ombre);   /* (2 : la scène, ses couleurs telles quelles) */
+            char_tissu = 0; char_bucket = -1;
+            return;
+        }
+    }
     const perso_t *pe = &E.w.persos[nc->perso];
     const perso_vue_t pv = perso_vue(nc->perso, nc->var);   /* (la recrue de l'héroïne choisie : en Sera) */
     /* Une danseuse (drapeau de sa place) danse si sa planche a l'animation, sinon elle attend ; une voiture garée (garages) :
@@ -1735,12 +1769,12 @@ static int int_ordre(const int_rect_t *R, int i, int j, int count, const int_per
 /* Pièce : ses objets et ses personnages (pers) en tri topologique ; sans ordre imposé ou en cas de cycle, le plus loin
    de la caméra d'abord */
 static void int_room(interieur_t *I, int first, int count, const int_perso_t *pers, int npers) {
-    static int_rect_t R[INT_ROOM_MAX + 1 + INT_PNJ_MAX] ENG_FROID;
-    static int16_t cnt[INT_ROOM_MAX + 1 + INT_PNJ_MAX] ENG_FROID;
-    static uint8_t done[INT_ROOM_MAX + 1 + INT_PNJ_MAX];
-    static float d[INT_ROOM_MAX + 1 + INT_PNJ_MAX] ENG_FROID;
+    static int_rect_t R[INT_ROOM_MAX + 2 + INT_PNJ_MAX] ENG_FROID;
+    static int16_t cnt[INT_ROOM_MAX + 2 + INT_PNJ_MAX] ENG_FROID;
+    static uint8_t done[INT_ROOM_MAX + 2 + INT_PNJ_MAX];
+    static float d[INT_ROOM_MAX + 2 + INT_PNJ_MAX] ENG_FROID;
     if (count > INT_ROOM_MAX) count = INT_ROOM_MAX;
-    if (npers > 1 + INT_PNJ_MAX) npers = 1 + INT_PNJ_MAX;
+    if (npers > 2 + INT_PNJ_MAX) npers = 2 + INT_PNJ_MAX;
     const int n = count + npers;
     for (int i = 0; i < n; i++) {
         if (i < count) { const int_obj_t *o = &I->obj[first + i]; R[i].x0 = o->x0; R[i].z0 = o->z0; R[i].x1 = o->x1; R[i].z1 = o->z1; }
@@ -1771,11 +1805,11 @@ static int int_leaf(const interieur_t *I, float x, float z) {
     for (int guard = 0; I->node[leaf].kind && guard < 64; guard++) leaf = (I->node[leaf].kind == 1 ? x : z) < I->node[leaf].c ? I->node[leaf].lo : I->node[leaf].hi;
     return leaf;
 }
-static int_perso_t int_pers[1 + INT_PNJ_MAX]; static int int_pers_leaf[1 + INT_PNJ_MAX], int_npers;
+static int_perso_t int_pers[2 + INT_PNJ_MAX]; static int int_pers_leaf[2 + INT_PNJ_MAX], int_npers;   /* (Sera, les places, un rôdeur entré : ile.c) */
 static void int_visit(interieur_t *I, int k) {
     const int_node_t *nd = &I->node[k];
     if (!nd->kind) {
-        static int_perso_t here[1 + INT_PNJ_MAX]; int nh = 0;   /* (statique : int_visit est récursif, la pile du jeu fait 8 Ko) */
+        static int_perso_t here[2 + INT_PNJ_MAX]; int nh = 0;   /* (statique : int_visit est récursif, la pile du jeu fait 8 Ko) */
         for (int i = 0; i < int_npers; i++) if (int_pers_leaf[i] == k) here[nh++] = int_pers[i];
         int_room(I, nd->first, nd->count, here, nh);
         return;
@@ -1797,6 +1831,7 @@ static int sera_anim(int ps) {
     return anim_sheet(ps, st == 0 ? ANIM_IDLE : st == 2 && has_anim(ps, ANIM_RUN) ? ANIM_RUN : ANIM_WALK);
 }
 static void draw_sera(void) {
+    if (ile_offrande_cache_sera()) { int_after = 1; return; }   /* île : une animation « à deux » de la succube (ile.c) */
     const int ps = member_sheet(0);
     char_bucket = OTN - 1;
     if (ps >= 0) {
@@ -1828,7 +1863,7 @@ static void interieur_scene(float time_s) {
     int_npers = 0;
     int_pers[0].r = (int_rect_t){ sx - rs, sz - rs, sx + rs, sz + rs }; int_pers[0].npc = -1; int_pers[0].haut = ground_y(E.sera.x, E.sera.z) > 0.01f;
     int_pers_leaf[0] = int_leaf(I, sx, sz); int_npers = 1;
-    for (int k = I->npc0; k < I->npc0 + I->npcn && int_npers < 1 + INT_PNJ_MAX; k++) {
+    for (int k = I->npc0; k < I->npc0 + I->npcn && int_npers < 2 + INT_PNJ_MAX; k++) {
         const float px = E.npcs[k].x - IO, pz = E.npcs[k].z - IO;
         int_pers[int_npers].r = (int_rect_t){ px - rs, pz - rs, px + rs, pz + rs }; int_pers[int_npers].npc = k; int_pers[int_npers].haut = int_sol_y(E.npcs[k].x, E.npcs[k].z) > 0.01f;
         int_pers_leaf[int_npers++] = int_leaf(I, px, pz);
@@ -1863,10 +1898,13 @@ static int cibles_vues(int *out, float r) {
     return n;
 }
 
+static void image_finir(void);
+static void ag_image(float time_s);
 void eng_build_frame(float time_s) {
     const world_t *w = &E.w;
     const int n = w->n;
     BP0();
+    if (AG.on) { ag_image(time_s); return; }   /* course anti-gravité : sa scène, sans le monde */
     stream_frame();
     E.time_s = time_s;
     {   /* brouillard de la pluie de cendre (fog_of) : 8 niveaux sur une profondeur 1 + CENDRE_BRUME × l'intensité fois plus courte ;
@@ -2221,6 +2259,19 @@ void eng_build_frame(float time_s) {
         }
     }
     occ_poly = NULL;
+    /* Coulées des avalanches (section COUL) une fois leur drapeau levé : leurs faces par leur profondeur, comme celles d'un
+       bâtiment (le tampon de profondeur les règle avec le sol qu'elles recouvrent) */
+    for (int k = 0; k < (hold ? 0 : w->ncoul); k++) {
+        const coulee_t *cl = &w->coul[k];
+        if (!coulee_visible(k) || dist_gt(cl->x - vcx, cl->z - vcz, R + 1.5f * (cl->rx > cl->rz ? cl->rx : cl->rz))) continue;
+        const uint8_t *m = cl->poly;
+        for (int i = 0; i < cl->npoly; i++) {
+            const pak_poly_t *pp = (const pak_poly_t *)m;
+            m += 16 + pp->nv * 24;
+            cur_cat = 4;
+            if (!culled(pp)) submit_pak_poly(pp, pp->tile, -1, 0);
+        }
+    }
     BP(BPROF_CHUNKS);
     /* (seulement l'image tout à fait relevée : à la première image d'un dialogue, l'image n'a pas encore glissé et le bateau d'une traversée,
        qui sera au-dessus des répliques, était jugé trop bas ; le plan passait pour vide et la caméra quittait le bateau, 11/11/2026) */
@@ -2386,7 +2437,7 @@ void eng_build_frame(float time_s) {
             char_anneau = 0;
         }
     }
-    if (!bat && E.ride < 0 && !accueil_on()) {   /* ouverture : Sera cachée, la caméra survole un lieu */
+    if (!bat && E.ride < 0 && !accueil_on() && !ile_offrande_cache_sera()) {   /* ouverture : Sera cachée, la caméra survole un lieu ; île : une animation « à deux » d'une succube */
         if (ps >= 0) {   /* attente sans animation d'attente : première image de la marche */
             const int st = E.sera.state, sh = sera_anim(ps);
             const int fr = st == 0 && !has_anim(ps, ANIM_IDLE) ? 0 : E.sera.frame % E.w.sheets[sh].frames;
@@ -2491,6 +2542,15 @@ void eng_build_frame(float time_s) {
             char_tissu = 0;
         }
     }
+    {   /* île : la succube de la séquence « s'offrir à elle » (ile.c), dehors : son animation d'offrande */
+        float ox, oz, od; int op, osh, ofr;
+        for (int oi = 0; oi < 2; oi++) { const int oa = !bat && !E.in.on ? ile_offrande_acteur(oi, &ox, &oz, &od, &op, &osh, &ofr) : 0; if (oa <= 0) continue;   /* (1 : sa partenaire, paire) */
+            const perso_vue_t ov = perso_vue(op, 0);
+            char_tissu = oa == 2 ? 0 : ov.tissu;
+            add_character(ox, oz, ofr, sera_row(od), oa == 2 ? 0 : ov.remap, osh, 2, ov.taille, 0, 0, ov.ombre);   /* (2 : la scène, ses couleurs telles quelles) */
+            char_tissu = 0;
+        }
+    }
     /* Véhicules du trafic dans le rayon du décor, devant la caméra */
     for (int k = 0; k < (bat ? 0 : TRAFFIC_MAX); k++) {
         const traffic_t *t = &E.traffic[k];
@@ -2526,6 +2586,39 @@ void eng_build_frame(float time_s) {
     /* Liste aplatie : du fond (seau OTN-1) vers l'avant, dans l'ordre d'arrivée */
 aplatir:
     BP(BPROF_PERSOS);
+    image_finir();
+}
+
+/* Fin de la préparation d'une image (eng_build_frame, ag_image) : liste aplatie et rangée par bande, horizon, textures du sol
+   demandées, statistiques, interface */
+#if ENG_ROULIS
+/* Caméra penchée : couleur du ciel de chaque ligne de l'image non penchée (de -AG_ROUL_M à RH + AG_ROUL_M), comme draw_sky (dégradé
+   au-dessus de l'horizon, fond des trous en dessous) ; ciel_roule la prend pixel par pixel */
+static void ciel_table(void) {
+    uint16_t *t = ag_ciel_tab[B == &FR[0] ? 0 : 1] + AG_ROUL_M;
+    const float hy = B->sky_hy;
+    const uint16_t fog = pack565((int)amb.fog[0], (int)amb.fog[1], (int)amb.fog[2]);
+    for (int y = -AG_ROUL_M; y < RH + AG_ROUL_M; y++) {
+        uint16_t col = fog;
+        if (y < hy) {
+            float tt = 1 - (hy - y) / (hy + 20);
+            if (tt < 0) tt = 0; else if (tt > 1) tt = 1;
+            col = pack565((int)(amb.top[0] + tt * tt * (amb.hor[0] - amb.top[0])), (int)(amb.top[1] + tt * (amb.hor[1] - amb.top[1])), (int)(amb.top[2] + tt * (amb.hor[2] - amb.top[2])));
+        } else {
+            const float d = y + 0.5f - hy;
+            if (B->trou_hk > 0 && d > 0) {
+                const float f = (B->trou_hk / d - B->trou_z0) * B->trou_k;
+                if (f < 1) { const float g = f > 0 ? f : 0; col = pack565((int)(amb.fog[0] * g), (int)(amb.fog[1] * g), (int)(amb.fog[2] * g)); }
+            }
+        }
+        t[y] = col;
+    }
+    B->ciel_tab = t;
+}
+#endif
+static void image_finir(void) {
+    const world_t *w = &E.w;
+    const camera_t *cam = &E.cam;
     B->norder = 0;
     for (int b = OTN - 1; b >= 0; b--) for (int i = ot_head[b]; i >= 0; i = B->prims[i].next) B->order[B->norder++] = i;
     {
@@ -2560,6 +2653,9 @@ aplatir:
         B->trou_hk = H > 0 && cam->cp > 0.01f ? H * FOCAL / cam->cp : 0;
         B->trou_z0 = fog_z0c; B->trou_k = 1.0f / (fog_fullc - fog_z0c);
     }
+#if ENG_ROULIS
+    if (B->roule) ciel_table();
+#endif
     BP(BPROF_CIEL);
     /* Textures du sol lues à la demande (carte SD) : celles des polygones de l'image, dans la limite de l'image ; les
        autres prennent la texture de remplacement jusqu'à leur arrivée */
@@ -2583,10 +2679,1218 @@ aplatir:
 #ifndef ESP_PLATFORM
     extern int eng_essai_sans_ui; if (!eng_essai_sans_ui)   /* rendu_test (scenecams) : l'image 3D seule */
 #endif
-    hud_build();
-    B->ui_cover = hud_cover_y();
+    { if (AG.on) ag_hud(); else hud_build(); }   /* course anti-gravité (antigrav.c) : son interface */
+    B->ui_cover = AG.on ? 0 : hud_cover_y();
     B->stats.ui_ops = ui_op_count(); B->stats.ui_pts = ui_pts_count();
     BP(BPROF_UI);
+}
+
+/* ---------- Course anti-gravité (antigrav.c, 13/11/2026) : la scène, sans le monde ----------
+   Piste en 3D (chaussée, murs, faces extérieures et dessous du ruban, plaques), piliers, sol plat en dalles, engins en
+   maillages low-poly (faces de couleur unie : texels de la tuile 0, qui est la palette), ombre des engins sur la chaussée.
+   Le tampon de profondeur fait l'ordre ; seuls ce qui est collé à la chaussée (plaques, ombres) et les engins, qui planent
+   juste au-dessus, sont avancés d'un seau fixe.
+   Budget (13/11/2026, 30 i/s fixes, demande de l'utilisateur : « on sait que l'on tient environ 4000 triangles à l'écran ») :
+   jamais plus de AG_TRI_MAX triangles soumis par image. D'abord les engins, du plus proche au plus loin (niveau de détail selon la
+   distance ; AG_TRI_ENGINS au plus, au-delà le niveau le plus simple), puis la piste du plus proche au plus loin, les plaques, les piliers, le
+   relief, le sol. Ce qui ne tient plus est écarté.
+   Une seule précision de géométrie, à toute distance (14/11/2026, demande de l'utilisateur : « simplifier la géométrie hors de la
+   piste pour limiter les polygones et ne plus utiliser différents niveaux de précision de géométrie, c'est trop visible à grande
+   vitesse ») : piste en tronçons de AG_SEG sections (la ligne de départ seule en 1), dessous du ruban, faces extérieures des murs et
+   piliers partout ; hors de la piste, simplifié : relief en cellules uniformes (ter_g de generer.js), flanc unique des parois
+   naturelles, sol en dalles de AG_SOL_DALLE. Seuls les engins gardent leurs niveaux de détail.
+   Sans brouillard depuis le 13/11/2026 (demande de l'utilisateur : « augmenter la distance d'affichage et supprimer la brume qui
+   consomme de la puissance » : E.fog_on coupé par antigrav.c, chaque face prend le chemin le plus simple du tracé) : tout est vu
+   jusqu'à AG_VUE ; terrain autour de la piste (AG.ter : ag_terrain), sol lointain en grandes dalles, traînées translucides des
+   réacteurs ; écran de la piste : le circuit entier vu de haut, en basse définition (aperçu). */
+#define AG_MUR_H 0.5f        /* hauteur des murs au-dessus de la chaussée */
+#define AG_EP 0.35f          /* épaisseur du ruban de la piste */
+#define AG_SOL_PAS 12.0f     /* dalle du sol (cases) : sa texture une fois */
+#define AG_TEX_L 16.0f       /* texels par case le long de la piste */
+#define AG_VUE (AG_TRI_MAX > 4000 ? 64.0f : 52.0f)   /* distance de vue (× VUE_K) ; 36 avec le brouillard ; LDK : 52 depuis les décors proches qui
+                                                     masquent le lointain (14/11/2026 : le budget rendu aux engins) */
+#define AG_SEG (AG_TRI_MAX > 4000 ? 2 : 4)   /* sections par tronçon de piste (partout ; LDK : 4, la piste simplifiée) */
+#define AG_SOL_DALLE 24.0f   /* dalle du sol (cases, sa texture 2 × 2 fois), jusqu'à 3 × la distance de vue */
+#define AG_SOL_APERCU 96.0f  /* dalle du sol de l'aperçu de la piste */
+#define AG_TRAINEE_W 0.07f   /* demi-largeur de la traînée au réacteur */
+#define AG_TRAINEE_L 1.0f    /* longueur de la traînée au plus (cases) : derrière l'engin, elle va vers la caméra de poursuite */
+#define AG_PILIER 0.32f      /* demi-côté d'un pilier */
+#define AG_TRI_ENGINS (AG_TRI_MAX * 2 / 5)   /* triangles des engins au plus (le reste à la piste, au relief et au sol) */
+/* Précision des engins, la même à toute distance (14/11/2026, demande de l'utilisateur : « simplifions les concurrents ») : niveau de
+   détail de l'engin suivi et des autres (0 : le plus fin) ; LDK : 320 et 140 triangles ; vitrine de l'écurie : le plus fin */
+#if AG_TRI_MAX > 4000
+#define AG_LOD_SUIVI 0
+#define AG_LOD_ADV 0
+#else
+#define AG_LOD_SUIVI 1
+#define AG_LOD_ADV 1   /* (2, 140 triangles, avant les décors proches : 14/11/2026, demande de l'utilisateur : du budget rendu aux engins) */
+#endif
+#define AG_BINS 32           /* rangement de la piste par distance */
+#define AG_BRUME_VUE 30.0f   /* distance de vue par brume (épreuves de la carrière) */
+static const float AG_SOLEIL[3] = { 0.4472f, 0.7746f, 0.4472f };
+typedef struct { float p[3], u, v; } ag_pt_t;
+static int ag_tris;          /* triangles soumis à l'image */
+static int ag_det[4];        /* … dont engins, piste (plaques et piliers compris), relief, sol (eng_ag_detail : journal du simulateur) */
+void eng_ag_detail(int *d) { for (int k = 0; k < 4; k++) d[k] = ag_det[k]; }
+static float ag_coupe = 1e9f; /* distance de la première pièce de piste écartée faute de budget (1e9 : aucune) */
+static int ag_apercu;        /* écran de la piste : le circuit entier vu de haut, en basse définition */
+/* Ordre de dessin (13/11/2026, retour de l'utilisateur : « le clignotement des textures est très proche de notre véhicule, il y a des
+   problèmes de superposition de textures », « une sorte d'escalier sur les bords de piste ») : là où deux surfaces se touchent (à
+   1/64 de profondeur près), la première dessinée l'emporte ; l'ordre des seaux suivait la profondeur moyenne de chaque morceau et
+   basculait d'une image à l'autre. Il est fixé, du premier au dernier : l'engin (AG_AV_ENGIN), son ombre, les plaques (AG_AV_PLAQUE),
+   les traînées, la chaussée (reculée de AG_REC_CH), les murs et parois (AG_REC_MUR), le relief et le sol (AG_REC_SOL, comme
+   SOL_RECUL d'Echoes) ; le tampon de profondeur fait le reste. Textures réduites : la table MIPS (antigrav.c) */
+#define AG_AV_ENGIN 1.5f
+#define AG_AV_PLAQUE 1.0f
+/* Chaussée reculée d'au moins la moitié d'un tronçon de plus que l'ombre et les plaques posées dessus (14/11/2026, retours de
+   l'utilisateur : « l'ombre du vaisseau scintille énormément », « les plaques souvent à moitié visibles dans la route » : avec des
+   tronçons de AG_SEG sections, celui d'à côté, plus proche en moyenne, passait avant l'ombre ou la plaque posée sur lui) */
+#define AG_REC_CH (1.0f + (float)AG_SEG)
+#define AG_REC_MUR (AG_REC_CH + 0.7f)
+#define AG_REC_SOL (AG_REC_CH + 1.5f)
+static float ap_d, ap_y; static int ap_piste = -1;   /* aperçu : distance et décalage vertical lissés, piste de l'ajustement */
+/* Tampons de la scène, réservés au chargement de la course (ag_rendu_reserver, depuis ag_charger) : rien sur la montre, qui ne joue
+   pas la course et dont la PSRAM est presque pleine */
+static uint16_t *ag_seg_i, *ag_seg_ordre;
+static uint8_t *ag_seg_m, *ag_seg_bin;
+static float *ag_seg_d;
+static v3 *ag_vv;
+static float (*ag_vw)[3];
+static uint16_t *ag_hz_u[2];
+static uint16_t ag_hz_pal[4][256];
+/* Vue cockpit (antigrav.c, ag_cockpit) : le cadre de l'écurie du joueur (AGCK) posé en bas de l'image, à la hauteur de l'image ou à
+   sa largeur s'il le faut pour la couvrir (16:9 sur la LDK : ses côtés rognés), dans la définition la plus petite qui ne soit pas
+   agrandie (la plus grande sinon) ; ses pixels pleins sont écrits avant toute la 3D, couverts et au plus près (ag_cockpit_band) :
+   ce qui est derrière n'est ni texturé ni écrit */
+static const ag_image_t *ag_ck_im;
+static uint16_t ag_ck_pal[256];
+/* Vitre du cockpit par ligne de son image (première et dernière colonne vide ; l > r : ligne pleine) : les lignes de l'image bornées
+   à elle (span_l, span_r, comme le cercle de la montre) : la 3D et le ciel derrière le cadre ne sont plus parcourus du tout (banc de la
+   LDK du 14/11/2026 : chaque pixel caché coûtait encore son test de couverture et de profondeur, la vue cockpit était plus lente que
+   dehors) ; ag_spans_ck : bornes posées (remises à toute la ligne hors du cockpit) */
+/* Écrans du tableau de bord (14/11/2026, demande de l'utilisateur : « des emplacements d'affichage du hud de vitesse et de la carte
+   comme un écran du cockpit ») : rectangles en part du cadre 16:9 (u, v de son coin haut gauche à son coin bas droit), peints sur
+   chaque image du cockpit par tools/antigrav/forge_images.py (ECRANS, à garder identiques) : 0 la vitesse (au milieu, sur le capot
+   des instruments), 1 la carte (à gauche), 2 la place et le tour (à droite) ; ag_cockpit_ecran les donne à l'interface (antigrav.c) */
+static const float AG_ECRANS[3][4] = { { 0.435f, 0.705f, 0.565f, 0.815f }, { 0.17f, 0.77f, 0.31f, 0.955f }, { 0.69f, 0.77f, 0.83f, 0.955f } };
+static float ag_ecr[3][4];   /* repère de l'interface (466 au milieu) */
+static int ag_ecr_ok;
+int ag_cockpit_ecran(int k, float *x0, float *y0, float *x1, float *y1) {
+    if (!ag_ecr_ok || k < 0 || k > 2) return 0;
+    *x0 = ag_ecr[k][0]; *y0 = ag_ecr[k][1]; *x1 = ag_ecr[k][2]; *y1 = ag_ecr[k][3];
+    return 1;
+}
+#define AG_CK_HMAX 544
+static int16_t ag_ck_ol[AG_CK_HMAX], ag_ck_or[AG_CK_HMAX];
+static int ag_spans_ck;
+static int16_t *ag_ck_u[2];
+static int ag_ck_on;
+#define AG_CK_NET 5.0f    /* flou de profondeur (version PC) : net autour de ce point devant l'œil, comme l'engin vu de dehors */
+int ag_rendu_reserver(void) {
+    ag_hz_u[0] = E.cfg.alloc((RW_MAX + 2 * AG_ROUL_M) * 2, 0); ag_hz_u[1] = E.cfg.alloc((RW_MAX + 2 * AG_ROUL_M) * 2, 0);
+    if (!ag_hz_u[0] || !ag_hz_u[1]) return 0;
+#if ENG_ROULIS
+    ag_ciel_tab[0] = E.cfg.alloc((RH_MAX + 2 * AG_ROUL_M) * 2, 0); ag_ciel_tab[1] = E.cfg.alloc((RH_MAX + 2 * AG_ROUL_M) * 2, 0);
+    if (!ag_ciel_tab[0] || !ag_ciel_tab[1]) return 0;
+#endif
+    ag_ck_u[0] = E.cfg.alloc(RW_MAX * 2, 0); ag_ck_u[1] = E.cfg.alloc(RW_MAX * 2, 0);
+    if (!ag_ck_u[0] || !ag_ck_u[1]) return 0;
+    ag_seg_i = E.cfg.alloc(AG_SECT_MAX * 2, 0); ag_seg_ordre = E.cfg.alloc(AG_SECT_MAX * 2, 0);
+    ag_seg_m = E.cfg.alloc(AG_SECT_MAX, 0); ag_seg_bin = E.cfg.alloc(AG_SECT_MAX, 0); ag_seg_d = E.cfg.alloc(AG_SECT_MAX * 4, 0);
+    ag_vv = E.cfg.alloc(sizeof(v3) * AG_SOMMETS_MAX, 0); ag_vw = E.cfg.alloc(sizeof(float) * 3 * AG_SOMMETS_MAX, 0);
+    return ag_seg_i && ag_seg_ordre && ag_seg_m && ag_seg_bin && ag_seg_d && ag_vv && ag_vw;
+}
+void ag_rendu_piste(void) {
+    amb_t a;
+    memset(&a, 0, sizeof a);
+    for (int c = 0; c < 3; c++) { a.top[c] = AG.ciel[0][c]; a.hor[c] = AG.ciel[1][c]; a.fog[c] = AG.ciel[2][c]; a.tint[c] = AG.teinte[c] > 0 ? AG.teinte[c] : 1; }
+    a.lum = AG.lum > 0 ? AG.lum : 1;
+    amb = a; amb_ok = 1;
+    build_cmap(NULL, 0);   /* (la palette du thème vient de changer) */
+    if (AG.horizon < 0) return;
+    static const float VOILE[4] = { 0.1f, 0.22f, 0.36f, 0.5f }, VOILE_BRUME[4] = { 0.55f, 0.66f, 0.76f, 0.85f };   /* (brume de la carrière : l'horizon presque noyé) */
+    const ag_image_t *h = &AG.hz[AG.horizon];
+    const float sombre = AG.cond & AGC_NUIT ? 0.42f : 1;   /* (nuit de la carrière : l'horizon assombri) */
+    for (int b = 0; b < 4; b++) {
+        ag_hz_pal[b][0] = 0;
+        for (int i = 0; i < 255; i++) {
+            if (i >= h->ncoul) { ag_hz_pal[b][i + 1] = 0; continue; }
+            const float v = AG.cond & AGC_BRUME ? VOILE_BRUME[b] : VOILE[b];
+            ag_hz_pal[b][i + 1] = pack565((int)(h->rgb[i * 3] * sombre * (1 - v) + amb.fog[0] * v), (int)(h->rgb[i * 3 + 1] * sombre * (1 - v) + amb.fog[1] * v), (int)(h->rgb[i * 3 + 2] * sombre * (1 - v) + amb.fog[2] * v));
+        }
+    }
+}
+static inline void cross3_r(const float *a, const float *b, float *o) { o[0] = a[1] * b[2] - a[2] * b[1]; o[1] = a[2] * b[0] - a[0] * b[2]; o[2] = a[0] * b[1] - a[1] * b[0]; }
+static inline float ag_lum(const float *n) { const float d = n[0] * AG_SOLEIL[0] + n[1] * AG_SOLEIL[1] + n[2] * AG_SOLEIL[2]; return 5.0f + 10.0f * (d > 0 ? d : 0); }
+static inline int ag_vue(const float *p, const float *n) { return (E.cam.x - p[0]) * n[0] + (E.cam.y - p[1]) * n[1] + (E.cam.z - p[2]) * n[2] > 0; }
+static inline float ag_rdf(const uint8_t *p) { float f; memcpy(&f, p, 4); return f; }
+/* Polygone soumis dans le budget : -2 s'il n'y tient plus, -1 s'il n'est pas à l'écran */
+static int ag_soumettre(const vv_t *v, int n, int tile, int forced) {
+    if (ag_tris + n - 2 > AG_TRI_MAX) return -2;
+    const int b = submit_poly(v, n, tile, forced, 0);
+    if (b >= 0) ag_tris += n - 2;
+    return b;
+}
+/* Polygone de n points du monde ; avance : seau de sa profondeur moyenne moins avance (négative : reculé) ; 0 : le seau de submit_poly.
+   Quadrilatère qui n'est pas plat (tronçon de piste qui suit le dévers et la pente, plaque, paroi) : deux triangles, même seau (le
+   tracé prend la texture d'un polygone sur un seul plan : sur un quadrilatère tordu elle glissait quand la vue changeait ; 14/11/2026,
+   retour de l'utilisateur : « les textures bougent encore beaucoup trop, plein d'effets de déformation horribles », plus visible depuis
+   les tronçons de 4 sections ; même nombre de triangles au budget) */
+#define AG_TORDU 0.01f       /* écart du quatrième sommet au plan des trois autres, en part de la diagonale */
+static int ag_poly(const ag_pt_t *q, int n, float l, int tile, float avance) {
+    vv_t v[4];
+    float zs = 0;
+    for (int i = 0; i < n; i++) {
+        const v3 o = to_view(q[i].p[0], q[i].p[1], q[i].p[2]);
+        v[i].x = o.x; v[i].y = o.y; v[i].z = o.z; v[i].u = q[i].u; v[i].v = q[i].v; v[i].l = l; zs += o.z;
+    }
+    const int b = avance != 0 ? bucket_of(zs / n - avance) : -1;
+    if (n == 4) {
+        const float *A = q[0].p, *Bp = q[1].p, *C = q[2].p, *D = q[3].p;
+        const float e1[3] = { Bp[0] - A[0], Bp[1] - A[1], Bp[2] - A[2] }, e2[3] = { C[0] - A[0], C[1] - A[1], C[2] - A[2] }, e3[3] = { D[0] - A[0], D[1] - A[1], D[2] - A[2] };
+        float nn[3];
+        cross3_r(e1, e2, nn);
+        const float d = nn[0] * e3[0] + nn[1] * e3[1] + nn[2] * e3[2], ln2 = nn[0] * nn[0] + nn[1] * nn[1] + nn[2] * nn[2];
+        const float dg = e2[0] * e2[0] + e2[1] * e2[1] + e2[2] * e2[2];
+        if (ln2 > 1e-12f && d * d > AG_TORDU * AG_TORDU * ln2 * dg) {   /* (d / |n| : distance de D au plan, comparée à AG_TORDU × la diagonale) */
+            const vv_t t1[3] = { v[0], v[1], v[2] }, t2[3] = { v[0], v[2], v[3] };
+            const int r = ag_soumettre(t1, 3, tile, b);
+            if (r == -2) return -2;
+            const int r2 = ag_soumettre(t2, 3, tile, b);
+            return r2 == -2 ? -2 : r >= 0 ? r : r2;
+        }
+    }
+    return ag_soumettre(v, n, tile, b);
+}
+static inline void ag_pt(ag_pt_t *o, const float *a, const float *d, float k, const float *e, float k2, float u, float v) {
+    for (int i = 0; i < 3; i++) o->p[i] = a[i] + (d ? d[i] * k : 0) + (e ? e[i] * k2 : 0);
+    o->u = u; o->v = v;
+}
+/* Sol : dalles de pas cases dont le centre est entre r0 et r1 de la caméra, devant elle, les proches d'abord (deux passes) ; pas
+   sous le terrain (sa grille : il descend au sol sur ses bords) ; texture une fois par AG_SOL_PAS ; 0 si le budget est épuisé */
+static int ag_sol_anneau(float r0, float r1, float pas) {
+    const camera_t *c = &E.cam;
+    const float fx = c->sy, fz = c->cy, y = AG.sol, l = ag_lum((const float[3]){ 0, 1, 0 }) * 0.9f, tu = pas / AG_SOL_PAS * 64 - 0.01f;
+    if (c->y <= y) return 1;
+    const float tx0 = AG.ter_x0, tz0 = AG.ter_z0, tx1 = tx0 + AG.ter_g * (float)(AG.ter_nx - 1), tz1 = tz0 + AG.ter_g * (float)(AG.ter_nz - 1);
+    const int i0 = (int)floorf((c->x - r1) / pas), i1 = (int)floorf((c->x + r1) / pas);
+    const int j0 = (int)floorf((c->z - r1) / pas), j1 = (int)floorf((c->z + r1) / pas);
+    for (int passe = 0; passe < 2; passe++)
+        for (int j = j0; j <= j1; j++) for (int i = i0; i <= i1; i++) {
+            const float x0 = (float)i * pas, z0 = (float)j * pas, cx = x0 + pas / 2 - c->x, cz = z0 + pas / 2 - c->z, d2 = cx * cx + cz * cz;
+            if (d2 > (r1 + pas) * (r1 + pas) || d2 < r0 * r0 || cx * fx + cz * fz < -pas || (d2 < (r0 + r1) * (r0 + r1) / 4) != (passe == 0)) continue;
+            if (AG.ter && x0 >= tx0 && x0 + pas <= tx1 && z0 >= tz0 && z0 + pas <= tz1) continue;
+            const float a0 = ag_apercu ? 20.5f : 0.01f, a1 = ag_apercu ? 20.5f : tu;   /* (aperçu : une couleur) */
+            const ag_pt_t q[4] = { { { x0, y, z0 }, a0, a0 }, { { x0 + pas, y, z0 }, a1, a0 },
+                                   { { x0 + pas, y, z0 + pas }, a1, a1 }, { { x0, y, z0 + pas }, a0, a1 } };
+            if (ag_poly(q, 4, l, TILE_BIG + AG.tex[AGT_SOL], -AG_REC_SOL) == -2) return 0;
+        }
+    return 1;
+}
+static void ag_sol(void) {
+    const float R = fog_fullc;
+    if (ag_apercu) { ag_sol_anneau(0, R, AG_SOL_APERCU); return; }
+    ag_sol_anneau(0, R * 3, AG_SOL_DALLE);
+}
+/* Terrain autour de la piste (AG.ter, generer.js : relief du thème, lit plat au niveau de la chaussée, ponts au-dessus des creux),
+   en cellules uniformes de ter_g cases jusqu'au bord de l'île (le sol plat n'est pas dessiné sous elle), à toute distance la même
+   précision (14/11/2026 : les super-cellules à 1, 2 ou 4 cellules de pas selon la distance se voyaient changer à grande vitesse) ;
+   aperçu de la piste : une cellule sur deux. Anneaux du plus proche au plus loin (le budget écarte le plus loin) ; cellules hors
+   du champ écartées (cône des côtés de l'image, élargi à sa diagonale quand la caméra penche) ; deux triangles par cellule (la
+   diagonale qui suit le relief) ; pente forte : roche (texture debout), sinon le sol du thème ; lumière de la face ; dessiné après
+   le reste (AG_REC_SOL) */
+static inline float ter_h(int i, int j) {
+    i = i < 0 ? 0 : i >= AG.ter_nx ? AG.ter_nx - 1 : i;
+    j = j < 0 ? 0 : j >= AG.ter_nz ? AG.ter_nz - 1 : j;
+    const uint8_t *p = AG.ter + ((size_t)j * (size_t)AG.ter_nx + (size_t)i) * 2;
+    return AG.sol + (float)(int16_t)(p[0] | p[1] << 8) / 16.0f;
+}
+static int ter_tri(const float *a, const float *b, const float *d) {
+    const float e1[3] = { b[0] - a[0], b[1] - a[1], b[2] - a[2] }, e2[3] = { d[0] - a[0], d[1] - a[1], d[2] - a[2] };
+    float n[3];
+    cross3_r(e1, e2, n);
+    const float ln = sqrtf(n[0] * n[0] + n[1] * n[1] + n[2] * n[2]);
+    if (ln < 1e-6f) return 1;
+    for (int k = 0; k < 3; k++) n[k] /= ln;
+    if (!ag_vue(a, n)) return 1;
+    const float *P[3] = { a, b, d };
+    ag_pt_t q[3];
+    const int roche = n[1] < 0.72f, axe = fabsf(n[0]) > fabsf(n[2]) ? 2 : 0;
+    float u0 = 1e9f, v0 = 1e9f;
+    for (int k = 0; k < 3; k++) {
+        q[k].p[0] = P[k][0]; q[k].p[1] = P[k][1]; q[k].p[2] = P[k][2];
+        q[k].u = ag_apercu ? 20.5f : roche ? P[k][axe] * 8 : P[k][0] * 5.33f; q[k].v = ag_apercu ? 20.5f : roche ? -P[k][1] * 8 : P[k][2] * 5.33f;   /* (aperçu : une couleur) */
+        u0 = fminf(u0, q[k].u); v0 = fminf(v0, q[k].v);
+    }
+    u0 = floorf(u0 / 64) * 64; v0 = floorf(v0 / 64) * 64;
+    for (int k = 0; k < 3; k++) { q[k].u -= u0 - 0.01f; q[k].v -= v0 - 0.01f; }
+    const int sable = AG.eau && fminf(a[1], fminf(b[1], d[1])) > AG.sol + 0.25f;   /* (au bord de l'eau : la mer en bas, le sable au-dessus) */
+    return ag_poly(q, 3, ag_lum(n), TILE_BIG + AG.tex[roche ? AGT_ROCHE : sable ? AGT_TERRE : AGT_SOL], -AG_REC_SOL) != -2;
+}
+static int ter_quad(const float *p00, const float *p10, const float *p11, const float *p01) {
+    if (fabsf(p00[1] - p11[1]) <= fabsf(p10[1] - p01[1])) return ter_tri(p00, p11, p10) && ter_tri(p00, p01, p11);
+    return ter_tri(p10, p00, p01) && ter_tri(p10, p01, p11);
+}
+/* Visibilité précalculée (14/11/2026, demande de l'utilisateur : « n'avoir que des faces dans le champ de vision, inutile de faire de
+   la géométrie qui ne se voit jamais ; les immeubles et montagnes permettent de bloquer la vue ») : bloc VIS1 de la piste (generer.js,
+   visibilite) ; pour la section la plus proche de la caméra, la liste de son groupe : cellules du relief, décors, sections de la piste
+   qui peuvent se voir de là ; rien d'autre n'est parcouru. Caméra hors du couloir des points de vue (de côté au-delà de hw +
+   AG_VIS_COTE, au-dessus de la chaussée au-delà de AG_VIS_HAUT ; aperçu, essais) : sans liste, tout ce qui est dans le champ */
+#define AG_VIS_COTE 1.6f     /* (generer.js : VIS_COTE, VIS_H) */
+#define AG_VIS_HAUT 3.0f
+#define AG_VIS_CEL 4096      /* cellules du relief d'un groupe, au plus */
+#ifndef AG_VIS_PARTS
+#define AG_VIS_PARTS 7       /* (essais : listes du relief 1, des décors 2, des sections 4) */
+#endif
+static int ag_vis_on;
+static const uint8_t *ag_vis_d;
+static uint32_t ag_vsec[(AG_SECT_MAX + 31) / 32];
+static inline uint32_t ag_rd32(const uint8_t *p) { return (uint32_t)p[0] | (uint32_t)p[1] << 8 | (uint32_t)p[2] << 16 | (uint32_t)p[3] << 24; }
+static inline int ag_rd16(const uint8_t *p) { return p[0] | p[1] << 8; }
+static inline int ag_vsec_vu(int i) { return !(AG_VIS_PARTS & 4) || !ag_vis_on || (ag_vsec[i >> 5] >> (i & 31) & 1); }
+static int ag_vis_sec = -1, ag_vis_grp = -1;
+void eng_ag_vis_diag(float *xyz, int *sec, int *groupe) { xyz[0] = E.cam.x; xyz[1] = E.cam.y; xyz[2] = E.cam.z; *sec = ag_vis_sec; *groupe = ag_vis_on ? ag_vis_grp : -1; }
+static void ag_vis_maj(void) {
+    ag_vis_on = 0; ag_vis_sec = -1;
+    if (!AG.vis || ag_apercu || AG.n <= 0) return;
+    const camera_t *c = &E.cam;
+    int best = 0;
+    float bd = 1e30f;
+    for (int i = 0; i < AG.n; i++) {
+        const ag_sect_t *S = &AG.s[i];
+        const float dx = S->x - c->x, dy = S->y - c->y, dz = S->z - c->z, d = dx * dx + dy * dy + dz * dz;
+        if (d < bd) { bd = d; best = i; }
+    }
+    const ag_sect_t *S = &AG.s[best];
+    ag_vis_sec = best;
+    const float dx = c->x - S->x, dy = c->y - S->y, dz = c->z - S->z;
+    const float lat = dx * S->rx + dy * S->ry + dz * S->rz, haut = dx * S->ux + dy * S->uy + dz * S->uz;
+    if (fabsf(lat) > S->hw + AG_VIS_COTE || haut > AG_VIS_HAUT || haut < -0.5f) return;
+    const int inv = (AG.cond & AGC_INVERSE) != 0, orig = inv ? (AG.n - best) % AG.n : best;   /* (sens inverse : les listes suivent l'ordre du paquet) */
+    const int g = orig / AG.vis_g;
+    if (g >= AG.vis_ng) return;
+    const uint32_t o0 = ag_rd32(AG.vis_pos + 4 * (size_t)g), o1 = ag_rd32(AG.vis_pos + 4 * (size_t)g + 4);
+    if (o1 < o0 + 8 || AG.vis + o1 > AG.vis_fin) return;
+    const uint8_t *d = AG.vis + o0;
+    const int nt = ag_rd16(d), nd = ag_rd16(d + 2), ns = ag_rd16(d + 4);
+    if (8 + 6 * (uint32_t)nt + 2 * (uint32_t)nd + 4 * (uint32_t)ns > o1 - o0) return;
+    memset(ag_vsec, 0, sizeof ag_vsec);
+    const uint8_t *p = d + 8 + 6 * nt + 2 * nd;
+    for (int k = 0; k < ns; k++) {
+        const int s0 = ag_rd16(p + 4 * k), s1 = ag_rd16(p + 4 * k + 2);
+        for (int s = s0; s <= s1 && s < AG.n; s++) { const int si = inv ? (AG.n - s) % AG.n : s; ag_vsec[si >> 5] |= 1u << (si & 31); }
+    }
+    ag_vis_d = d; ag_vis_on = 1; ag_vis_grp = g;
+}
+/* Relief d'après la liste du groupe : cellules dans le champ, du plus proche au plus loin (tranches de distance) */
+static void ag_terrain_vis(void) {
+    const camera_t *c = &E.cam;
+    const float g = AG.ter_g, fx = c->sy, fz = c->cy, marge = 1.2f * g, R = g * (float)(AG.ter_nx + AG.ter_nz);   /* (R : tranches jusqu'au bord du terrain) */
+    float k = ((float)RW / 2 + 2) / FOCAL;
+#if ENG_ROULIS
+    if (cam_roule) { const float ky = ((float)RH / 2 + 2) / FOCAL; k = sqrtf(k * k + ky * ky); }
+#endif
+    static uint16_t cel[AG_VIS_CEL], ordre[AG_VIS_CEL];
+    static uint8_t bin[AG_VIS_CEL];
+    int nc = 0, cpt[AG_BINS + 1] = { 0 };
+    const int NI = AG.ter_nx - 1, NJ = AG.ter_nz - 1, nt = ag_rd16(ag_vis_d);
+    for (int r = 0; r < nt && nc < AG_VIS_CEL; r++) {
+        const uint8_t *e = ag_vis_d + 8 + 6 * r;
+        const int J = ag_rd16(e), I0 = ag_rd16(e + 2), I1 = ag_rd16(e + 4);
+        if (J >= NJ) continue;
+        for (int I = I0; I <= I1 && I < NI && nc < AG_VIS_CEL; I++) {
+            const float cx = AG.ter_x0 + g * ((float)I + 0.5f) - c->x, cz = AG.ter_z0 + g * ((float)J + 0.5f) - c->z;
+            const float dev = cx * fx + cz * fz, tr = cx * fz - cz * fx;
+            const float zv = dev * c->cp + (c->y - AG.sol) * c->sp;
+            if (zv < -marge || fabsf(tr) > (zv > 0 ? zv : 0) * k + marge) continue;
+            const int b = (int)(sqrtf(cx * cx + cz * cz) / R * AG_BINS);
+            cel[nc] = (uint16_t)(J * NI + I); bin[nc] = (uint8_t)(b < 0 ? 0 : b >= AG_BINS ? AG_BINS - 1 : b); cpt[bin[nc] + 1]++; nc++;
+        }
+    }
+    for (int b = 0; b < AG_BINS; b++) cpt[b + 1] += cpt[b];
+    for (int i = 0; i < nc; i++) ordre[cpt[bin[i]]++] = cel[i];
+    for (int o = 0; o < nc; o++) {
+        const int I = ordre[o] % NI, J = ordre[o] / NI;
+        float p[4][3];
+        for (int v = 0; v < 4; v++) {
+            const int i = I + (v == 1 || v == 2), j = J + (v >= 2);
+            p[v][0] = AG.ter_x0 + g * (float)i; p[v][1] = ter_h(i, j); p[v][2] = AG.ter_z0 + g * (float)j;
+        }
+        if (!ter_quad(p[0], p[1], p[2], p[3])) return;
+    }
+}
+static void ag_terrain(void) {
+    if (!AG.ter) return;
+    if ((AG_VIS_PARTS & 1) && ag_vis_on && (AG.ter_nx - 1) * (AG.ter_nz - 1) <= 65535) { ag_terrain_vis(); return; }
+    const camera_t *c = &E.cam;
+    const int s = ag_apercu ? 2 : 1, NI = (AG.ter_nx - 1) / s, NJ = (AG.ter_nz - 1) / s;
+    const float g = AG.ter_g * (float)s, fx = c->sy, fz = c->cy, marge = 1.2f * g;
+    float k = ((float)RW / 2 + 2) / FOCAL;   /* côtés de l'image : |travers| <= devant × k */
+#if ENG_ROULIS
+    if (cam_roule) { const float ky = ((float)RH / 2 + 2) / FOCAL; k = sqrtf(k * k + ky * ky); }
+#endif
+    const int ic = (int)floorf((c->x - AG.ter_x0) / g), jc = (int)floorf((c->z - AG.ter_z0) / g);
+    int rmax = ic > NI - 1 - ic ? ic : NI - 1 - ic;
+    rmax = rmax > jc ? rmax : jc; rmax = rmax > NJ - 1 - jc ? rmax : NJ - 1 - jc;
+    for (int r = 0; r <= rmax; r++)
+        for (int J = jc - r; J <= jc + r; J++)
+            for (int I = ic - r; I <= ic + r; I += (J == jc - r || J == jc + r || r == 0) ? 1 : 2 * r) {
+                if (I < 0 || J < 0 || I >= NI || J >= NJ) continue;
+                const float cx = AG.ter_x0 + g * ((float)I + 0.5f) - c->x, cz = AG.ter_z0 + g * ((float)J + 0.5f) - c->z;
+                const float dev = cx * fx + cz * fz, tr = cx * fz - cz * fx;
+                const float zv = dev * c->cp + (c->y - AG.sol) * c->sp;   /* profondeur de vue au plus (point au niveau du sol ; tangage compris) */
+                if (zv < -marge || fabsf(tr) > (zv > 0 ? zv : 0) * k + marge) continue;   /* derrière la caméra, hors des côtés */
+                float p[4][3];
+                for (int v = 0; v < 4; v++) {
+                    const int i = (I + (v == 1 || v == 2)) * s, j = (J + (v >= 2)) * s;
+                    p[v][0] = AG.ter_x0 + AG.ter_g * (float)i; p[v][1] = ter_h(i, j); p[v][2] = AG.ter_z0 + AG.ter_g * (float)j;
+                }
+                if (!ter_quad(p[0], p[1], p[2], p[3])) return;
+            }
+}
+/* Décors proches (AG.dec, generer.js : decorPiste ; 14/11/2026, demande de l'utilisateur : « du décor beaucoup plus proche avec de la
+   hauteur » pour masquer l'apparition des géométries) : prismes à n côtés (immeubles en boîte, aiguilles de roche effilées), du plus
+   proche au plus loin jusqu'à la vue, hors du champ écartés ; flancs à la texture de la roche du thème (la ville : béton aux fenêtres
+   éclairées), dessus aux piliers ; les plus lointains (au-delà de AG_DEC_FONDU de la vue) apparaissent en fondu translucide */
+#define AG_DEC_FONDU 0.8f
+static void ag_uv_base(ag_pt_t *q, int n);
+static void ag_decors(void) {
+    if (!AG.dec || ag_apercu) return;
+    const camera_t *c = &E.cam;
+    const float R = fog_fullc, fx = c->sy, fz = c->cy;
+    float k = ((float)RW / 2 + 2) / FOCAL;
+#if ENG_ROULIS
+    if (cam_roule) { const float ky = ((float)RH / 2 + 2) / FOCAL; k = sqrtf(k * k + ky * ky); }
+#endif
+    /* visibles, rangés par distance (tranches) */
+    static uint16_t vis[1024];
+    static uint8_t bin[1024];
+    int nv = 0, cpt[AG_BINS + 1] = { 0 };
+    const int dl = (AG_VIS_PARTS & 2) && ag_vis_on, nliste = dl ? ag_rd16(ag_vis_d + 2) : AG.ndec;
+    const uint8_t *liste = dl ? ag_vis_d + 8 + 6 * ag_rd16(ag_vis_d) : NULL;
+    for (int ii = 0; ii < nliste && nv < 1024; ii++) {
+        const int i = liste ? ag_rd16(liste + 2 * ii) : ii;
+        if (i >= AG.ndec) continue;
+        const uint8_t *p = AG.dec + (size_t)i * 24;
+        const float x = ag_rdf(p), z = ag_rdf(p + 4), r = ag_rdf(p + 16), dx = x - c->x, dz = z - c->z, d = sqrtf(dx * dx + dz * dz);
+        if (d > R + r) continue;
+        const float dev = dx * fx + dz * fz, tr = dx * fz - dz * fx;
+        if (dev < -r || fabsf(tr) > (dev > 0 ? dev : 0) * k + r * 1.5f) continue;
+        const int b = (int)(d / (R + 1) * AG_BINS);
+        bin[nv] = (uint8_t)(b < 0 ? 0 : b >= AG_BINS ? AG_BINS - 1 : b); vis[nv++] = (uint16_t)i; cpt[bin[nv - 1] + 1]++;
+    }
+    for (int b = 0; b < AG_BINS; b++) cpt[b + 1] += cpt[b];
+    static uint16_t ordre[1024];
+    for (int v = 0; v < nv; v++) ordre[cpt[bin[v]]++] = vis[v];
+    for (int o = 0; o < nv; o++) {
+        const uint8_t *p = AG.dec + (size_t)ordre[o] * 24;
+        const float x = ag_rdf(p), z = ag_rdf(p + 4), y0 = ag_rdf(p + 8), y1 = ag_rdf(p + 12), r = ag_rdf(p + 16);
+        const int n = p[20] < 3 ? 3 : p[20] > 8 ? 8 : p[20], bat = p[21] == 1, veg = p[21] == 2, bati = p[21] == 3;   /* sortes : 0 roche, 1 immeuble, 2 végétal, 3 bâtiment (béton du thème) */
+        const float a0 = (float)p[22] * (2 * PI_F / 256), eff = (float)p[23] / 100.0f, dx = x - c->x, dz = z - c->z, d = sqrtf(dx * dx + dz * dz);
+        const int fade = d > R * AG_DEC_FONDU ? (int)fminf(14, (d - R * AG_DEC_FONDU) / (R * (1 - AG_DEC_FONDU)) * 15) : 0;
+        float Vb[8][3], Vt[8][3];
+        for (int j = 0; j < n; j++) {
+            const float a = a0 + (float)j * (2 * PI_F / (float)n), ca = cosf(a), sa = sinf(a);
+            Vb[j][0] = x + r * ca; Vb[j][1] = y0; Vb[j][2] = z + r * sa;
+            Vt[j][0] = x + r * eff * ca; Vt[j][1] = y1; Vt[j][2] = z + r * eff * sa;
+        }
+        const int p0 = B->nprims;
+        float u = 0;
+        for (int j = 0; j < n; j++) {
+            const int j2 = (j + 1) % n;
+            const float e1[3] = { Vb[j2][0] - Vb[j][0], 0, Vb[j2][2] - Vb[j][2] }, L = sqrtf(e1[0] * e1[0] + e1[2] * e1[2]);
+            float nn[3] = { e1[2], 0, -e1[0] };   /* dehors (sens des sommets : angle croissant) */
+            const float cx = (Vb[j][0] + Vb[j2][0]) / 2 - x, cz = (Vb[j][2] + Vb[j2][2]) / 2 - z;
+            if (nn[0] * cx + nn[2] * cz < 0) { nn[0] = -nn[0]; nn[2] = -nn[2]; }
+            const float ln = sqrtf(nn[0] * nn[0] + nn[2] * nn[2]);
+            if (ln > 1e-6f) { nn[0] /= ln; nn[2] /= ln; }
+            const float hy = (1 - eff) * r;   /* flanc effilé : normale relevée */
+            nn[1] = hy / fmaxf(1e-3f, y1 - y0); { const float l2 = sqrtf(nn[0] * nn[0] + nn[1] * nn[1] + nn[2] * nn[2]); nn[0] /= l2; nn[1] /= l2; nn[2] /= l2; }
+            const float u1 = u + L * 8;
+            if (ag_vue(Vb[j], nn)) {
+                ag_pt_t q[4] = { { { Vb[j][0], Vb[j][1], Vb[j][2] }, u, (y1 - y0) * 8 }, { { Vb[j2][0], Vb[j2][1], Vb[j2][2] }, u1, (y1 - y0) * 8 },
+                                 { { Vt[j2][0], Vt[j2][1], Vt[j2][2] }, u1, 0.01f }, { { Vt[j][0], Vt[j][1], Vt[j][2] }, u, 0.01f } };
+                ag_uv_base(q, 4);
+                if (ag_poly(q, 4, ag_lum(nn), TILE_BIG + AG.tex[veg ? AGT_FEUILLE : bati ? AGT_PILIER : AGT_ROCHE], -AG_REC_MUR) == -2) return;
+            }
+            u = fmodf(u1, 64);
+        }
+        static const float HAUT[3] = { 0, 1, 0 };
+        if (c->y > y1) {   /* dessus : éventail de quadrilatères */
+            for (int j = 1; j + 1 < n; j += 2) {
+                const int j3 = j + 2 < n ? j + 2 : j + 1;
+                ag_pt_t q[4] = { { { Vt[0][0], Vt[0][1], Vt[0][2] }, Vt[0][0] * 8, Vt[0][2] * 8 }, { { Vt[j][0], Vt[j][1], Vt[j][2] }, Vt[j][0] * 8, Vt[j][2] * 8 },
+                                 { { Vt[j + 1][0], Vt[j + 1][1], Vt[j + 1][2] }, Vt[j + 1][0] * 8, Vt[j + 1][2] * 8 }, { { Vt[j3][0], Vt[j3][1], Vt[j3][2] }, Vt[j3][0] * 8, Vt[j3][2] * 8 } };
+                ag_uv_base(q, 4);
+                if (ag_poly(q, j3 == j + 1 ? 3 : 4, ag_lum(HAUT), TILE_BIG + AG.tex[bat || bati ? AGT_PILIER : veg ? AGT_FEUILLE : AGT_ROCHE], -AG_REC_MUR) == -2) return;
+            }
+        }
+        if (c->y < y0) {   /* dessous (décor suspendu : chapeau, couronne), vu d'en bas */
+            static const float BAS[3] = { 0, -1, 0 };
+            for (int j = 1; j + 1 < n; j += 2) {
+                const int j3 = j + 2 < n ? j + 2 : j + 1;
+                ag_pt_t q[4] = { { { Vb[0][0], Vb[0][1], Vb[0][2] }, Vb[0][0] * 8, Vb[0][2] * 8 }, { { Vb[j3][0], Vb[j3][1], Vb[j3][2] }, Vb[j3][0] * 8, Vb[j3][2] * 8 },
+                                 { { Vb[j + 1][0], Vb[j + 1][1], Vb[j + 1][2] }, Vb[j + 1][0] * 8, Vb[j + 1][2] * 8 }, { { Vb[j][0], Vb[j][1], Vb[j][2] }, Vb[j][0] * 8, Vb[j][2] * 8 } };
+                ag_uv_base(q, 4);
+                const int nq = j3 == j + 1 ? 3 : 4;
+                if (nq == 3) { q[1] = q[2]; q[2] = q[3]; }
+                if (ag_poly(q, nq, ag_lum(BAS) * 0.7f, TILE_BIG + AG.tex[veg ? AGT_FEUILLE : bati ? AGT_PILIER : AGT_ROCHE], -AG_REC_MUR) == -2) return;
+            }
+        }
+        if (fade) for (int q = p0; q < B->nprims; q++) B->prims[q].fade = (uint8_t)fade;
+    }
+}
+/* Obstacles des canyons (AG.obst, antigrav.c) : piliers de roche posés sur la chaussée, prismes effilés dans le repère de la section
+   (le haut de la piste), soulevés avec elle par les ondes du SÉISME ; ceux dont la section est vue (visibilité précalculée) */
+static int ag_vue_face(const float *a, const float *b, const float *c, const float *vers, float *n);
+static int ag_obstacles(void) {
+    const camera_t *c = &E.cam;
+    const float R = fog_fullc;
+    for (int k = 0; k < AG.nobst; k++) {
+        const ag_obst_t *o = &AG.obst[k];
+        if (!ag_vsec_vu(o->sec)) continue;
+        const ag_sect_t *S = &AG.s[o->sec];
+        const float dep = ag_onde_dep(o->sec), u[3] = { S->ux, S->uy, S->uz }, r[3] = { S->rx, S->ry, S->rz }, f[3] = { S->fx, S->fy, S->fz };
+        const float b[3] = { S->x + r[0] * o->d + u[0] * dep, S->y + r[1] * o->d + u[1] * dep, S->z + r[2] * o->d + u[2] * dep };
+        const float dx = b[0] - c->x, dz = b[2] - c->z;
+        if (dx * dx + dz * dz > R * R || dx * c->sy + dz * c->cy < -2) continue;
+        float Vb[8][3], Vt[8][3];
+        const int n = o->cotes;
+        for (int j = 0; j < n; j++) {
+            const float a = o->a + (float)j * (6.2831853f / (float)n), ca = cosf(a), sa = sinf(a);
+            for (int i = 0; i < 3; i++) {
+                const float e = r[i] * ca + f[i] * sa;
+                Vb[j][i] = b[i] + e * o->r - u[i] * 0.3f; Vt[j][i] = b[i] + e * o->r * 0.55f + u[i] * o->h;
+            }
+        }
+        float u0 = 0;
+        for (int j = 0; j < n; j++) {
+            const int j2 = (j + 1) % n;
+            ag_pt_t q[4] = { { { Vb[j][0], Vb[j][1], Vb[j][2] }, u0, o->h * 8 }, { { Vb[j2][0], Vb[j2][1], Vb[j2][2] }, u0 + o->r * 6, o->h * 8 },
+                             { { Vt[j2][0], Vt[j2][1], Vt[j2][2] }, u0 + o->r * 6, 0.01f }, { { Vt[j][0], Vt[j][1], Vt[j][2] }, u0, 0.01f } };
+            u0 += o->r * 6;
+            float nn[3];
+            if (!ag_vue_face(q[0].p, q[1].p, q[3].p, (const float[3]){ q[0].p[0] * 2 - b[0], q[0].p[1] * 2 - b[1], q[0].p[2] * 2 - b[2] }, nn)) continue;
+            ag_uv_base(q, 4);
+            if (ag_poly(q, 4, ag_lum(nn), TILE_BIG + AG.tex[AGT_ROCHE], -AG_REC_MUR) == -2) return 0;
+        }
+        const float top[3] = { b[0] + u[0] * o->h, b[1] + u[1] * o->h, b[2] + u[2] * o->h };
+        if ((c->x - top[0]) * u[0] + (c->y - top[1]) * u[1] + (c->z - top[2]) * u[2] > 0)
+            for (int j = 1; j + 1 < n; j++) {
+                ag_pt_t q[3] = { { { Vt[0][0], Vt[0][1], Vt[0][2] }, Vt[0][0] * 8, Vt[0][2] * 8 }, { { Vt[j][0], Vt[j][1], Vt[j][2] }, Vt[j][0] * 8, Vt[j][2] * 8 },
+                                 { { Vt[j + 1][0], Vt[j + 1][1], Vt[j + 1][2] }, Vt[j + 1][0] * 8, Vt[j + 1][2] * 8 } };
+                ag_uv_base(q, 3);
+                if (ag_poly(q, 3, ag_lum(u), TILE_BIG + AG.tex[AGT_ROCHE], -AG_REC_MUR) == -2) return 0;
+            }
+    }
+    return 1;
+}
+/* Pilier sous la section : pavé vertical (dans les axes du monde) du dessous du ruban jusqu'au sol */
+static void ag_pilier(const ag_sect_t *S) {
+    const float top = S->y - S->uy * AG_EP - 0.05f, bas = AG.sol, h = top - bas, p = AG_PILIER;
+    if (h < 0.3f) return;
+    static const float N[4][3] = { { 1, 0, 0 }, { 0, 0, 1 }, { -1, 0, 0 }, { 0, 0, -1 } };
+    for (int f = 0; f < 4; f++) {
+        const float nx = N[f][0], nz = N[f][2], ax = -nz, az = nx;   /* ax, az : le long de la face */
+        const float cx = S->x + nx * p, cz = S->z + nz * p, pt[3] = { cx, top, cz };
+        if (!ag_vue(pt, N[f])) continue;
+        const ag_pt_t q[4] = { { { cx - ax * p, top, cz - az * p }, 0.01f, 0.01f }, { { cx + ax * p, top, cz + az * p }, 31.99f, 0.01f },
+                               { { cx + ax * p, bas, cz + az * p }, 31.99f, h * 16 }, { { cx - ax * p, bas, cz - az * p }, 0.01f, h * 16 } };
+        ag_poly(q, 4, ag_lum(N[f]), TILE_BIG + AG.tex[AGT_PILIER], 0);
+    }
+}
+/* Portion naturelle (13/11/2026, demande de l'utilisateur : « des parties au milieu d'un environnement naturel », comme les courses de
+   pods de la N64) : au lieu des murs, une paroi de roche de chaque côté (AG.tex[AGT_ROCHE]), penchée vers l'extérieur, de la hauteur
+   de la section (paroi, irrégulière), un plateau au-dessus et une pente jusqu'au sol ; tunnel : une voûte à hauteur de la paroi (au
+   plus AG_VOUTE), dessous dans l'ombre, dessus comme le plateau. Les murs de la physique restent au bord de la chaussée */
+#define AG_PLATEAU 6.0f      /* largeur du plateau au-dessus d'une paroi */
+#define AG_VOUTE 3.2f        /* hauteur de la voûte d'un tunnel au-dessus de la chaussée, au plus */
+#define AG_TUNNEL_PENTE 0.6f /* flanc d'un tunnel : vers l'extérieur, AG_TUNNEL_PENTE × sa hauteur + 1 (raide : roche ; le flanc doux d'une paroi prenait
+                                la texture du sol et se fondait dans le terrain) */
+/* Portail d'un tunnel (14/11/2026, retour de l'utilisateur : « l'entrée des tunnels n'est toujours qu'un tube sans épaisseur ») :
+   à l'entrée et à la sortie, un bloc qui avance de AG_PORTAIL_P hors de la coupe, déborde de l'ouverture de AG_PORTAIL_L de chaque
+   côté et de AG_PORTAIL_H au-dessus de la voûte, posé jusqu'au sol : façade, côtés, dessus, et l'épaisseur de l'ouverture (ses
+   deux tableaux et son plafond) */
+#define AG_PORTAIL_P 1.5f
+#define AG_PORTAIL_L 1.4f
+#define AG_PORTAIL_H 2.4f
+#define AG_TOIT 2.0f         /* épaisseur du toit d'un tunnel au moins (14/11/2026, retour de l'utilisateur : « les tunnels n'ont toujours pas
+                                de volume » : le dessus était la voûte même, sans épaisseur) ; dessus à la hauteur de la paroi s'il est plus haut */
+/* Face plane par trois de ses points, vue de face ? n : sa normale (unitaire), tournée vers le point vers (le côté d'où elle se voit) ;
+   13/11/2026 : les parois penchées des portions naturelles étaient testées avec la perpendiculaire à la chaussée relevée, et
+   disparaissaient quand la caméra passait au-dessus et près d'elles (retour de l'utilisateur : « quand on est proche, les textures
+   disparaissent ») */
+static int ag_vue_face(const float *a, const float *b, const float *c, const float *vers, float *n) {
+    const float e1[3] = { b[0] - a[0], b[1] - a[1], b[2] - a[2] }, e2[3] = { c[0] - a[0], c[1] - a[1], c[2] - a[2] };
+    cross3_r(e1, e2, n);
+    float ln = sqrtf(n[0] * n[0] + n[1] * n[1] + n[2] * n[2]);
+    if (ln < 1e-9f) return 0;
+    if ((vers[0] - a[0]) * n[0] + (vers[1] - a[1]) * n[1] + (vers[2] - a[2]) * n[2] < 0) ln = -ln;
+    for (int k = 0; k < 3; k++) n[k] /= ln;
+    return ag_vue(a, n);
+}
+/* Coordonnées de texture d'une face ramenées près de zéro d'un même multiple de 64 pour tous ses points (ramenées point par point,
+   deux points de part et d'autre d'un multiple de 64 repliaient la texture à travers toute la face) */
+static void ag_uv_base(ag_pt_t *q, int n) {
+    float u0 = 1e9f, v0 = 1e9f;
+    for (int i = 0; i < n; i++) { u0 = fminf(u0, q[i].u); v0 = fminf(v0, q[i].v); }
+    u0 = floorf(u0 / 64) * 64; v0 = floorf(v0 / 64) * 64;
+    for (int i = 0; i < n; i++) { q[i].u -= u0 - 0.01f; q[i].v -= v0 - 0.01f; }
+}
+/* Bout d'une portion naturelle (13/11/2026, retour de l'utilisateur : « les environnements ne sont pas fermés à l'entrée et à la
+   sortie ») : de chaque côté, la coupe fermée dans le plan de la section S, du sol sous le bord de la chaussée au pied de la paroi,
+   à son haut, au bout du plateau et au pied de la pente ; vers sens × le devant de S (-1 : l'entrée, vue en arrivant ; 1 : la sortie) */
+/* Portail (AG_PORTAIL_*) : chaque face dans le repère de la coupe (x vers la droite de la section, y le haut de la piste, z vers
+   dehors), ses quatre coins, sa normale ; façade et dehors du bloc à la texture des piliers, épaisseur de l'ouverture à celle des
+   parois du tunnel, dans l'ombre */
+static int ag_portail(const ag_sect_t *S, float h, float sens) {
+    const float c[3] = { S->x, S->y, S->z }, r[3] = { S->rx, S->ry, S->rz }, u[3] = { S->ux, S->uy, S->uz }, z[3] = { S->fx * sens, S->fy * sens, S->fz * sens };
+    const float w = S->hw, X = w + AG_PORTAIL_L, D = AG_PORTAIL_P, H = h + AG_PORTAIL_H, B = -fmaxf(0.3f, c[1] - AG.sol);
+    /* coins (x, y, z) et normale (x, y, z) de chaque face ; dedans : l'épaisseur de l'ouverture */
+    static const int NF = 9;
+    const float F[9][4][3] = {
+        { { -X, B, D }, { -w, B, D }, { -w, H, D }, { -X, H, D } },     /* façade : montant gauche */
+        { { w, B, D }, { X, B, D }, { X, H, D }, { w, H, D } },         /* montant droit */
+        { { -w, h, D }, { w, h, D }, { w, H, D }, { -w, H, D } },       /* linteau */
+        { { -X, B, 0 }, { -X, B, D }, { -X, H, D }, { -X, H, 0 } },     /* côté gauche */
+        { { X, B, D }, { X, B, 0 }, { X, H, 0 }, { X, H, D } },         /* côté droit */
+        { { -X, H, D }, { X, H, D }, { X, H, 0 }, { -X, H, 0 } },       /* dessus */
+        { { -w, AG_MUR_H, 0 }, { -w, AG_MUR_H, D }, { -w, h, D }, { -w, h, 0 } },   /* tableau gauche (au-dessus du mur de la piste) */
+        { { w, AG_MUR_H, D }, { w, AG_MUR_H, 0 }, { w, h, 0 }, { w, h, D } },     /* tableau droit */
+        { { -w, h, 0 }, { w, h, 0 }, { w, h, D }, { -w, h, D } },       /* plafond de l'ouverture */
+    };
+    static const float N[9][3] = { { 0, 0, 1 }, { 0, 0, 1 }, { 0, 0, 1 }, { -1, 0, 0 }, { 1, 0, 0 }, { 0, 1, 0 }, { 1, 0, 0 }, { -1, 0, 0 }, { 0, -1, 0 } };
+    for (int k = 0; k < NF; k++) {
+        const int dedans = k >= 6;
+        float n[3], P[4][3];
+        for (int i = 0; i < 3; i++) n[i] = r[i] * N[k][0] + u[i] * N[k][1] + z[i] * N[k][2];
+        for (int v = 0; v < 4; v++) for (int i = 0; i < 3; i++) P[v][i] = c[i] + r[i] * F[k][v][0] + u[i] * F[k][v][1] + z[i] * F[k][v][2];
+        if (!ag_vue(P[0], n)) continue;
+        ag_pt_t q[4];
+        for (int v = 0; v < 4; v++) {
+            const float *L = F[k][v];
+            q[v].p[0] = P[v][0]; q[v].p[1] = P[v][1]; q[v].p[2] = P[v][2];
+            q[v].u = (N[k][2] != 0 || N[k][1] != 0 ? L[0] : L[2]) * 8; q[v].v = (N[k][1] != 0 ? L[2] : H - L[1]) * 8;
+        }
+        ag_uv_base(q, 4);
+        if (ag_poly(q, 4, ag_lum(n) * (dedans ? 0.55f : 1), TILE_BIG + AG.tex[dedans ? AGT_ROCHE : AGT_PILIER], -AG_REC_MUR) == -2) return 0;
+    }
+    return 1;
+}
+static int ag_bout(const ag_sect_t *S, const float *L, const float *R, float h, float ht, float pen, float sens) {
+    const float u[3] = { S->ux, S->uy, S->uz }, nf[3] = { S->fx * sens, S->fy * sens, S->fz * sens }, c[3] = { S->x, S->y, S->z };
+    if (h <= 0.05f || !ag_vue(c, nf)) return 1;
+    const float l = ag_lum(nf) * 0.85f, sol = AG.sol;
+    for (int cote = 0; cote < 2; cote++) {
+        const float *P = cote ? R : L, sg = cote ? 1.0f : -1.0f, o[3] = { S->rx * sg, S->ry * sg, S->rz * sg };
+        float Pb[3], T[3], G[3], Bs[3];
+        for (int k = 0; k < 3; k++) { Pb[k] = P[k] - u[k] * 0.3f; T[k] = P[k] + u[k] * ht + o[k] * ht * pen; }   /* (ht : le dessus) */
+        if (T[1] <= sol) continue;
+        const float ext = ht > h + 0.01f ? AG_TUNNEL_PENTE * (T[1] - sol) + 1 : AG_PLATEAU + T[1] - sol;   /* pied du flanc (ag_naturel) */
+        for (int k = 0; k < 3; k++) G[k] = T[k] + o[k] * ext;
+        G[1] = sol;
+        Bs[0] = P[0]; Bs[1] = sol; Bs[2] = P[2];
+        const float *V[4] = { Bs, Pb, T, G };
+        ag_pt_t q[4];
+        for (int i = 0; i < 4; i++) {   /* roche debout : en travers depuis le bord, vers le bas depuis le haut de la paroi */
+            const float d[3] = { V[i][0] - P[0], V[i][1] - P[1], V[i][2] - P[2] };
+            q[i].p[0] = V[i][0]; q[i].p[1] = V[i][1]; q[i].p[2] = V[i][2];
+            q[i].u = fabsf(d[0] * o[0] + d[2] * o[2]) * 8 + 0.01f; q[i].v = (T[1] - V[i][1]) * 8 + 0.01f;
+        }
+        if (ag_poly(q, 4, l, TILE_BIG + AG.tex[AGT_ROCHE], -AG_REC_MUR) == -2) return 0;
+    }
+    if (ht > h + 0.01f && !ag_portail(S, h, sens)) return 0;   /* tunnel : son portail */
+    return 1;
+}
+static int ag_naturel(const ag_sect_t *a, const ag_sect_t *b, const float *La, const float *Lb, const float *Ra, const float *Rb, float lon) {
+    const float ua[3] = { a->ux, a->uy, a->uz }, ub[3] = { b->ux, b->uy, b->uz };
+    /* tunnel d'après la section de départ du segment (jusqu'à la suivante, même hors du tunnel : la voûte va jusqu'au bout) ; la sortie
+       garde la hauteur de la paroi (avant le 13/11/2026, elle retombait à zéro sur une case : un biseau ouvert) */
+    const int tun = (a->drap & AGS_TUNNEL) != 0, sortie = !(b->drap & AGS_NATUREL), entree = !(AG.s[((int)(a - AG.s) - 1 + AG.n) % AG.n].drap & AGS_NATUREL);
+    const float pa = a->paroi, pb = sortie ? a->paroi : b->paroi;
+    const float ha = tun ? fminf(pa, AG_VOUTE) : pa, hb = tun ? fminf(pb, AG_VOUTE) : pb, pen = tun ? 0 : 0.28f;
+    const float ta = tun ? fmaxf(pa, ha + AG_TOIT) : ha, tb = tun ? fmaxf(pb, hb + AG_TOIT) : hb;   /* hauteur du dessus (tunnel : toit épais) */
+    if (entree && !ag_bout(a, La, Ra, ha, ta, pen, -1)) return 0;
+    if (sortie && !ag_bout(b, Lb, Rb, hb, tb, pen, 1)) return 0;
+    /* tunnel qui commence ou finit dans un canyon (la section voisine naturelle, sans voûte) : son portail seul, les parois du canyon
+       continuent (14/11/2026 : sans bout reconnu, la voûte commençait dans le vide, « un tube sans épaisseur ») */
+    if (tun && !entree && !(AG.s[((int)(a - AG.s) - 1 + AG.n) % AG.n].drap & AGS_TUNNEL) && !ag_portail(a, ha, -1)) return 0;
+    if (tun && !sortie && !(b->drap & AGS_TUNNEL) && !ag_portail(b, hb, 1)) return 0;
+    const float wa = fmodf(a->s * 8, 64), wb = wa + lon * 8;
+    ag_pt_t q[4];
+    float Ta[2][3], Tb[2][3], Ua[2][3], Ub[2][3];   /* hauts des deux parois, dessus de la masse (tunnel : au-dessus du toit) */
+    for (int cote = 0; cote < 2; cote++) {
+        const float *Pa = cote ? Ra : La, *Pb = cote ? Rb : Lb, sg = cote ? 1.0f : -1.0f;
+        const float oa[3] = { a->rx * sg, a->ry * sg, a->rz * sg }, ob[3] = { b->rx * sg, b->ry * sg, b->rz * sg };   /* vers l'extérieur */
+        for (int k = 0; k < 3; k++) { Ta[cote][k] = Pa[k] + ua[k] * ha + oa[k] * ha * pen; Tb[cote][k] = Pb[k] + ub[k] * hb + ob[k] * hb * pen; }
+        for (int k = 0; k < 3; k++) { Ua[cote][k] = Pa[k] + ua[k] * ta + oa[k] * ta * pen; Ub[cote][k] = Pb[k] + ub[k] * tb + ob[k] * tb * pen; }
+        float nin[3];
+        const float route[3] = { a->x + ua[0], a->y + ua[1], a->z + ua[2] };
+        ag_pt(&q[0], Pa, ua, -0.3f, NULL, 0, wa, ha * 8 + 2.4f); ag_pt(&q[1], Pb, ub, -0.3f, NULL, 0, wb, hb * 8 + 2.4f);
+        ag_pt(&q[2], Tb[cote], NULL, 0, NULL, 0, wb, 0.01f); ag_pt(&q[3], Ta[cote], NULL, 0, NULL, 0, wa, 0.01f);
+        if (ag_vue_face(q[0].p, q[1].p, q[3].p, route, nin))   /* face de la paroi, vers la chaussée */
+            if (ag_poly(q, 4, ag_lum(nin) * (tun ? 0.55f : 1), TILE_BIG + AG.tex[AGT_ROCHE], -AG_REC_MUR) == -2) return 0;
+        /* Flanc (14/11/2026 : à la place du plateau et de la pente, dessinés de près seulement) : du haut de la paroi jusqu'au sol,
+           à AG_PLATEAU plus sa hauteur vers l'extérieur ; texturé comme le relief (ter_tri : roche si raide, sinon le sol du thème) */
+        float Ga[3], Gb[3];
+        const float exa = tun ? AG_TUNNEL_PENTE * (Ua[cote][1] - AG.sol) + 1 : AG_PLATEAU + Ua[cote][1] - AG.sol, exb = tun ? AG_TUNNEL_PENTE * (Ub[cote][1] - AG.sol) + 1 : AG_PLATEAU + Ub[cote][1] - AG.sol;
+        for (int k = 0; k < 3; k++) { Ga[k] = Ua[cote][k] + oa[k] * exa; Gb[k] = Ub[cote][k] + ob[k] * exb; }
+        Ga[1] = Gb[1] = AG.sol;
+        if (Ua[cote][1] > AG.sol || Ub[cote][1] > AG.sol) {
+            const float e1[3] = { Ub[cote][0] - Ua[cote][0], Ub[cote][1] - Ua[cote][1], Ub[cote][2] - Ua[cote][2] }, e2[3] = { Ga[0] - Ua[cote][0], Ga[1] - Ua[cote][1], Ga[2] - Ua[cote][2] };
+            float nf[3];
+            cross3_r(e1, e2, nf);
+            const int ok = nf[1] >= 0 ? ter_tri(Ua[cote], Ub[cote], Ga) && ter_tri(Ub[cote], Gb, Ga) : ter_tri(Ua[cote], Ga, Ub[cote]) && ter_tri(Ub[cote], Ga, Gb);
+            if (!ok) return 0;
+        }
+    }
+    if (tun) {   /* voûte : dessous dans l'ombre ; dessus de la masse, au-dessus du toit, comme le relief */
+        float bas[3], dessus[3];
+        const float route[3] = { a->x, a->y, a->z }, ciel[3] = { Ua[0][0], Ua[0][1] + 50, Ua[0][2] };
+        if (ag_vue_face(Ta[0], Ta[1], Tb[1], route, bas)) {
+            ag_pt(&q[0], Ta[0], NULL, 0, NULL, 0, wa, 0.01f); ag_pt(&q[1], Ta[1], NULL, 0, NULL, 0, wa, 63.99f);
+            ag_pt(&q[2], Tb[1], NULL, 0, NULL, 0, wb, 63.99f); ag_pt(&q[3], Tb[0], NULL, 0, NULL, 0, wb, 0.01f);
+            if (ag_poly(q, 4, 3, TILE_BIG + AG.tex[AGT_ROCHE], -AG_REC_MUR) == -2) return 0;
+        }
+        if (ag_vue_face(Ua[0], Ua[1], Ub[1], ciel, dessus)) {
+            ag_pt(&q[0], Ua[0], NULL, 0, NULL, 0, Ua[0][0] * 5.33f, Ua[0][2] * 5.33f); ag_pt(&q[1], Ua[1], NULL, 0, NULL, 0, Ua[1][0] * 5.33f, Ua[1][2] * 5.33f);
+            ag_pt(&q[2], Ub[1], NULL, 0, NULL, 0, Ub[1][0] * 5.33f, Ub[1][2] * 5.33f); ag_pt(&q[3], Ub[0], NULL, 0, NULL, 0, Ub[0][0] * 5.33f, Ub[0][2] * 5.33f);
+            ag_uv_base(q, 4);
+            if (ag_poly(q, 4, ag_lum(dessus), TILE_BIG + AG.tex[AGT_SOL], -AG_REC_MUR) == -2) return 0;
+        }
+    }
+    return 1;
+}
+/* Segment de piste de la section i à la section i + m : chaussée (ou dessous, vue d'en bas), murs (face intérieure, ou extérieure
+   si elle est vue et que le segment est proche) ; 0 si le budget est épuisé */
+static int ag_segment(int i, int m) {
+    const ag_sect_t *a = &AG.s[i], *b = &AG.s[(i + m) % AG.n];
+    float lon = 0;
+    for (int k = 0; k < m; k++) lon += AG.s[(i + k) % AG.n].l;
+    const float da = ag_onde_dep(i), db = ag_onde_dep((i + m) % AG.n);   /* piste soulevée par l'onde d'un SÉISME (antigrav.c) */
+    const float ca[3] = { a->x + a->ux * da, a->y + a->uy * da, a->z + a->uz * da }, cb[3] = { b->x + b->ux * db, b->y + b->uy * db, b->z + b->uz * db };
+    const float ra[3] = { a->rx, a->ry, a->rz }, rb[3] = { b->rx, b->ry, b->rz };
+    const float ua[3] = { a->ux, a->uy, a->uz }, ub[3] = { b->ux, b->uy, b->uz }, nua[3] = { -a->ux, -a->uy, -a->uz };
+    const float va = fmodf(a->s * AG_TEX_L, 64), vb = va + lon * AG_TEX_L, wa = fmodf(a->s * AG_TEX_L, 32), wb = wa + lon * AG_TEX_L;
+    float La[3], Lb[3], Ra[3], Rb[3];
+    for (int k = 0; k < 3; k++) { La[k] = ca[k] - ra[k] * a->hw; Lb[k] = cb[k] - rb[k] * b->hw; Ra[k] = ca[k] + ra[k] * a->hw; Rb[k] = cb[k] + rb[k] * b->hw; }
+    const int nat = (a->drap & AGS_NATUREL) != 0;
+    ag_pt_t q[4];
+    if (ag_apercu) {   /* aperçu : la chaussée seule, élargie, à la couleur du néon B de son bord (pleine lumière), vue des deux côtés */
+        const float k = 2.4f;
+        for (int i = 0; i < 3; i++) { La[i] = ca[i] - ra[i] * a->hw * k; Lb[i] = cb[i] - rb[i] * b->hw * k; Ra[i] = ca[i] + ra[i] * a->hw * k; Rb[i] = cb[i] + rb[i] * b->hw * k; }
+        ag_pt(&q[0], La, ua, 0.1f, NULL, 0, 61.5f, 1.5f); ag_pt(&q[1], Ra, ua, 0.1f, NULL, 0, 61.5f, 1.5f);
+        ag_pt(&q[2], Rb, ub, 0.1f, NULL, 0, 61.5f, 1.5f); ag_pt(&q[3], Lb, ub, 0.1f, NULL, 0, 61.5f, 1.5f);
+        return ag_poly(q, 4, 15, TILE_BIG + AG.tex[AGT_PISTE], 1e6f) != -2;   /* (texel du néon B du bord droit ; premier seau : devant tout) */
+    }
+    if (ag_vue(ca, ua)) {
+        ag_pt(&q[0], La, ua, 0, NULL, 0, 0.01f, va); ag_pt(&q[1], Ra, ua, 0, NULL, 0, 63.99f, va);
+        ag_pt(&q[2], Rb, ub, 0, NULL, 0, 63.99f, vb); ag_pt(&q[3], Lb, ub, 0, NULL, 0, 0.01f, vb);
+        if (ag_poly(q, 4, fminf(15, ag_lum(ua) + (da + db) * 4), TILE_BIG + AG.tex[nat ? AGT_TERRE : (a->drap & AGS_DEPART) && m == 1 ? AGT_DEPART : AGT_PISTE], -AG_REC_CH) == -2) return 0;
+    } else if (!nat) {   /* dessous du ruban */
+        ag_pt(&q[0], La, ua, -AG_EP, NULL, 0, 0.01f, wa); ag_pt(&q[1], Ra, ua, -AG_EP, NULL, 0, 31.99f, wa);
+        ag_pt(&q[2], Rb, ub, -AG_EP, NULL, 0, 31.99f, wb); ag_pt(&q[3], Lb, ub, -AG_EP, NULL, 0, 0.01f, wb);
+        if (ag_poly(q, 4, ag_lum(nua), TILE_BIG + AG.tex[AGT_DESSOUS], -AG_REC_CH) == -2) return 0;
+    }
+    if (nat) return ag_naturel(a, b, La, Lb, Ra, Rb, lon);
+    /* Murs verticaux (13/11/2026 : perpendiculaires à la chaussée relevée d'un virage, celui du bord haut penchait au-dessus d'elle et
+       mangeait son néon en dents de scie, d'un segment à l'autre) ; face intérieure, ou extérieure vue de près */
+    static const float HAUT[3] = { 0, 1, 0 };
+    for (int cote = -1; cote <= 1; cote += 2) {
+        const float *Pa = cote < 0 ? La : Ra, *Pb = cote < 0 ? Lb : Rb;
+        float nin[3];
+        for (int k = 0; k < 3; k++) nin[k] = -ra[k] * (float)cote;   /* intérieure : vers l'axe */
+        nin[1] = 0;
+        if (ag_vue(Pa, nin)) {
+            ag_pt(&q[0], Pa, ua, 0, NULL, 0, va, 31.99f); ag_pt(&q[1], Pb, ub, 0, NULL, 0, vb, 31.99f);
+            ag_pt(&q[2], Pb, HAUT, AG_MUR_H, NULL, 0, vb, 0.01f); ag_pt(&q[3], Pa, HAUT, AG_MUR_H, NULL, 0, va, 0.01f);
+            if (ag_poly(q, 4, ag_lum(nin), TILE_BIG + AG.tex[AGT_MUR], -AG_REC_MUR) == -2) return 0;
+        } else {
+            const float nout[3] = { -nin[0], 0, -nin[2] };
+            ag_pt(&q[0], Pa, HAUT, AG_MUR_H, NULL, 0, wa, 0.01f); ag_pt(&q[1], Pb, HAUT, AG_MUR_H, NULL, 0, wb, 0.01f);
+            ag_pt(&q[2], Pb, ub, -AG_EP, NULL, 0, wb, (AG_MUR_H + AG_EP) * 32); ag_pt(&q[3], Pa, ua, -AG_EP, NULL, 0, wa, (AG_MUR_H + AG_EP) * 32);
+            if (ag_poly(q, 4, ag_lum(nout), TILE_BIG + AG.tex[AGT_DESSOUS], -AG_REC_MUR) == -2) return 0;
+        }
+    }
+    return 1;
+}
+static void ag_piste(void) {
+    uint16_t *seg_i = ag_seg_i, *seg_ordre = ag_seg_ordre;
+    uint8_t *seg_m = ag_seg_m, *seg_bin = ag_seg_bin;
+    float *seg_d = ag_seg_d;
+    const camera_t *c = &E.cam;
+    const float R = fog_fullc + 4, fx = c->sy, fz = c->cy, Rb = fminf(R, far_z);
+    /* Segments visibles, dans l'ordre de la piste : AG_SEG sections, calés sur ses multiples ; la ligne de départ seule (sa texture) */
+    int ns = 0;
+    for (int i = 0; i < AG.n;) {
+        const ag_sect_t *a = &AG.s[i];
+        const float dx = a->x - c->x, dy = a->y - c->y, dz = a->z - c->z, d = sqrtf(dx * dx + dy * dy + dz * dz);
+        int m = ag_apercu ? 8 : AG_SEG;
+        while (m > 1 && i % m) m >>= 1;   /* calé sur un multiple de m */
+        if (!ag_apercu) for (int k = 0; k < m; k++) if (AG.s[(i + k) % AG.n].drap & AGS_DEPART) { m = k ? k : 1; break; }
+        if (!ag_apercu && m > 1) for (int k = 0; k < m; k++) if (ag_onde_zone((i + k) % AG.n)) { m = 1; break; }   /* sous une onde : section par section (bosse lisse) */
+        if (!ag_apercu) {   /* coupé aux limites des portions naturelles et des tunnels (leurs bouts, ag_naturel) */
+            const int f0 = AG.s[i].drap & (AGS_NATUREL | AGS_TUNNEL);
+            for (int k = 1; k < m; k++) if ((AG.s[(i + k) % AG.n].drap & (AGS_NATUREL | AGS_TUNNEL)) != f0) { m = k; break; }
+        }
+        if (i + m > AG.n) m = AG.n - i;
+        const ag_sect_t *b = &AG.s[(i + m) % AG.n];
+        const float ex = b->x - c->x, ey = b->y - c->y, ez = b->z - c->z, db = sqrtf(ex * ex + ey * ey + ez * ez);
+        int vu = !(AG_VIS_PARTS & 4) || !ag_vis_on;   /* (visibilité précalculée : une de ses sections au moins) */
+        for (int k = 0; k <= m && !vu; k++) vu = ag_vsec_vu((i + k) % AG.n);
+        if (vu && (d < R || db < R) && !(dx * fx + dz * fz < -3 && ex * fx + ez * fz < -3)) {
+            seg_i[ns] = (uint16_t)i; seg_m[ns] = (uint8_t)m; seg_d[ns] = fminf(d, db);
+            const int k = (int)(seg_d[ns] / Rb * AG_BINS);
+            seg_bin[ns] = (uint8_t)(k < 0 ? 0 : k >= AG_BINS ? AG_BINS - 1 : k);
+            ns++;
+        }
+        i += m;
+    }
+    /* Rangés du plus proche au plus loin (comptage par tranches de distance) */
+    int cpt[AG_BINS + 1] = { 0 };
+    for (int s = 0; s < ns; s++) cpt[seg_bin[s] + 1]++;
+    for (int k = 0; k < AG_BINS; k++) cpt[k + 1] += cpt[k];
+    for (int s = 0; s < ns; s++) seg_ordre[cpt[seg_bin[s]]++] = (uint16_t)s;
+    ag_coupe = 1e9f;
+    for (int o = 0; o < ns; o++) {
+        const int s = seg_ordre[o];
+        if (!ag_segment(seg_i[s], seg_m[s])) { ag_coupe = seg_d[s]; break; }
+    }
+    /* Plaques : posées sur la chaussée, avancées d'un seau */
+    for (int k = 0; k < AG.npl; k++) {
+        const ag_plaque_t *P = &AG.pl[k];
+        const ag_sect_t *a = &AG.s[P->sec], *b = &AG.s[(P->sec + P->len) % AG.n];
+        if (!ag_vsec_vu(P->sec) && !ag_vsec_vu((P->sec + P->len) % AG.n)) continue;
+        const float dx = a->x - c->x, dz = a->z - c->z;
+        if (dx * dx + dz * dz > fminf(R, ag_coupe) * fminf(R, ag_coupe) || (dx * fx + dz * fz < -3 && (b->x - c->x) * fx + (b->z - c->z) * fz < -3)) continue;
+        const float ua[3] = { a->ux, a->uy, a->uz };
+        if (!ag_vue((const float[3]){ a->x, a->y, a->z }, ua)) continue;
+        ag_pt_t q[4];
+        for (int e = 0; e < 2; e++) {
+            const ag_sect_t *S = e ? b : a;
+            const float dp = 0.02f + ag_onde_dep(e ? (P->sec + P->len) % AG.n : P->sec);
+            const float cc[3] = { S->x + S->ux * dp, S->y + S->uy * dp, S->z + S->uz * dp }, rr[3] = { S->rx, S->ry, S->rz };
+            ag_pt(&q[e ? 3 : 0], cc, rr, P->d - P->hw, NULL, 0, 0.01f, e ? 63.99f : 0.01f);
+            ag_pt(&q[e ? 2 : 1], cc, rr, P->d + P->hw, NULL, 0, 63.99f, e ? 63.99f : 0.01f);
+        }
+        /* plaque d'arme au repos (AG_PLAQUE_REPOS) : éteinte, puis rallumée en clignotant la dernière seconde */
+        const float rep = P->sorte ? P->repos : 0, lum = rep <= 0 ? 15 : rep < 1 && fmodf(rep, 0.25f) < 0.125f ? 15 : 3;
+        ag_poly(q, 4, lum, TILE_BIG + AG.tex[P->sorte ? AGT_ARME : AGT_VITESSE], AG_AV_PLAQUE);
+    }
+    /* Piliers (sous les segments soumis : en deçà de la coupure) ; retirés le 14/11/2026 (demande de l'utilisateur : « supprimer les
+       piliers sous la route au profit d'une meilleure distance d'affichage des décors ») : AG_PILIERS à 1 pour les remettre */
+#ifndef AG_PILIERS
+#define AG_PILIERS 0
+#endif
+    if (!AG_PILIERS) return;
+    const float RP = fminf(R, ag_coupe);
+    for (int o = 0; o < ns; o++) {
+        const int s = seg_ordre[o];
+        if (seg_d[s] > RP) break;
+        for (int k = 0; k < seg_m[s]; k++) { const ag_sect_t *S = &AG.s[(seg_i[s] + k) % AG.n]; if ((S->drap & AGS_PILIER) && !(S->drap & AGS_NATUREL) && AG.sol < S->y) ag_pilier(S); }
+    }
+}
+/* Engins, du plus proche au plus loin : maillage tourné selon le cap, le haut de la piste et le roulis, niveau de détail selon la
+   distance (le plus simple quand les engins ont pris AG_TRI_ENGINS) ; ombre sur la chaussée ; flamme des réacteurs en poussée */
+/* Blanc de la palette commune (cœur de la flamme des réacteurs) : cherché une fois */
+static uint8_t ag_blanc_idx(void) {
+    static int ok;
+    static uint8_t b = 1;
+    if (!ok) {
+        int bd = 1 << 30;
+        for (int i = 1; i < AG_PAL_COMMUN; i++) { const int dr = E.w.pal[i][0] - 250, dg = E.w.pal[i][1] - 250, db = E.w.pal[i][2] - 255, d = dr * dr + dg * dg + db * db; if (d < bd) { bd = d; b = (uint8_t)i; } }
+        ok = 1;
+    }
+    return b;
+}
+static void ag_engins(void) {
+    const camera_t *c = &E.cam;
+    v3 *vv = ag_vv;
+    float (*vw)[3] = ag_vw;
+    int ord[AG_NAV_MAX] = { 0 }, no = 0;
+    float dist[AG_NAV_MAX] = { 0 };
+    for (int k = 0; k < AG.nn; k++) {
+        if (ag_ck_on && k == AG.suivi) continue;   /* vue cockpit : on est dedans */
+        const ag_nav_t *n = &AG.nav[k];
+        if (n->detruit) continue;
+        const float dx = n->x - c->x, dy = n->y - c->y, dz = n->z - c->z, d = sqrtf(dx * dx + dy * dy + dz * dz);
+        if (d > fog_fullc || dx * c->sy + dz * c->cy < -2) continue;
+        int j = no++;
+        while (j > 0 && dist[j - 1] > d) { ord[j] = ord[j - 1]; dist[j] = dist[j - 1]; j--; }
+        ord[j] = k; dist[j] = d;
+    }
+    for (int o = 0; o < no; o++) {
+        const ag_nav_t *n = &AG.nav[ord[o]];
+        const ag_ecurie_t *C = &AG.ec[n->ecurie];
+        const int var = n->variante && C->modele2 >= 0, livree_k = var ? C->livree2 : C->livree;   /* (second engin de l'écurie : AGE2) */
+        const ag_modele_t *M = &AG.mod[var ? C->modele2 : C->modele];
+        int l = AG.phase == AGP_ECURIE || AG.phase == AGP_GARAGE ? 0 : ord[o] == AG.suivi ? AG_LOD_SUIVI : AG_LOD_ADV;
+        if (l > M->nlod - 1) l = M->nlod - 1;
+        if (ag_tris + M->lod[l].nf > AG_TRI_ENGINS) l = M->nlod - 1;
+        const ag_lod_t *L = &M->lod[l];
+        if (ag_tris + L->nf > AG_TRI_ENGINS && o > 0) break;   /* (le plus proche toujours) */
+        float h[3] = { n->hx, n->hy, n->hz }, u[3] = { n->ux, n->uy, n->uz }, s[3];
+        cross3_r(u, h, s);
+        const float ro = -n->roulis + 0.08f * n->choc * sinf(E.clock * 40), cr = cosf(ro), sr = sinf(ro);
+        float u2[3], s2[3];
+        for (int i = 0; i < 3; i++) { u2[i] = u[i] * cr + s[i] * sr; s2[i] = s[i] * cr - u[i] * sr; }
+        /* Ombre : ellipse translucide sur la chaussée sous l'engin (draw_shadow : la chaussée peinte ensuite y est assombrie),
+           dans un seau entre l'engin et la chaussée ; ses rayons : l'engin projeté (demi-largeur, demi-longueur). Retirée le
+           14/11/2026 (demande de l'utilisateur : « supprime l'ombre des vaisseaux ») : AG_OMBRE à 1 pour la remettre */
+#ifndef AG_OMBRE
+#define AG_OMBRE 0
+#endif
+        if (AG_OMBRE) {
+            float pc[3], r[3], un[3];
+            ag_cadre(n->sec, n->t, pc, r, un, NULL);
+            const float og[3] = { pc[0] + r[0] * n->d, pc[1] + r[1] * n->d, pc[2] + r[2] * n->d };
+            const v3 a = to_view(og[0], og[1], og[2]), av = to_view(og[0] + h[0] * 0.6f, og[1] + h[1] * 0.6f, og[2] + h[2] * 0.6f),
+                     co = to_view(og[0] + s[0] * 0.45f, og[1] + s[1] * 0.45f, og[2] + s[2] * 0.45f);
+            if (a.z > NEAR_Z + 0.3f && av.z > NEAR_Z && co.z > NEAR_Z && ag_vue(og, un)) {
+                const float sx = pcx + a.x * FOCAL / a.z, sy = pcy - a.y * FOCAL / a.z;
+                const float rx = hypotf(pcx + co.x * FOCAL / co.z - sx, pcy - co.y * FOCAL / co.z - sy), ry = fmaxf(1.5f, fabsf(pcy - av.y * FOCAL / av.z - sy));
+                prim_t *sh = new_prim(bucket_of(a.z - 0.2f));
+                if (sh) { sh->kind = K_SHADOW; sh->sx = sx; sh->sy = sy; sh->s = rx; sh->ry = ry; sh->miny = (int16_t)floorf(sy - ry); sh->maxy = (int16_t)ceilf(sy + ry + 1); }
+            }
+        }
+        for (int i = 0; i < L->nv; i++) {
+            const uint8_t *p = L->v + (size_t)i * 12;
+            const float mx = ag_rdf(p), my = ag_rdf(p + 4), mz = ag_rdf(p + 8);
+            for (int a = 0; a < 3; a++) vw[i][a] = (a == 0 ? n->x : a == 1 ? n->y : n->z) + s2[a] * mx + u2[a] * my + h[a] * mz;
+            vv[i] = to_view(vw[i][0], vw[i][1], vw[i][2]);
+        }
+        for (int f = 0; f < L->nf; f++) {
+            const uint8_t *fa = L->f + (size_t)f * 20;
+            const int nv = fa[0] == 4 ? 4 : 3;
+            int fv[4];
+            for (int i = 0; i < nv; i++) { const int v = fa[4 + 2 * i] | fa[5 + 2 * i] << 8; fv[i] = v < L->nv ? v : 0; }
+            const float *a = vw[fv[0]], *b = vw[fv[1]], *d = vw[fv[2]];
+            const float e1[3] = { b[0] - a[0], b[1] - a[1], b[2] - a[2] }, e2[3] = { d[0] - a[0], d[1] - a[1], d[2] - a[2] };
+            float nn[3];
+            cross3_r(e1, e2, nn);
+            if ((c->x - a[0]) * nn[0] + (c->y - a[1]) * nn[1] + (c->z - a[2]) * nn[2] <= 0) continue;   /* face de dos */
+            const float ln = sqrtf(nn[0] * nn[0] + nn[1] * nn[1] + nn[2] * nn[2]);
+            if (ln < 1e-9f) continue;
+            for (int i = 0; i < 3; i++) nn[i] /= ln;
+            /* Livrée de l'écurie (drapeau 1 : texture DECO, coordonnées de la face), sinon couleur unie : place de l'écurie, ou couleur
+               fixe du modèle (place 255), texel de la tuile 0 */
+            const int livree = (fa[3] & 1) && (uint32_t)livree_k < E.w.deco_n;
+            const uint8_t col = fa[1] < AGC_N ? C->c[fa[1]] : fa[2];
+            const float cu = (float)(col & 15) + 0.5f, cv = (float)(col >> 4) + 0.5f, lu = ag_lum(nn);
+            vv_t q[4];
+            float zs = 0;
+            for (int i = 0; i < nv; i++) {
+                const v3 ov = vv[fv[i]];
+                q[i].x = ov.x; q[i].y = ov.y; q[i].z = ov.z; q[i].l = lu; zs += ov.z;
+                if (livree) { q[i].u = (float)fa[12 + 2 * i] + 0.5f; q[i].v = (float)fa[13 + 2 * i] + 0.5f; } else { q[i].u = cu; q[i].v = cv; }
+            }
+            ag_soumettre(q, nv, livree ? TILE_BIG + livree_k : 0, bucket_of(zs / nv - AG_AV_ENGIN));
+        }
+        /* Flamme : losange de la couleur du réacteur (pleine lumière) derrière l'engin, qui vacille, plus grande en accélération */
+        if (n->poussee > 0.05f) {
+            const float t = (0.07f + 0.05f * (n->boost > 0)) * n->poussee * (0.85f + 0.15f * sinf(E.clock * 47 + (float)ord[o] * 2.1f));
+            const float zf = -0.74f, yf = 0.12f;   /* juste derrière la coque (l'engin va de -0,7 à 0,7) */
+            const float P[4][3] = { { 0, yf + t, zf }, { t, yf, zf }, { 0, yf - t, zf }, { -t, yf, zf } };
+            for (int coeur = 0; coeur < 2; coeur++) {   /* (néon, 14/11/2026 : un cœur blanc, plus petit et juste devant, dans la couleur du réacteur) */
+                const uint8_t col = coeur ? ag_blanc_idx() : C->c[AGC_REACTEUR];
+                const float kt = coeur ? 0.45f : 1, dz = coeur ? -0.03f : 0;
+                vv_t q[4];
+                float zs = 0;
+                for (int i = 0; i < 4; i++) {
+                    const float px = P[i][0] * kt, py = yf + (P[i][1] - yf) * kt, pz = P[i][2] + dz;
+                    const v3 ov = to_view(n->x + s2[0] * px + u2[0] * py + h[0] * pz, n->y + s2[1] * px + u2[1] * py + h[1] * pz, n->z + s2[2] * px + u2[2] * py + h[2] * pz);
+                    q[i].x = ov.x; q[i].y = ov.y; q[i].z = ov.z; q[i].u = (float)(col & 15) + 0.5f; q[i].v = (float)(col >> 4) + 0.5f; q[i].l = 15; zs += ov.z;
+                }
+                ag_soumettre(q, 4, 0, bucket_of(zs / 4 - 0.5f - 0.05f * (float)coeur));
+            }
+        }
+        /* Traînée (13/11/2026, demande de l'utilisateur) : ruban du réacteur par les points enregistrés (antigrav.c, trace_maj), tourné
+           vers la caméra, qui s'amincit et s'efface vers le bout : faces translucides (fondu de fondu_px, opacité (16 - fade) / 16),
+           couleur du réacteur en pleine lumière */
+        if (n->trace_n >= 1 && n->vitesse > 3) {
+            float P[AG_TRACE_N + 1][3], Sd[AG_TRACE_N + 1][3];
+            int np = 0;
+            for (int i = 0; i < 3; i++) P[0][i] = (i == 0 ? n->x : i == 1 ? n->y : n->z) - h[i] * 0.74f + u2[i] * 0.12f;
+            np = 1;
+            float lg = 0;
+            const float lmax = n == &AG.nav[AG.suivi] ? AG_TRAINEE_L * 0.5f : AG_TRAINEE_L;   /* (l'engin suivi : la sienne va vers la caméra) */
+            for (int k = 0; k < n->trace_n && lg < lmax; k++) {   /* jusqu'à AG_TRAINEE_L du réacteur : le dernier point raccourci */
+                const float *t = n->trace[(n->trace_i - 1 - k + 2 * AG_TRACE_N) % AG_TRACE_N], *a = P[np - 1];
+                const float d[3] = { t[0] - a[0], t[1] - a[1], t[2] - a[2] }, l = sqrtf(d[0] * d[0] + d[1] * d[1] + d[2] * d[2]);
+                const float k2 = l > 1e-4f && lg + l > lmax ? (lmax - lg) / l : 1;
+                for (int i = 0; i < 3; i++) P[np][i] = a[i] + d[i] * k2;
+                lg += l * k2; np++;
+            }
+            for (int k = 0; k < np; k++) {   /* côté de chaque point : travers du ruban, vu de la caméra */
+                const float *a = P[k > 0 ? k - 1 : 0], *b = P[k + 1 < np ? k + 1 : np - 1];
+                const float dir[3] = { b[0] - a[0], b[1] - a[1], b[2] - a[2] }, vue[3] = { P[k][0] - c->x, P[k][1] - c->y, P[k][2] - c->z };
+                cross3_r(dir, vue, Sd[k]);
+                const float ls = sqrtf(Sd[k][0] * Sd[k][0] + Sd[k][1] * Sd[k][1] + Sd[k][2] * Sd[k][2]);
+                for (int i = 0; i < 3; i++) Sd[k][i] = ls > 1e-6f ? Sd[k][i] / ls : 0;
+            }
+            const uint8_t col = C->c[AGC_REACTEUR];
+            const float cu = (float)(col & 15) + 0.5f, cv = (float)(col >> 4) + 0.5f, w0 = AG_TRAINEE_W * (0.7f + 0.5f * n->poussee + 0.4f * (n->boost > 0)) * (n == &AG.nav[AG.suivi] ? 0.7f : 1.0f);
+            for (int k = 0; k + 1 < np; k++) {
+                const float wa = w0 * (1 - (float)k / (float)(np - 1)), wb = w0 * (1 - (float)(k + 1) / (float)(np - 1)) + 0.01f;
+                vv_t q[4];
+                float zs = 0;
+                for (int i = 0; i < 4; i++) {
+                    const int e = i == 1 || i == 2;
+                    const float *p = P[k + e], *sd = Sd[k + e], w = (e ? wb : wa) * (i == 0 || i == 1 ? -1.0f : 1.0f);
+                    const v3 ov = to_view(p[0] + sd[0] * w, p[1] + sd[1] * w, p[2] + sd[2] * w);
+                    q[i].x = ov.x; q[i].y = ov.y; q[i].z = ov.z; q[i].u = cu; q[i].v = cv; q[i].l = 15; zs += ov.z;
+                }
+                const int np0 = B->nprims;
+                if (ag_soumettre(q, 4, 0, bucket_of(zs / 4 - 0.3f)) >= 0 && B->nprims > np0) B->prims[np0].fade = (uint8_t)(6 + (k * 9) / (np - 1));
+            }
+        }
+    }
+}
+/* Armes (antigrav.c) : missiles, mines, boucliers, traits du rayon (et sa charge), éclats et boules de feu des explosions ; formes
+   faites ici, faces de couleur unie (palette commune, couleurs les plus proches choisies une fois), après les engins dans le budget */
+static uint8_t ag_cols[8]; static int ag_cols_ok;
+enum { AGK_ROUGE, AGK_BLANC, AGK_ORANGE, AGK_JAUNE, AGK_CYAN, AGK_SOMBRE, AGK_MAGENTA, AGK_GRIS };
+static void ag_cols_faire(void) {
+    static const uint8_t RVB[8][3] = { { 230, 40, 40 }, { 245, 245, 250 }, { 255, 140, 30 }, { 255, 225, 90 }, { 90, 235, 255 }, { 40, 40, 52 }, { 255, 80, 215 }, { 150, 155, 170 } };
+    for (int k = 0; k < 8; k++) {
+        int best = 1, bd = 1 << 30;
+        for (int i = 1; i < AG_PAL_COMMUN; i++) { const int dr = E.w.pal[i][0] - RVB[k][0], dg = E.w.pal[i][1] - RVB[k][1], db = E.w.pal[i][2] - RVB[k][2], d = dr * dr + dg * dg + db * db; if (d < bd) { bd = d; best = i; } }
+        ag_cols[k] = (uint8_t)best;
+    }
+    ag_cols_ok = 1;
+}
+/* Face de couleur unie (palette) de n points du monde, lumière l, opacité (16 - fade) / 16 ; 0 si le budget est épuisé */
+static int ag_face(const float (*P)[3], int n, uint8_t col, float l, int fade) {
+    ag_pt_t q[4];
+    for (int i = 0; i < n; i++) { q[i].p[0] = P[i][0]; q[i].p[1] = P[i][1]; q[i].p[2] = P[i][2]; q[i].u = (float)(col & 15) + 0.5f; q[i].v = (float)(col >> 4) + 0.5f; }
+    const int p0 = B->nprims, r = ag_poly(q, n, l, 0, 0.5f);
+    if (fade) for (int k = p0; k < B->nprims; k++) B->prims[k].fade = (uint8_t)fade;
+    return r != -2;
+}
+/* Octaèdre (mines, charge du rayon) : centre, demi-tailles le long de a (axe), b et c ; faces vues seulement */
+static int ag_octaedre(const float *o, const float *a, const float *b, const float *c, float ra, float rb, uint8_t col, float lum, int fade) {
+    const camera_t *cm = &E.cam;
+    float V[6][3];
+    for (int i = 0; i < 3; i++) { V[0][i] = o[i] + a[i] * ra; V[1][i] = o[i] - a[i] * ra; V[2][i] = o[i] + b[i] * rb; V[3][i] = o[i] - b[i] * rb; V[4][i] = o[i] + c[i] * rb; V[5][i] = o[i] - c[i] * rb; }
+    static const int F[8][3] = { { 0, 2, 4 }, { 0, 4, 3 }, { 0, 3, 5 }, { 0, 5, 2 }, { 1, 4, 2 }, { 1, 3, 4 }, { 1, 5, 3 }, { 1, 2, 5 } };
+    for (int f = 0; f < 8; f++) {
+        const float *p0 = V[F[f][0]], *p1 = V[F[f][1]], *p2 = V[F[f][2]];
+        const float e1[3] = { p1[0] - p0[0], p1[1] - p0[1], p1[2] - p0[2] }, e2[3] = { p2[0] - p0[0], p2[1] - p0[1], p2[2] - p0[2] };
+        float nn[3];
+        cross3_r(e1, e2, nn);
+        const float vers = (p0[0] - o[0]) * nn[0] + (p0[1] - o[1]) * nn[1] + (p0[2] - o[2]) * nn[2];
+        if (vers < 0) for (int i = 0; i < 3; i++) nn[i] = -nn[i];   /* (normale vers l'extérieur) */
+        if ((cm->x - p0[0]) * nn[0] + (cm->y - p0[1]) * nn[1] + (cm->z - p0[2]) * nn[2] <= 0) continue;
+        const float ln = sqrtf(nn[0] * nn[0] + nn[1] * nn[1] + nn[2] * nn[2]);
+        if (ln < 1e-9f) continue;
+        for (int i = 0; i < 3; i++) nn[i] /= ln;
+        const float P[3][3] = { { p0[0], p0[1], p0[2] }, { p1[0], p1[1], p1[2] }, { p2[0], p2[1], p2[2] } };
+        if (!ag_face(P, 3, col, lum > 0 ? lum : ag_lum(nn), fade)) return 0;
+    }
+    return 1;
+}
+static void ag_armes(void) {
+    const camera_t *c = &E.cam;
+    if (!ag_cols_ok) ag_cols_faire();
+    const float R = fminf(fog_fullc, 60);
+    #define AG_LOIN(PX, PY, PZ) (((PX) - c->x) * ((PX) - c->x) + ((PY) - c->y) * ((PY) - c->y) + ((PZ) - c->z) * ((PZ) - c->z) > R * R || ((PX) - c->x) * c->sy + ((PZ) - c->z) * c->cy < -2)
+    /* missiles : corps effilé blanc, nez rouge, flamme orange */
+    for (int i = 0; i < AG_PROJ_MAX; i++) {
+        const ag_proj_t *p = &AG.proj[i];
+        if (!p->on || AG_LOIN(p->x, p->y, p->z)) continue;
+        const float o[3] = { p->x, p->y, p->z }, h[3] = { p->hx, p->hy, p->hz }, u[3] = { p->ux, p->uy, p->uz };
+        float s[3];
+        cross3_r(u, h, s);
+        const float nez[3] = { o[0] + h[0] * 0.25f, o[1] + h[1] * 0.25f, o[2] + h[2] * 0.25f };
+        if (!ag_octaedre(o, h, s, u, 0.45f, 0.1f, ag_cols[AGK_BLANC], 0, 0)) return;
+        if (!ag_octaedre(nez, h, s, u, 0.22f, 0.07f, ag_cols[AGK_ROUGE], 0, 0)) return;
+        const float fl = 0.18f + 0.06f * sinf(E.clock * 60 + (float)i), qu[3] = { o[0] - h[0] * 0.5f, o[1] - h[1] * 0.5f, o[2] - h[2] * 0.5f };
+        if (!ag_octaedre(qu, h, s, u, fl, 0.08f, ag_cols[AGK_ORANGE], 15, 4)) return;
+    }
+    /* mines : octaèdres sombres posés sur la chaussée, qui clignotent en rouge */
+    for (int i = 0; i < AG_MINES_MAX; i++) {
+        const ag_mine_t *m = &AG.mines[i];
+        if (!m->on || AG_LOIN(m->x, m->y, m->z)) continue;
+        const float o[3] = { m->x, m->y, m->z }, u[3] = { m->ux, m->uy, m->uz }, a[3] = { 1, 0, 0 };
+        float b[3], d[3];
+        cross3_r(u, a, b);
+        { const float l = sqrtf(b[0] * b[0] + b[1] * b[1] + b[2] * b[2]); for (int k = 0; k < 3; k++) b[k] = l > 1e-6f ? b[k] / l : 0; }
+        cross3_r(b, u, d);
+        const int allume = fmodf(E.clock * 2.5f + (float)i * 0.37f, 1) < 0.35f;
+        if (!ag_octaedre(o, u, b, d, 0.16f, 0.24f, ag_cols[allume ? AGK_ROUGE : AGK_SOMBRE], allume ? 15 : 0, 0)) return;
+    }
+    /* engins : bouclier (bulle translucide), trait du rayon, charge du rayon */
+    for (int k = 0; k < AG.nn; k++) {
+        const ag_nav_t *n = &AG.nav[k];
+        if (n->detruit) continue;
+        const float o[3] = { n->x, n->y, n->z }, h[3] = { n->hx, n->hy, n->hz }, u[3] = { n->ux, n->uy, n->uz };
+        float s[3];
+        cross3_r(u, h, s);
+        if (n->bouclier > 0 && !(ag_ck_on && k == AG.suivi) && !AG_LOIN(n->x, n->y, n->z)) {
+            const int fade = 12 + (n->bouclier < 1 && fmodf(E.clock * 8, 1) < 0.5f ? 2 : 0);
+            float u2[3] = { u[0] * 0.55f, u[1] * 0.55f, u[2] * 0.55f };   /* (plus plat : demi-hauteur 0,4) */
+            if (!ag_octaedre(o, h, s, u2, 0.95f, 0.72f, ag_cols[AGK_CYAN], 14, fade)) return;
+        }
+        if (n->charge > 0) {   /* charge du rayon : une boule qui grossit devant le nez */
+            const float f = fminf(1, n->charge / AG_RAYON_CHARGE), r = 0.08f + 0.18f * f, p[3] = { o[0] + h[0] * 0.95f, o[1] + h[1] * 0.95f, o[2] + h[2] * 0.95f };
+            if (!ag_octaedre(p, h, s, u, r, r, ag_cols[f >= 1 ? AGK_MAGENTA : AGK_CYAN], 15, 3)) return;
+        }
+        if (n->rayon_t > 0) {   /* trait : deux rubans croisés du nez au bout, qui s'effacent */
+            const float a = fminf(1, fmaxf(0, n->rayon_t / 0.4f)), w = (0.06f + 0.1f * n->rayon_f) * (0.5f + 0.5f * a);
+            const float p0[3] = { o[0] + h[0] * 0.9f, o[1] + h[1] * 0.9f, o[2] + h[2] * 0.9f }, *p1 = n->rayon_fin;
+            const int fade = (int)(14 - 12 * a);
+            for (int cr = 0; cr < 2; cr++) {
+                const float *e = cr ? u : s;
+                const float P[4][3] = { { p0[0] - e[0] * w, p0[1] - e[1] * w, p0[2] - e[2] * w }, { p1[0] - e[0] * w, p1[1] - e[1] * w, p1[2] - e[2] * w },
+                                        { p1[0] + e[0] * w, p1[1] + e[1] * w, p1[2] + e[2] * w }, { p0[0] + e[0] * w, p0[1] + e[1] * w, p0[2] + e[2] * w } };
+                if (!ag_face(P, 4, ag_cols[n->rayon_f >= 1 ? AGK_MAGENTA : AGK_CYAN], 15, fade)) return;
+            }
+        }
+    }
+    /* boules de feu : octaèdres translucides qui grandissent et s'effacent, orange puis jaune au cœur */
+    for (int i = 0; i < AG_BOULES_MAX; i++) {
+        const ag_boule_t *b = &AG.boules[i];
+        if (b->vie <= 0 || AG_LOIN(b->x, b->y, b->z)) continue;
+        const float f = b->t / b->vie, r = b->taille * (0.35f + 0.9f * f), o[3] = { b->x, b->y, b->z };
+        static const float X[3] = { 1, 0, 0 }, Y[3] = { 0, 1, 0 }, Z[3] = { 0, 0, 1 };
+        if (!ag_octaedre(o, Y, X, Z, r, r, ag_cols[AGK_ORANGE], 15, (int)(3 + 11 * f))) return;
+        if (f < 0.6f && !ag_octaedre(o, Y, Z, X, r * 0.55f, r * 0.55f, ag_cols[AGK_JAUNE], 15, (int)(2 + 10 * f))) return;
+    }
+    /* éclats : triangles qui tournent */
+    for (int i = 0; i < AG_ECLATS_MAX; i++) {
+        const ag_eclat_t *e = &AG.eclats[i];
+        if (e->vie <= 0 || AG_LOIN(e->x, e->y, e->z)) continue;
+        const float t = 0.22f, ca = cosf(e->a), sa = sinf(e->a);
+        const float P[3][3] = { { e->x + ca * t, e->y + sa * t, e->z }, { e->x - ca * t * 0.5f, e->y + sa * t, e->z + t * 0.8f }, { e->x, e->y - t * 0.6f, e->z - ca * t } };
+        if (!ag_face(P, 3, e->col, 12, e->t > e->vie * 0.7f ? 6 : 0)) return;
+    }
+    #undef AG_LOIN
+}
+static void ag_image(float time_s) {
+    E.time_s = time_s;
+    float tx, ty, tz, yaw, pitch, dist, vue = AG_VUE * VUE_K;
+    ag_apercu = AG.phase == AGP_PISTE;
+    ag_ck_on = !ag_apercu && ag_cockpit();
+    if (ag_apercu) {   /* le circuit entier vu de haut, qui tourne : centre et taille de la piste, distance qui le fait tenir */
+        float x0 = 1e9f, x1 = -1e9f, z0 = 1e9f, z1 = -1e9f, ym = 0;
+        for (int i = 0; i < AG.n; i++) { const ag_sect_t *S = &AG.s[i]; x0 = fminf(x0, S->x); x1 = fmaxf(x1, S->x); z0 = fminf(z0, S->z); z1 = fmaxf(z1, S->z); ym += S->y; }
+        const float taille = fmaxf(x1 - x0, z1 - z0) * 1.15f + 8;
+        tx = (x0 + x1) / 2; tz = (z0 + z1) / 2; ty = ym / (float)(AG.n > 0 ? AG.n : 1);
+        if (ap_piste != AG.piste) { ap_piste = AG.piste; ap_d = 0; }
+        yaw = E.clock * 0.22f; pitch = 0.95f;
+        dist = ap_d > 0 ? ap_d : taille * 1.6f;
+        /* emprise de l'axe à l'écran à cette distance : la largeur (0,92 de l'image) et la hauteur (la moitié : entre le titre et la fiche)
+           donnent la distance ; son milieu, le centre de projection */
+        setup_camera(tx, ty, tz, yaw, pitch, dist);
+        float mx = 0, y0 = 1e9f, y1 = -1e9f;
+        for (int i = 0; i < AG.n; i += AG.n / 48 + 1) {
+            const v3 o = to_view(AG.s[i].x, AG.s[i].y, AG.s[i].z);
+            if (o.z < 1) continue;
+            const float sx = o.x * FOCAL / o.z, sy = -o.y * FOCAL / o.z;
+            mx = fmaxf(mx, fabsf(sx)); y0 = fminf(y0, sy); y1 = fmaxf(y1, sy);
+        }
+        if (y1 > y0) {
+            const float k = fminf(2.0f, fmaxf(0.5f, fmaxf(mx / (0.44f * RW), (y1 - y0) / (0.46f * RH)))), dv = dist * k, yv = -(y0 + y1) / 2 / k;
+            const int prem = ap_d <= 0;
+            ap_d = prem ? dv : ap_d + (dv - ap_d) * 0.15f; ap_y = prem ? yv : ap_y + (yv - ap_y) * 0.15f;
+        }
+        dist = ap_d;
+        vue = dist + taille;
+    } else ag_camera(&tx, &ty, &tz, &yaw, &pitch, &dist);
+    if (E.fog_on && !ag_apercu) vue = fminf(vue, AG_BRUME_VUE * VUE_K);   /* brume (carrière) : la vue raccourcie, un brouillard dès 30 % */
+    fog_fullc = vue; fog_z0c = vue * (E.fog_on ? 0.3f : 0.6f); fog_kc = 8.0f / (fog_fullc - fog_z0c);   /* (E.fog_on coupé : la distance de vue, le fond des trous) */
+    far_z = vue + 16;
+    setup_camera(tx, ty, tz, yaw, pitch, dist);
+    pcx = CXF; pcy = ag_apercu ? RH * 0.45f + ap_y : CYF; dlg_glisse = 1;   /* (aperçu : entre le titre et la fiche) */
+    float sdx = 0, sdy = 0;
+    if (AG.secousse > 0) { const float a = AG.secousse * 4 / (float)ENG_SCALE; sdx = (rng_next() * 2 - 1) * a; sdy = (rng_next() * 2 - 1) * a; pcx += sdx; pcy += sdy; }
+#if ENG_ROULIS
+    cam_roule = ag_ck_on && fabsf(AG.cam_roll) > 1e-3f; cam_rc = cosf(AG.cam_roll); cam_rs = sinf(AG.cam_roll);
+    B->roule = cam_roule; B->roul_c = cam_rc; B->roul_s = cam_rs; B->roul_x = pcx; B->roul_y = pcy;
+#endif
+    B->ck_px = NULL; ag_ecr_ok = 0;
+    if (ag_spans_ck) { for (int y = 0; y < RH; y++) { span_l[y] = 0; span_r[y] = (int16_t)(RW - 1); } ag_spans_ck = 0; }
+    if (ag_ck_on) {
+        cam_dist_cur = AG_CK_NET;
+        const int e = AG.nav[AG.suivi].ecurie;
+        if (e >= 0 && e < AG_ECURIES_MAX && AG.nck[e] > 0) {
+            const ag_image_t *ck = &AG.ck[e][AG.nck[e] - 1];
+            for (int t = 0; t < AG.nck[e]; t++) if (AG.ck[e][t].h >= RH) { ck = &AG.ck[e][t]; break; }
+            if (ck != ag_ck_im) {
+                ag_ck_im = ck; ag_ck_pal[0] = 0;
+                for (int i = 0; i < 255; i++) ag_ck_pal[i + 1] = i < ck->ncoul ? pack565(ck->rgb[i * 3], ck->rgb[i * 3 + 1], ck->rgb[i * 3 + 2]) : 0;
+                for (int j = 0; j < ck->h && j < AG_CK_HMAX; j++) {
+                    const uint8_t *row = ck->px + (size_t)j * (size_t)ck->w;
+                    int l = 0, r = ck->w - 1;
+                    while (l < ck->w && row[l]) l++;
+                    while (r >= 0 && row[r]) r--;
+                    ag_ck_ol[j] = (int16_t)l; ag_ck_or[j] = (int16_t)r;
+                }
+            }
+            const float s = fmaxf((float)RW / (float)ck->w, (float)RH / (float)ck->h), x0 = ((float)RW - (float)ck->w * s) / 2 + sdx;
+            int16_t *u = ag_ck_u[B == &FR[0] ? 0 : 1];
+            for (int x = 0; x < RW; x++) { const int c = (int)floorf(((float)x + 0.5f - x0) / s); u[x] = (int16_t)(c < 0 ? 0 : c >= ck->w ? ck->w - 1 : c); }
+            B->ck_px = ck->px; B->ck_pal = ag_ck_pal; B->ck_u = u; B->ck_w = ck->w; B->ck_h = ck->h;
+            B->ck_y = (float)RH - (float)ck->h * s + sdy; B->ck_k = 1 / s;
+            for (int y = 0; y < RH; y++) {   /* lignes bornées à la vitre (au-dessus de l'image : toute la ligne) */
+                int sy = (int)floorf(((float)y + 0.5f - B->ck_y) * B->ck_k);
+                if (sy < 0) { span_l[y] = 0; span_r[y] = (int16_t)(RW - 1); continue; }
+                if (sy >= ck->h) sy = ck->h - 1;
+                if (sy >= AG_CK_HMAX || ag_ck_ol[sy] > ag_ck_or[sy]) { span_l[y] = 1; span_r[y] = 0; continue; }
+                const int xl = (int)ceilf(x0 + (float)ag_ck_ol[sy] * s - 0.5f), xr = (int)ceilf(x0 + (float)(ag_ck_or[sy] + 1) * s - 0.5f) - 1;
+                span_l[y] = (int16_t)(xl < 0 ? 0 : xl); span_r[y] = (int16_t)(xr > RW - 1 ? RW - 1 : xr);
+            }
+            ag_spans_ck = 1;
+            {   /* écrans du tableau de bord, dans le repère de l'interface : cadre 16:9 de largeur w16 à la hauteur de l'image, dont l'image est
+                   le milieu (le 4:3 de la LDK : rogné de xc de chaque côté) */
+                const int w16 = (int)lroundf((float)ck->h * 16.0f / 9.0f), xc = (w16 - ck->w) / 2;
+                for (int e = 0; e < 3; e++) {
+                    ag_ecr[e][0] = (x0 + (AG_ECRANS[e][0] * (float)w16 - (float)xc) * s) * ENG_SCALE - (float)ui_ox;
+                    ag_ecr[e][2] = (x0 + (AG_ECRANS[e][2] * (float)w16 - (float)xc) * s) * ENG_SCALE - (float)ui_ox;
+                    ag_ecr[e][1] = (B->ck_y + AG_ECRANS[e][1] * (float)ck->h * s) * ENG_SCALE - (float)ui_oy;
+                    ag_ecr[e][3] = (B->ck_y + AG_ECRANS[e][3] * (float)ck->h * s) * ENG_SCALE - (float)ui_oy;
+                }
+                ag_ecr_ok = 1;
+            }
+#if ENG_DOF || ENG_DYN
+            B->ck_dep = dep_of(AG_CK_NET);
+#endif
+        }
+    }
+    /* Horizon : colonne du panorama de chaque colonne de l'image (360° sur sa largeur, une puissance de 2) */
+    if (AG.horizon >= 0 && ag_hz_u[0]) {
+        const ag_image_t *h = &AG.hz[AG.horizon];
+        uint16_t *u = ag_hz_u[B == &FR[0] ? 0 : 1] + AG_ROUL_M;   /* (caméra penchée : aussi les colonnes hors de l'image) */
+        const float k = (float)h->w / (2 * PI_F);
+        const int m = AG_ROUL_M && B->roule ? AG_ROUL_M : 0;
+        for (int x = -m; x < RW + m; x++) u[x] = (uint16_t)((int)floorf((E.cam.yaw + atanf(((float)x + 0.5f - pcx) / FOCAL)) * k) & (h->w - 1));
+        B->hz_px = h->px; B->hz_pal = &ag_hz_pal[0][0]; B->hz_w = h->w; B->hz_h = h->h; B->hz_base = h->base; B->hz_k = k / FOCAL; B->hz_u = u;
+    } else B->hz_px = NULL;
+    champ_init();
+    B->nverts = B->nprims = 0;
+    memset(&B->stats, 0, sizeof B->stats);
+    for (int k = 0; k < ENG_WORKERS; k++) B->px_w[k] = B->seg_w[k] = 0, B->us3d_w[k] = B->usui_w[k] = 0;
+    B->torche = 0; B->nlum = 0; B->rain = 0; B->nrain = 0; B->sera_faded = 0;
+    B->ztest = !eng_sans_z && !ag_apercu; B->inside = 0;   /* (aperçu : sans test de profondeur, la chaussée devant tout, comme une carte) */
+    B->ciel = 0; B->noir = 0;
+    for (int b = 0; b < OTN; b++) ot_head[b] = ot_tail[b] = -1;
+    occ_poly = NULL; nocc = 0; occ_sera = -1; narb = 0; sujet_on = parle_on = 0; poly_bias = 0; fade_mark = 0;
+    sol_bas = AG.sol;
+    ag_tris = 0;
+    if (!ag_apercu) { ag_engins(); ag_armes(); }
+    ag_det[0] = ag_tris;
+    ag_vis_maj();
+    ag_piste();
+    if (!ag_apercu) ag_obstacles();
+    ag_decors();
+    ag_det[1] = ag_tris - ag_det[0];
+    ag_terrain();
+    ag_det[2] = ag_tris - ag_det[0] - ag_det[1];
+    ag_sol();
+    ag_det[3] = ag_tris - ag_det[0] - ag_det[1] - ag_det[2];
+    AG.tris = ag_tris;
+    if (ag_tris > AG.tris_max) AG.tris_max = ag_tris;
+    image_finir();
 }
 
 /* ---------- Rastérisation dans la bande [K->by0, K->by1) ---------- */
@@ -2685,7 +3989,10 @@ static inline int ceil_half(float v) { return 8192 - (int)(8192.5f - v); }
    varie de moins de 12 % (polygones lointains, la plupart), u et v sont interpolés directement (affine, aucune
    division) ; sinon la texture exacte est recalculée tous les SUB pixels. Dessin de l'avant vers le fond : les pixels
    déjà couverts sont sautés par plages ; chaque plage repart des valeurs exactes de son premier pixel. */
-#if ENG_RECT && !ENG_PREMIUM
+#if ENG_ROULIS
+#define AFFINE_RATIO 1.04f   /* (course anti-gravité : murs rasants de la caméra basse ; à 1,25, un polygone qui passait le seuil en
+                                approchant changeait de calcul et sa texture sautait) */
+#elif ENG_RECT && !ENG_PREMIUM
 #define AFFINE_RATIO 1.25f   /* (LDK : plus de surfaces sans correction de perspective, « perspective allégée ») */
 #else
 #define AFFINE_RATIO 1.12f
@@ -3023,6 +4330,7 @@ ENG_HOT static void raster_poly(worker_t *K, const sv_t *v, int n, const uint8_t
     uint32_t pix = 0;
     K->prof[PROF_NROWS] += (uint32_t)(y2 - y0 + 1);
     for (int y = y0; y <= y2; y++) {
+        if (span_l[y] > span_r[y]) continue;   /* ligne sans pixel à dessiner (edge_walk rattrape la suivante) */
         const float py = y + 0.5f;
         edge_walk(v, n, &ea, 1, py); edge_walk(v, n, &eb, -1, py);
         const sv_t *pa = &v[ea.i], *pb = &v[eb.i];
@@ -3382,6 +4690,42 @@ static inline void ciel_ligne(worker_t *K, uint16_t *o, const uint8_t *cv, int x
     for (; x <= x1; x++) if (!(cv[x] & 1)) o[x] = cv[x] ? attente565(K, col, cv[x], swp, (size_t)(&cv[x] - K->cov)) : col;
 }
 #endif
+#if ENG_ROULIS
+/* Ciel de la caméra penchée : chaque pixel libre ramené dans l'image non penchée (rotation inverse autour du centre de
+   projection) : couleur de sa ligne (ciel_table), panorama de l'horizon à sa colonne et sa ligne (hz_u, débordant de AG_ROUL_M) */
+static void ciel_roule(worker_t *K) {
+    const int swp = E.cfg.swap565, M = AG_ROUL_M;
+    const float c = RF->roul_c, s = RF->roul_s, px = RF->roul_x, py = RF->roul_y, hy = RF->sky_hy;
+    const int xa = K->bx0, xb = K->bx0 + K->bstride - 1;
+    for (int y = K->by0; y < K->by1; y++) {
+        uint16_t *o = ROW(y);
+        const uint8_t *cv = COV(y);
+        const int x0 = span_l[y] > xa ? span_l[y] : xa, x1 = span_r[y] < xb ? span_r[y] : xb;
+        const float dy = (float)y + 0.5f - py, dx0 = (float)x0 + 0.5f - px;
+        const float sx0 = px + dx0 * c - dy * s + (float)M, sy0 = py + dx0 * s + dy * c + (float)M;   /* (+ M : toujours positifs) */
+        /* en 16.16 : point de l'image non penchée, ligne du panorama (14/11/2026 : en flottants, 4 % du temps de la LDK) */
+        int32_t SX = (int32_t)(sx0 * 65536), SY = (int32_t)(sy0 * 65536);
+        const int32_t dSX = (int32_t)(c * 65536), dSY = (int32_t)(s * 65536);
+        int32_t R = RF->hz_px ? (int32_t)(((float)RF->hz_base - (hy + (float)M - sy0) * RF->hz_k) * 65536) : 0;
+        const int32_t dR = RF->hz_px ? (int32_t)(s * RF->hz_k * 65536) : 0, RH16 = RF->hz_px ? RF->hz_h << 16 : 0;
+        for (int x = x0; x <= x1; x++, SX += dSX, SY += dSY, R += dR) {
+            if (cv[x] & 1) continue;
+            int iy = (SY >> 16) - M, ix = (SX >> 16) - M;
+            iy = iy < -M ? -M : iy >= RH + M ? RH + M - 1 : iy;
+            ix = ix < -M ? -M : ix >= RW + M ? RW + M - 1 : ix;
+            uint16_t col = RF->ciel_tab[iy];
+            if (RF->hz_px) {
+                if (R >= 0 && R < RH16) {
+                    const int ri = R >> 16, d = RF->hz_base - ri, bnd = d < 4 ? 3 : d < 12 ? 2 : d < 28 ? 1 : 0;
+                    const uint8_t q = RF->hz_px[(size_t)ri * (size_t)RF->hz_w + RF->hz_u[ix]];
+                    if (q) col = RF->hz_pal[bnd * 256 + q];
+                }
+            }
+            o[x] = cv[x] ? attente565(K, col, cv[x], swp, (size_t)(&cv[x] - K->cov)) : col;
+        }
+    }
+}
+#endif
 ENG_HOT static void draw_sky(worker_t *K) {
     const camera_t *cam = &E.cam;
     const int swp = E.cfg.swap565;   /* couleurs en attente (faces en fondu) mêlées au ciel */
@@ -3407,6 +4751,9 @@ ENG_HOT static void draw_sky(worker_t *K) {
             }
         return;
     }
+#if ENG_ROULIS
+    if (RF->roule && RF->ciel_tab) { ciel_roule(K); return; }
+#endif
     uint16_t fog = pack565((int)amb.fog[0], (int)amb.fog[1], (int)amb.fog[2]);
     for (int y = K->by0; y < K->by1; y++) {
         uint16_t col;
@@ -3437,7 +4784,19 @@ ENG_HOT static void draw_sky(worker_t *K) {
 #else
         for (int x = span_l[y]; x <= span_r[y]; x++) if (!(cv[x] & 1)) o[x] = cv[x] ? attente565(K, col, cv[x], swp, (size_t)(&cv[x] - K->cov)) : col;
 #endif
+        /* Horizon de la course anti-gravité : la ligne du panorama de cette ligne de l'image, voilée d'autant plus qu'elle est
+           près de l'horizon (4 bandes) ; ses pixels vides laissent le ciel */
+        if (RF->hz_px) {
+            const int ri = (int)floorf((float)RF->hz_base - (hy - ((float)y + 0.5f)) * RF->hz_k);
+            if (ri >= 0 && ri < RF->hz_h) {
+                const int d = RF->hz_base - ri, bnd = d < 4 ? 3 : d < 12 ? 2 : d < 28 ? 1 : 0;
+                const uint16_t *pal = RF->hz_pal + bnd * 256;
+                const uint8_t *ligne = RF->hz_px + (size_t)ri * (size_t)RF->hz_w;
+                for (int x = span_l[y]; x <= span_r[y]; x++) if (!(cv[x] & 1)) { const uint8_t ix = ligne[RF->hz_u[x]]; if (ix) o[x] = pal[ix]; }
+            }
+        }
     }
+    if (RF->hz_px) return;   /* course anti-gravité : pas de ligne néon */
     if (RF->ciel == 3) return;   /* autre planète : pas de ligne néon */
     const float nu = amb.nuit;
     const int hyr = (int)floorf(hy + 0.5f);
@@ -3590,6 +4949,36 @@ static void lum_band(worker_t *K) {
         }
     }
 }
+/* Cadre du cockpit (ag_image) : ses pixels pleins, couverts et au plus près, avant la 3D ; la ligne sous son bas (secousse) répète
+   la dernière */
+#if ENG_PREMIUM
+#define ZB_DEVANT ((zcle_t)0x3FFFFFFF)
+#else
+#define ZB_DEVANT ((zcle_t)0xFFFF)
+#endif
+static void ag_cockpit_band(worker_t *K) {
+    const int xa = K->bx0, xb = K->bx0 + K->bstride - 1;
+    for (int y = K->by0; y < K->by1; y++) {
+        int sy = (int)floorf(((float)y + 0.5f - RF->ck_y) * RF->ck_k);
+        if (sy < 0) continue;
+        if (sy >= RF->ck_h) sy = RF->ck_h - 1;
+        const uint8_t *src = RF->ck_px + (size_t)sy * (size_t)RF->ck_w;
+        uint16_t *o = ROW(y);
+        uint8_t *cv = COV(y);
+        zcle_t *zr = ZB(y);
+#if ENG_DOF
+        uint8_t *dp = DEP(y);
+#endif
+        for (int x = xa; x <= xb; x++) {   /* (toute la ligne : les bornes de la ligne, la vitre, excluent le cadre) */
+            const uint8_t ix = src[RF->ck_u[x]];
+            if (!ix) continue;
+            o[x] = RF->ck_pal[ix]; cv[x] = 1; zr[x] = ZB_DEVANT;
+#if ENG_DOF
+            dp[x] = RF->ck_dep;
+#endif
+        }
+    }
+}
 static void render_band(worker_t *K, int y0, int h, uint16_t *dst, int x0, int w) {
     K->band = dst; K->by0 = y0; K->by1 = y0 + h; K->bx0 = x0; K->bstride = w;
     K->sil_n = 0;
@@ -3603,6 +4992,7 @@ static void render_band(worker_t *K, int y0, int h, uint16_t *dst, int x0, int w
     memset(K->dep, 255, (size_t)w * h);
 #endif
     K->nteinte = 1;
+    if (RF->ck_px) ag_cockpit_band(K);
     PROF_ADD(PROF_CLEAR, pt);
     int b = y0 / ENG_BAND, k0 = RF->bin_ok ? RF->bin_first[b] : 0, k1 = RF->bin_ok ? RF->bin_first[b + 1] : RF->norder;
     for (int k = k1 - 1; k >= k0; k--) {

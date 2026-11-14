@@ -129,7 +129,7 @@ static struct { uint8_t *mem; uint32_t taille, off[MAX_CARTES]; int nc, nb[MAX_C
 static int brou_nb(int k) {
     if (k < 0 || k >= E.w.ncartes || k >= MAX_CARTES) return 0;
     const carte_t *c = &E.w.cartes[k];
-    return c->vol || c->course || c->n <= 0 ? 0 : (c->n + BROU_G - 1) / BROU_G;
+    return c->vol || c->course || c->vision || c->n <= 0 ? 0 : (c->n + BROU_G - 1) / BROU_G;   /* (vision : la ville d'avant la Cendre) */
 }
 static uint32_t brou_oct(int nb) { return ((uint32_t)nb * (uint32_t)nb + 31) / 32 * 4; }
 static uint32_t brou_debut(int nc) { return 8 + ((2u * (uint32_t)nc + 3) & ~3u); }
@@ -890,6 +890,52 @@ void carte_dessiner(uint16_t c1, uint16_t c2, const carte_reperes_t *rp) {
             ui_outline(b, 4, 1.5f, or_, 255);
             ui_line(x - 5, y - 4, x + 5, y - 4, 1, or_, 255); ui_line(x - 5, y, x + 3, y, 1, or_, 255);
             ui_rect(x - 1, y + 4, 2, 6, or_, 255);
+        }
+    }
+    if (ile_abris_vus()) {   /* les abris de l'île (ile.c, 12/11/2026) : une case claire sur leur couche, là où ils ont été vus (carteDessiner) */
+        const uint16_t ca = ui_rgb(ABRI_RGB), ink = ui_rgb(INK);
+        for (int k = 0; k < E.w.ile_nabris; k++) {
+            const ile_abri_t *a = &E.w.ile_abri[k];
+            if (!vu_ici(a->x, a->z)) continue;
+            const float x = ox - a->x * C.s, y = oy + a->z * C.s;
+            if (!dans_vue(x, y, cx, cy, hw, hh, cr)) continue;
+            const float toit[6] = { x - 9, y - 1, x, y - 10, x + 9, y - 1 }, mur[8] = { x - 7, y - 1, x + 7, y - 1, x + 7, y + 7, x - 7, y + 7 };
+            ui_poly(toit, 3, ink, 230); ui_rect(x - 7, y - 1, 14, 8, ink, 230);
+            ui_outline(toit, 3, 1.5f, ca, 255); ui_outline(mur, 4, 1.5f, ca, 255);
+            ui_rect(x - 2, y + 2, 4, 5, ca, 255);
+        }
+    }
+    {   /* Villages aux lanternes de nacre allumées (ile.c, 13/11/2026) : un anneau nacré à leur bord, vu ou non */
+        float lx[ILE_VILLAGES_MAX], lz[ILE_VILLAGES_MAX], lr[ILE_VILLAGES_MAX];
+        const int nl = ile_lanternes(lx, lz, lr, ILE_VILLAGES_MAX);
+        const uint16_t cl = ui_rgb(LANTERNE_RGB);
+        for (int k = 0; k < nl; k++) {
+            const float x = ox - lx[k] * C.s, y = oy + lz[k] * C.s, r = fmaxf(5, lr[k] * C.s);
+            for (int sg = 0; sg < 32; sg++) {
+                const float a0 = sg * (2 * PI_F / 32), a1 = a0 + 2 * PI_F / 32, am = (a0 + a1) / 2;
+                if (hypotf(x + cosf(am) * r - cx, y + sinf(am) * r - cy) > cr - 6) continue;
+                ui_arc(x, y, r, a0, a1, 3, cl, 170);
+            }
+        }
+    }
+    {   /* Visions des lames (ile.c, 13/11/2026) : un halo flou, un disque pâle et trois anneaux qui s'effacent vers l'extérieur, même dans le
+           brouillard ; dessinés par morceaux d'anneau, seulement ceux dans le disque de la carte (ileVisions, visionPicto de l'émulateur de l'île) */
+        float vx[ILE_LAMES_MAX], vz[ILE_LAMES_MAX];
+        const int nv = ile_visions(vx, vz, ILE_LAMES_MAX);
+        const uint16_t cv = ui_rgb(VISION_RGB);
+        for (int k = 0; k < nv; k++) {
+            const float x = ox - vx[k] * C.s, y = oy + vz[k] * C.s, r = fmaxf(6, VISION_R * C.s);
+            const float dc = hypotf(x - cx, y - cy);
+            if (dc - r > cr) continue;
+            if (dc + r * 0.55f < cr - 8) ui_circle(x, y, r * 0.55f, cv, 64);
+            for (int i = 0; i < 3; i++) {
+                const float ri = r * (0.55f + 0.2f * i);
+                for (int sg = 0; sg < 24; sg++) {
+                    const float a0 = sg * (2 * PI_F / 24), a1 = a0 + 2 * PI_F / 24, am = (a0 + a1) / 2;
+                    if (hypotf(x + cosf(am) * ri - cx, y + sinf(am) * ri - cy) > cr - 6) continue;
+                    ui_arc(x, y, ri, a0, a1, 4, cv, 150 - 45 * i);
+                }
+            }
         }
     }
     {   /* Objectifs des autres quêtes ouvertes (script_objectifs) : un losange cyan (principale) ou or (secondaire), même dans

@@ -279,6 +279,8 @@ static int int_parse(int k) {
             h->y0 = rds16(p + 8) / 256.0f; h->y1 = rds16(p + 10) / 256.0f; h->axe = p[12] <= 4 ? p[12] : 0;
         }
     }
+    m = (uint8_t *)(((uintptr_t)(I->haut + I->nhaut) + 3) & ~(uintptr_t)3);
+    I->libre = m; I->nlibre = m < mend ? (uint32_t)(mend - m) : 0;
     I->cur = k; I->zone = 1;
     return I->nnode > 0 && (I->nsort > 0 || I->etage > 0);
 }

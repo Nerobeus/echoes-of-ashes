@@ -95,13 +95,14 @@ static int track(int s) {
     return M.cache_t[c];
 }
 
-/* Piste t ou l'une de sa série (t_2, t_3… jusqu'à t_9), la k-ième en tournant : les courses changent de musique
-   (01/11/2026 : trois morceaux de course ; serie de musVoulue dans l'émulateur) */
+/* Piste t ou l'une de sa série (t_2, t_3… jusqu'à t_12), la k-ième en tournant : les courses changent de musique
+   (01/11/2026 : trois morceaux de course ; serie de musVoulue dans l'émulateur, jusqu'à t_9 : Echoes n'en a que trois ; 14/11/2026 :
+   jusqu'à t_12 pour les dix courses de la course anti-gravité) */
 static int serie(int t, int k) {
     if (t < 0) return t;
-    int s[9] = { t }, n = 1;
+    int s[12] = { t }, n = 1;
     char b[40];   /* nom de 23 caractères au plus, « _ » et le rang : de la marge pour format-truncation */
-    for (int i = 2; i <= 9; i++) {
+    for (int i = 2; i <= 12; i++) {
         snprintf(b, sizeof b, "%s_%d", M.t[t].nom, i);
         if ((s[n] = find(b)) < 0) break;
         n++;
@@ -114,6 +115,12 @@ static int wanted(int *combat) {
     const world_t *w = &E.w;
     const int plan = w->mus_plan;
     *combat = 0;
+    if (AG.on) {   /* course anti-gravité : « menu », ou la série « course », une autre à chaque course (« course » si la banque n'a pas « menu ») */
+        const char *m = ag_musique();
+        int t = m ? find(m) : -1;
+        if (t < 0 && m) t = find("course");
+        return serie(t, AG.ncourses);
+    }
     if (accueil_on()) { const char *m = accueil_musique(); return m && m[0] ? find(m) : -1; }   /* écran titre, introduction */
     *combat = 1;
     if (!CR.on) M.course_on = 0;

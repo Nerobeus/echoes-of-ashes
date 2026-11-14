@@ -4,7 +4,7 @@
 // core/eng.h et platform/retrofw/main_retrofw.c), puis le dossier à copier sur la carte de la console et le paquet IPK
 // que GMenuNX installe.
 //
-//   node tools/build_retrofw.js [--enfant | --ile] [--sans-ipk] [--simu]
+//   node tools/build_retrofw.js [--enfant | --ile | --antigrav] [--sans-ipk] [--simu]
 //     --enfant    édition enfant (ECHOES_ENFANT, data/enfant) : dossier games/choeur_enfant, paquet à part
 //     --ile       l'Île de Nacre du jeu des héroïnes (11/11/2026, demande de l'utilisateur ; CHOEUR_ILE, data/ile de
 //                 tools/maj_monde.js --ile) : le même programme, dossier games/ile, ile.dge, lien ile.lnk, sauvegardes à part
@@ -23,9 +23,13 @@ const root = path.join(__dirname, '..');
 const python = path.join(root, '..', 'tools', '.venv', 'Scripts', 'python.exe');
 const args = process.argv.slice(2);
 const enfant = args.includes('--enfant'), ile = !enfant && args.includes('--ile'), ipk = !args.includes('--sans-ipk'), simu = args.includes('--simu');
+// --antigrav (13/11/2026) : la course anti-gravité (core/antigrav.c), son paquet seul (data/antigrav/antigrav.pak de
+// tools/antigrav/generer.js), sa banque de musiques (data/antigrav/musique.bin : pistes_antigrav.json) ; dossier games/antigrav,
+// sauvegardes dans $HOME/.antigrav
+const antigrav = !enfant && !ile && args.includes('--antigrav');
 const suf = enfant ? '_enfant' : '';
-const nom = ile ? 'ile' : 'choeur' + suf;   // dossier games/<nom>, programme <nom>.dge, lien <nom>.lnk
-const donnees = path.join(root, 'data', ...(enfant ? ['enfant'] : ile ? ['ile'] : []));
+const nom = ile ? 'ile' : antigrav ? 'antigrav' : 'choeur' + suf;   // dossier games/<nom>, programme <nom>.dge, lien <nom>.lnk
+const donnees = path.join(root, 'data', ...(enfant ? ['enfant'] : ile ? ['ile'] : antigrav ? ['antigrav'] : []));
 const out = path.join(root, 'build', 'retrofw');
 fs.mkdirSync(out, { recursive: true });
 // Icône de l'île (32 × 32) : lagon, plage, volcan vert, cocotier
@@ -45,9 +49,24 @@ const ICONE_ILE = [
     'im.resize((32, 32), Image.LANCZOS).save(sys.argv[1])',
 ].join('\n');
 
-const src = ['core/world.c', 'core/game.c', 'core/render.c', 'core/ui.c', 'core/hud.c', 'core/battle.c', 'core/script.c', 'core/audio.c', 'core/course.c', 'core/music.c', 'core/interieur.c', 'core/accueil.c', 'core/police.c', 'core/coffres.c', 'core/pilote.c', 'core/carte.c', 'core/carriere.c', 'core/garage.c', 'core/panneaux.c', 'core/repliques.c', 'core/arene.c', 'core/ile.c', 'platform/retrofw/main_retrofw.c', 'platform/retrofw/banc.c'].map(f => path.join(root, f));
+// Icône de la course anti-gravité (32 × 32) : ruban de piste néon en perspective, chevrons d'accélération
+const ICONE_AG = [
+    'import sys',
+    'from PIL import Image, ImageDraw',
+    'k = 8; S = 32 * k',
+    'im = Image.new("RGBA", (S, S), (0, 0, 0, 0)); d = ImageDraw.Draw(im)',
+    'd.rounded_rectangle((0, 0, S - 1, S - 1), radius=6 * k, fill=(22, 12, 40, 255))',
+    'd.polygon([(2 * k, 30 * k), (13 * k, 6 * k), (19 * k, 6 * k), (30 * k, 30 * k)], fill=(40, 44, 56, 255))',
+    'd.line([(2 * k, 30 * k), (13 * k, 6 * k)], fill=(95, 240, 255, 255), width=2 * k)',
+    'd.line([(30 * k, 30 * k), (19 * k, 6 * k)], fill=(255, 79, 216, 255), width=2 * k)',
+    'for y in (14, 21):',
+    '    d.line([(10 * k, (y + 5) * k), (16 * k, y * k), (22 * k, (y + 5) * k)], fill=(255, 194, 74, 255), width=2 * k)',
+    'im.resize((32, 32), Image.LANCZOS).save(sys.argv[1])',
+].join('\n');
+
+const src = ['core/world.c', 'core/game.c', 'core/render.c', 'core/ui.c', 'core/hud.c', 'core/battle.c', 'core/script.c', 'core/audio.c', 'core/course.c', 'core/music.c', 'core/interieur.c', 'core/accueil.c', 'core/police.c', 'core/coffres.c', 'core/pilote.c', 'core/carte.c', 'core/carriere.c', 'core/garage.c', 'core/panneaux.c', 'core/repliques.c', 'core/arene.c', 'core/ile.c', 'core/antigrav.c', 'platform/retrofw/main_retrofw.c', 'platform/retrofw/banc.c'].map(f => path.join(root, f));
 const stamp = (d => d.getFullYear() + '-' + String(d.getMonth() + 1).padStart(2, '0') + '-' + String(d.getDate()).padStart(2, '0') + ' ' + String(d.getHours()).padStart(2, '0') + ':' + String(d.getMinutes()).padStart(2, '0'))(new Date());
-const defs = ['-DENG_RECT=1', '-DENG_ROUND=0', '-DENG_W=320', '-DENG_H_PX=240', '-DENG_WORKERS=1', '-DCHOEUR_VERSION="' + stamp + '"', ...(enfant ? ['-DECHOES_ENFANT=1'] : []), ...(ile ? ['-DCHOEUR_ILE=1'] : [])];   // (version : en tête de journal.txt)
+const defs = ['-DENG_RECT=1', '-DENG_ROUND=0', '-DENG_W=320', '-DENG_H_PX=240', '-DENG_WORKERS=1', '-DCHOEUR_VERSION="' + stamp + '"', ...(enfant ? ['-DECHOES_ENFANT=1'] : []), ...(ile ? ['-DCHOEUR_ILE=1'] : []), ...(antigrav ? ['-DCHOEUR_ANTIGRAV=1', '-DENG_ROULIS=1'] : [])];   // (version : en tête de journal.txt)
 const zig = (target, sortie, plus) => execFileSync(python, ['-m', 'ziglang', 'cc', '-target', target, ...plus, '-std=c99', '-O2', '-fno-strict-aliasing',
     '-Wall', '-Wno-unused-parameter', ...defs, '-o', sortie, ...src], { stdio: 'inherit' });
 
@@ -66,14 +85,14 @@ if (simu) {
 }
 
 // 2. Les fichiers du monde (ceux de la carte SD de la montre) ; le paquet léger de la flash devient monde_leger.pak
-const MONDE = [['monde_leger.pak', 'monde_esp32.pak'], ['monde.pak', 'monde.pak'], ['histoire.scn', 'histoire.scn'], ['interieurs.bin', 'interieurs.bin']];
+const MONDE = antigrav ? [['monde_leger.pak', 'antigrav.pak']] : [['monde_leger.pak', 'monde_esp32.pak'], ['monde.pak', 'monde.pak'], ['histoire.scn', 'histoire.scn'], ['interieurs.bin', 'interieurs.bin']];
 const fichiers = [];
 for (const [dst, s] of MONDE) {
     const f = path.join(donnees, s);
-    if (!fs.existsSync(f)) { console.error('manque ' + f + ' (node tools/maj_monde.js' + (enfant ? ' --enfant' : ile ? ' --ile' : '') + ')'); process.exit(1); }
+    if (!fs.existsSync(f)) { console.error('manque ' + f + (antigrav ? ' (node tools/antigrav/generer.js)' : ' (node tools/maj_monde.js' + (enfant ? ' --enfant' : ile ? ' --ile' : '') + ')')); process.exit(1); }
     fichiers.push([dst, f]);
 }
-{   // paquet léger et monde.pak du même export (le moteur compare la taille attendue : SDPK)
+if (!antigrav) {   // paquet léger et monde.pak du même export (le moteur compare la taille attendue : SDPK)
     const dl = fs.statSync(path.join(donnees, 'monde_esp32.pak')).mtimeMs, dm = fs.statSync(path.join(donnees, 'monde.pak')).mtimeMs;
     if (Math.abs(dl - dm) > 30 * 60 * 1000) console.warn('attention : monde_esp32.pak et monde.pak n\'ont pas été faits ensemble (plus de 30 min d\'écart)');
 }
@@ -82,22 +101,35 @@ if (musique) fichiers.push(['musique.bin', musique]); else console.warn('pas de 
 
 // 3. Icône (32 × 32, celle de l'app Android), mode d'emploi (bouton Y de GMenuNX), lien du menu
 const icone = path.join(out, nom + '.png');
-if (ile) execFileSync(python, ['-I', '-c', ICONE_ILE, icone]);   // (l'île n'a pas d'icône à elle : dessinée ici)
+if (ile || antigrav) execFileSync(python, ['-I', '-c', ile ? ICONE_ILE : ICONE_AG, icone]);   // (l'île n'a pas d'icône à elle : dessinée ici)
 else execFileSync(python, ['-I', '-c', 'import sys; from PIL import Image; Image.open(sys.argv[1]).convert("RGBA").resize((32, 32), Image.LANCZOS).save(sys.argv[2])',
     path.join(root, 'platform', 'android', 'res', 'mipmap-xxhdpi', 'ic_launcher.png'), icone]);
-const titre = ile ? 'Ile de Nacre' : 'Le Choeur des Cendres' + (enfant ? ' (enfant)' : '');
+const titre = ile ? 'Ile de Nacre' : antigrav ? 'AntiGraV' : 'Le Choeur des Cendres' + (enfant ? ' (enfant)' : '');
 const dossierJeu = '/home/retrofw/games/' + nom;
 const lien = [
     'title=' + titre,
-    'description=' + (ile ? 'Jeu des héroïnes : l\'île tropicale' : 'RPG en 3D façon PS1' + (enfant ? ', édition enfant' : '')),
+    'description=' + (ile ? 'Jeu des héroïnes : l\'île tropicale' : antigrav ? 'Course de glisseurs en 3D façon PS1' : 'RPG en 3D façon PS1' + (enfant ? ', édition enfant' : '')),
     'exec=' + dossierJeu + '/' + nom + '.dge',
     'icon=' + dossierJeu + '/' + nom + '.png',
     'manual=' + dossierJeu + '/' + nom + '.man.txt',
-    'clock=' + (enfant ? 600 : 654),   // MHz (528 par défaut, 600 au plus selon le wiki de RetroFW ; 652 : la plus haute fréquence stable de la LDK de l'utilisateur, 11/11/2026, réglée à 654 dans GMenuNX : la PLL avance par 6 MHz ; édition enfant, celle qu'on publie : 600, une autre console peut ne pas tenir 654)
+    'clock=' + (enfant ? 600 : antigrav ? 624 : 654),   // MHz (course anti-gravité : 624 depuis le 14/11/2026, trois plantages sans cause dans le code, partout ailleurs, sous la charge de la course ; l'utilisateur : « diminue un peu la vitesse processeur, c'est certainement le problème ») (528 par défaut, 600 au plus selon le wiki de RetroFW ; 652 : la plus haute fréquence stable de la LDK de l'utilisateur, 11/11/2026, réglée à 654 dans GMenuNX : la PLL avance par 6 MHz ; édition enfant, celle qu'on publie : 600, une autre console peut ne pas tenir 654)
     ''].join('\n');
 // Banc d'essai (même programme, params=banc) : trois scènes de 15 s, banc.txt et profil_banc.bin, aucune sauvegarde
-const lienBanc = lien.replace('title=' + titre, 'title=' + (enfant ? 'Banc (enfant)' : ile ? "Ile : banc d'essai" : "Choeur : banc d'essai")).replace('description=', 'description=Mesure 45 s, puis retour. ') + 'params=banc\n';
-const manuel = [
+const lienBanc = lien.replace('title=' + titre, 'title=' + (enfant ? 'Banc (enfant)' : ile ? "Ile : banc d'essai" : antigrav ? "AntiGraV : banc d'essai" : "Choeur : banc d'essai")).replace('description=', antigrav ? 'description=Mesure 2 min sur les 4 pistes, puis retour. ' : 'description=Mesure 45 s, puis retour. ') + 'params=banc\n';
+const manuel = antigrav ? [
+    'ANTIGRAV',
+    '',
+    'Commandes',
+    '  A ou HAUT      poussée',
+    '  Croix          diriger ; choisir l\'écurie à l\'écran titre',
+    '  L / R          aérofreins gauche et droit (virages serrés, freinage)',
+    '  X              utiliser l\'arme ramassée sur une plaque d\'armes (le rayon : tenir pour charger)',
+    '  Y              changer l\'arme portée en énergie',
+    '  B              vue extérieure ou cockpit',
+    '  START          pause (reprendre, recommencer, quitter)',
+    '  SELECT + R     images par seconde (en haut à gauche)',
+    '  SELECT + START tenus 1 s : quitter',
+    ''].join('\n') : [
     ile ? 'L\'ÎLE DE NACRE' : 'LE CHŒUR DES CENDRES' + (enfant ? ' (édition enfant)' : ''),
     '',
     'Commandes',
@@ -111,7 +143,7 @@ const manuel = [
     '  En véhicule    R accélère, L freine et recule, la croix braque',
     '                 (menu SYSTÈME > CONDUITE LDK : GÂCHETTES ou CROIX)',
     '  SELECT + R     images par seconde (en haut à gauche)',
-    '  SELECT + L     échanger rouge et bleu (si les couleurs sont fausses)',
+    '  SELECT + L     tenus 1,5 s : échanger rouge et bleu (si les couleurs sont fausses)',
     '  SELECT + START tenus 1 s : quitter (partie sauvegardée si possible)',
     '',
     'Aussi : menu SYSTÈME > VERS RETROFW : QUITTER.',
@@ -190,21 +222,21 @@ function ar(sortie, membres) {   // membres : [nom, fichier]
     const tmp = path.join(out, 'ipk_' + nom);
     fs.mkdirSync(tmp, { recursive: true });
     const control = [
-        'Package: ' + (ile ? 'ile-de-nacre' : 'choeur-des-cendres' + (enfant ? '-enfant' : '')),
+        'Package: ' + (ile ? 'ile-de-nacre' : antigrav ? 'antigrav' : 'choeur-des-cendres' + (enfant ? '-enfant' : '')),
         'Version: ' + version,
-        'Description: ' + titre + (ile ? ', jeu des heroines' : ', RPG en 3D facon PS1'),
+        'Description: ' + titre + (ile ? ', jeu des heroines' : antigrav ? ', course de glisseurs facon PS1' : ', RPG en 3D facon PS1'),
         'Section: games',
         'Priority: optional',
         'Maintainer: Nerobeus',
         'Architecture: mipsel',
-        ...(ile ? [] : ['Homepage: https://github.com/Nerobeus/echoes-of-ashes', 'Source: https://github.com/Nerobeus/echoes-of-ashes']),   // (l'île n'est pas dans le dépôt public)
+        ...(ile || antigrav ? [] : ['Homepage: https://github.com/Nerobeus/echoes-of-ashes', 'Source: https://github.com/Nerobeus/echoes-of-ashes']),   // (l'île n'est pas dans le dépôt public)
         ''].join('\n');
     const lnk = '/home/retrofw/.gmenunx/sections/games/' + nom + '.lnk';
     await tarGz(path.join(tmp, 'control.tar.gz'), [['./', { dossier: 1 }], ['./control', { contenu: Buffer.from(control) }], ['./conffiles', { contenu: Buffer.from(lnk + '\n') }]]);
     const g = './home/retrofw/games/' + nom + '/', s = './home/retrofw/.gmenunx/sections/games/';
     const entrees = ['./', './home/', './home/retrofw/', './home/retrofw/games/', g, './home/retrofw/.gmenunx/', './home/retrofw/.gmenunx/sections/', s].map(n => [n, { dossier: 1 }]);
     entrees.push([g + nom + '.dge', { fichier: dge, mode: 0o755 }], [g + nom + '.png', { fichier: icone }], [g + nom + '.man.txt', { contenu: Buffer.from(manuel) }],
-        [s + nom + '.lnk', { contenu: Buffer.from(lien) }], ...(enfant ? [] : [[s + nom + '_banc.lnk', { contenu: Buffer.from(lienBanc) }]]), ...fichiers.map(([n, f]) => [g + n, { fichier: f }]));
+        [s + nom + '.lnk', { contenu: Buffer.from(lien) }], ...(enfant || antigrav ? [] : [[s + nom + '_banc.lnk', { contenu: Buffer.from(lienBanc) }]]), ...fichiers.map(([n, f]) => [g + n, { fichier: f }]));
     await tarGz(path.join(tmp, 'data.tar.gz'), entrees);
     fs.writeFileSync(path.join(tmp, 'debian-binary'), '2.0\n');
     const paquet = path.join(out, nom + '.ipk');

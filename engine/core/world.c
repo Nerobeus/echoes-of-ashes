@@ -85,6 +85,12 @@ static const int ST_COUNT_ILE[ST_NCLASS] = { 12, 8, 12, 8, 6, 14 };
 static const uint32_t *ST_SIZE_W = ST_SIZE_ECHOES; static const int *ST_COUNT = ST_COUNT_ECHOES;   /* ceux du monde chargé (stream_init) */
 #define ST_SIZE ST_SIZE_W
 static uint32_t st_base[ST_NCLASS]; static int st_i0[ST_NCLASS + 1];
+/* Île (13/11/2026) : une direction d'une planche plus grande que la plus grande place du cache (scènes d'offrande, page Scènes : jusqu'à
+   192 × 96 × 8 images, 147 Ko) est lue dans le tampon commun des images (TC_SCENE) ; une seule à la fois (s << 3 | d ; -1 aucune). Le
+   cut-in qui précède chaque animation prend le même tampon : la scène n'est pas dessinée pendant qu'il est à l'écran (ile.c) */
+static int st_grand = -1;
+uint8_t *img_emprunter(int qui, uint32_t n);
+static uint8_t *img_buf;
 
 void stream_frame(void) {
     world_t *w = &E.w;
@@ -149,7 +155,17 @@ const uint8_t *sheet_block(int s, int d, int load) {
     }
     if (!load || (load == 1 && !w->s_sync && w->s_spr_budget <= 0) || !w->st_mem) return NULL;
     int c = 0; while (c < ST_NCLASS && ST_SIZE[c] < sz) c++;
-    if (c == ST_NCLASS) return NULL;
+    if (c == ST_NCLASS) {   /* île : le tampon commun (scène d'offrande) */
+        if (!w->ile[0]) return NULL;
+        if (st_grand == (s << 3 | d)) return img_buf;
+        uint8_t *m = img_emprunter(TC_SCENE, sz);
+        if (!m) return NULL;
+        st_grand = -1;
+        if (pak_read(sh->foff + (uint32_t)d * sz, m, sz)) return NULL;
+        if (!(sh->footok >> d & 1)) { sh->foot[d] = sheet_foot(sh, m); sh->footok |= (uint8_t)(1 << d); }
+        st_grand = s << 3 | d; w->s_spr_budget--;
+        return m;
+    }
     int best = -1; uint32_t bu = 0xFFFFFFFFu;
     for (int i = st_i0[c]; i < st_i0[c + 1]; i++) {
         if (w->st_who[i] < 0) { best = i; break; }
@@ -508,6 +524,9 @@ int world_carte(int k, float x, float z) {
     if (k < 0 || k >= w->ncartes) return -1;
     const carte_t *C = &w->cartes[k];
     if (k == w->carte) { E.sera.x = x; E.sera.z = z; E.sera_y_ok = 0; E.stream_hold = 1; if (C->vol) vol_embarquer(0); return 0; }
+    /* Vision (la ville d'avant la Cendre) : le point d'avant le voyage, que la sauvegarde garde tant que Sera y est (sv_remplir
+       de hud.c ; changerCarte de l'émulateur) */
+    if (C->vision && !w->cartes[w->carte].vision) { E.vis_carte = w->carte; E.vis_x = E.sera.x; E.vis_z = E.sera.z; }
     ride_lacher();   /* le véhicule conduit reste sur l'ancienne carte (son indice désignerait un exemplaire de la nouvelle) */
     police_reset();  /* la recherche ne suit pas Sera sur une autre carte */
     for (int s = 0; s < PATR_MAX; s++) PATR[s].on = 0;   /* ni les ennemis visibles */
@@ -603,6 +622,10 @@ int eng_init(const uint8_t *pak, size_t len, const eng_config_t *cfg) {
     world_t *w = &E.w;
     if (len < 16 || rd32(pak) != PAK_MAGIC) FAIL("paquet invalide");
     if (rd32(pak + 4) != PAK_VERSION) FAIL("version de paquet inconnue");
+    {   /* Course anti-gravité (antigrav.c, 13/11/2026) : paquet propre à la variante (section AGPS), rien du monde d'Echoes */
+        const int ag = ag_charger(pak, len);
+        if (ag) return ag < 0 ? -1 : 0;
+    }
     /* Édition (EDIT ; absente : 18+). Le moteur de l'édition enfant ne lance rien d'autre */
     {
         uint32_t esz;
@@ -612,12 +635,12 @@ int eng_init(const uint8_t *pak, size_t len, const eng_config_t *cfg) {
         const uint8_t *il = section(pak, len, "ILE ", &esz);
         memset(w->ile, 0, sizeof w->ile);
         if (il && esz >= 1) memcpy(w->ile, il, esz < sizeof w->ile - 1 ? esz : sizeof w->ile - 1);
-        w->ile_monstres = w->ile_esprits = w->ile_epuise = 0xFFFF;   /* (paquet d'avant le 10/11/2026 : ni l'un ni l'autre) */
+        w->ile_monstres = w->ile_esprits = w->ile_epuise = w->ile_nuits = 0xFFFF; w->ile_hantise = 0xFFFF;   /* (paquet d'avant le 10/11/2026 : ni l'un ni l'autre) */
         if (il && esz >= 36) { w->ile_monstres = (uint16_t)(il[32] | il[33] << 8); w->ile_esprits = (uint16_t)(il[34] | il[35] << 8); }
         /* puis (11/11/2026) : nombre d'héroïnes u8, de lames u8, 0 u16 ; chaque héroïne : personnage u16, genre u8 (0 féminin, 1 masculin), 0,
            identifiant du studio (16 octets) ;
            chaque lame : identifiant (16), nom UTF-8 (24), héroïne u16 (65535 aucune), drapeau u16 (65535 jamais), arme, rôle, de jet, 0 */
-        w->ile_nher = w->ile_nlames = w->ile_nsocles = 0;
+        w->ile_nher = w->ile_nlames = w->ile_nsocles = w->ile_nabris = w->ile_nrodeurs = w->ile_nvillages = 0;
         if (il && esz >= 40) {
             const int nh = il[36], nl = il[37];
             const uint8_t *q = il + 40, *fin = il + esz;
@@ -630,6 +653,7 @@ int eng_init(const uint8_t *pak, size_t len, const eng_config_t *cfg) {
                 ile_lame_t *l = &w->ile_lame[w->ile_nlames++];
                 memcpy(l->id, q, 16); l->id[15] = 0; memcpy(l->nom, q + 16, 24); l->nom[24] = 0;
                 l->perso = (uint16_t)(q[40] | q[41] << 8); l->drapeau = (uint16_t)(q[42] | q[43] << 8); l->arme = q[44]; l->role = q[45]; l->jet = q[46];
+                l->x = l->z = -1; l->vision = 0xFFFF; l->region = 255;
             }
             /* puis (11/11/2026) : statues sur un piédestal en volume : nombre u8, 0, puis personnage u16, socle u16 (1/100 d'unité) */
             w->ile_nsocles = 0;
@@ -641,6 +665,101 @@ int eng_init(const uint8_t *pak, size_t len, const eng_config_t *cfg) {
             }
             /* puis le drapeau « epuise » u16 (11/11/2026) */
             if (q + 2 <= fin) w->ile_epuise = (uint16_t)(q[0] | q[1] << 8);
+            /* puis le drapeau « nuits » u16 (12/11/2026) */
+            if (q + 4 <= fin) w->ile_nuits = (uint16_t)(q[2] | q[3] << 8);
+            /* puis (12/11/2026) les abris : nombre u8, 0, puis 56 octets chacun : couche x, z et centre x, z (u16, 1/16 de case), rayon u8
+               (1/4 de case), sorte u8, nombre de bâtiments u8, 0, six bâtiments (u16 : rang dans PORT, 65535 aucun), nom UTF-8 (32) */
+            if (q + 6 <= fin) {
+                const uint8_t *a = q + 4;
+                const int na = a[0];
+                a += 2;
+                for (int k = 0; k < na && a + 56 <= fin; k++, a += 56) if (w->ile_nabris < ILE_ABRIS_MAX) {
+                    ile_abri_t *b = &w->ile_abri[w->ile_nabris++];
+                    b->x = (a[0] | a[1] << 8) / 16.0f; b->z = (a[2] | a[3] << 8) / 16.0f;
+                    b->cx = (a[4] | a[5] << 8) / 16.0f; b->cz = (a[6] | a[7] << 8) / 16.0f;
+                    b->r = a[8] / 4.0f; b->sorte = a[9]; b->nbats = 0;
+                    for (int j = 0; j < a[10] && j < ILE_ABRI_BATS; j++) { const uint16_t r = (uint16_t)(a[12 + 2 * j] | a[13 + 2 * j] << 8); if (r != 0xFFFF) b->bats[b->nbats++] = r; }
+                    memcpy(b->nom, a + 24, 32); b->nom[31] = 0;
+                }
+                /* puis (13/11/2026, chantier des nuits, étape 3) le drapeau « hantise » u16 ; la place de chaque lame (x, z u16, 1/16 de case ;
+                   65535 : inconnue) ; les rôdeurs : nombre u8, 0, puis 8 octets chacun : personnage u16, lame u8 (255 aucune), 0, drapeau u16
+                   (65535 aucun), 0 u16 */
+                a = q + 6 + (size_t)na * 56;
+                if (a + 2 <= fin) {
+                    w->ile_hantise = (uint16_t)(a[0] | a[1] << 8); a += 2;
+                    for (int k = 0; k < nl && a + 4 <= fin; k++, a += 4) if (k < w->ile_nlames) {
+                        const int x = a[0] | a[1] << 8, z = a[2] | a[3] << 8;
+                        if (x != 0xFFFF && z != 0xFFFF) { w->ile_lame[k].x = x / 16.0f; w->ile_lame[k].z = z / 16.0f; }
+                    }
+                    if (a + 2 <= fin) {
+                        const int nr = a[0]; a += 2;
+                        for (int k = 0; k < nr && a + 8 <= fin; k++, a += 8) if (w->ile_nrodeurs < ILE_RODEURS_MAX) {
+                            ile_rodeur_t *r = &w->ile_rodeur[w->ile_nrodeurs];
+                            r->perso = (uint16_t)(a[0] | a[1] << 8); r->lame = a[2]; r->drapeau = (uint16_t)(a[4] | a[5] << 8);
+                            r->sorte = 0; r->succube = 255; r->x = r->z = -1;
+                            w->ile_nrodeurs++;   /* (personnage contrôlé à l'usage : PERS se lit plus loin) */
+                        }
+                        /* puis (13/11/2026, étape 5) le drapeau de vision de chaque lame u16 (65535 : aucun) */
+                        for (int k = 0; k < nl && a + 2 <= fin; k++, a += 2) if (k < w->ile_nlames) w->ile_lame[k].vision = (uint16_t)(a[0] | a[1] << 8);
+                        /* puis (13/11/2026, étape 5) les villages : nombre u8, 0, puis 40 octets chacun : centre x, z u16 (1/16 de case), rayon u8
+                           (1/4 de case), 0, drapeau des lanternes u16 (65535 aucun), nom UTF-8 (32) ; puis la région de chaque lame u8 (255 inconnue) */
+                        if (a + 2 <= fin) {
+                            const int nvg = a[0]; a += 2;
+                            for (int k = 0; k < nvg && a + 40 <= fin; k++, a += 40) if (w->ile_nvillages < ILE_VILLAGES_MAX) {
+                                ile_village_t *v = &w->ile_village[w->ile_nvillages++];
+                                v->x = (a[0] | a[1] << 8) / 16.0f; v->z = (a[2] | a[3] << 8) / 16.0f; v->r = a[4] / 4.0f;
+                                v->lanterne = (uint16_t)(a[6] | a[7] << 8); memcpy(v->nom, a + 8, 32); v->nom[31] = 0;
+                            }
+                            for (int k = 0; k < nl && a + 1 <= fin; k++, a++) if (k < w->ile_nlames) w->ile_lame[k].region = a[0];
+                            /* puis (13/11/2026, succubes nommées) la suite de chaque rôdeur : place x, z u16 (1/16 de case ; 65535 inconnue),
+                               sorte u8 (0 reflet, 1 succube), succube u8 (255 aucune) ; puis les succubes : nombre u8, 0, puis 20 octets chacune :
+                               héroïne u16 (PERS), ennemie u16 (PERS), drapeau d'apparition u16, cinq drapeaux de charme u16, animations à deux
+                               u16, 0 u16 (65535 : aucun) */
+                            for (int k = 0; k < nr && a + 6 <= fin; k++, a += 6) if (k < w->ile_nrodeurs) {
+                                ile_rodeur_t *r = &w->ile_rodeur[k];
+                                const int x = a[0] | a[1] << 8, z = a[2] | a[3] << 8;
+                                if (x != 0xFFFF && z != 0xFFFF) { r->x = x / 16.0f; r->z = z / 16.0f; }
+                                r->sorte = a[4]; r->succube = a[5];
+                            }
+                            if (a + 2 <= fin) {
+                                const int ns = a[0]; a += 2;
+                                for (int k = 0; k < ns && a + 20 <= fin; k++, a += 20) if (w->ile_nsucc < ILE_SUCCUBES_MAX) {
+                                    ile_succ_t *s = &w->ile_succ[w->ile_nsucc++];
+                                    s->perso = (uint16_t)(a[0] | a[1] << 8); s->ennemi = (uint16_t)(a[2] | a[3] << 8); s->drapeau = (uint16_t)(a[4] | a[5] << 8);
+                                    for (int c = 0; c < 5; c++) s->charme[c] = (uint16_t)(a[6 + 2 * c] | a[7 + 2 * c] << 8);
+                                    s->duo = (uint16_t)(a[16] | a[17] << 8);
+                                    for (int c = 0; c < 15; c++) s->cut[c] = 0xFFFF;
+                                    s->perso2 = s->ennemi2 = 0xFFFF;
+                                }
+                                /* puis (13/11/2026) le cut-in de chaque animation d'offrande de chaque succube : 15 × u16 (index IMAG ;
+                                   65535 aucun), rencontre par rencontre */
+                                for (int k = 0; k < ns && a + 30 <= fin; k++, a += 30) if (k < w->ile_nsucc)
+                                    for (int c = 0; c < 15; c++) w->ile_succ[k].cut[c] = (uint16_t)(a[2 * c] | a[2 * c + 1] << 8);
+                                /* puis (13/11/2026, paires) la partenaire de chaque succube : héroïne u16, ennemie u16 (PERS ; 65535 : seule) */
+                                for (int k = 0; k < ns && a + 4 <= fin; k++, a += 4) if (k < w->ile_nsucc) {
+                                    w->ile_succ[k].perso2 = (uint16_t)(a[0] | a[1] << 8); w->ile_succ[k].ennemi2 = (uint16_t)(a[2] | a[3] << 8);
+                                }
+                                /* puis (13/11/2026, scènes d'offrande de la page Scènes) la personne jouée sans héroïne choisie u16 (PERS ;
+                                   65535 inconnue), le nombre de scènes u16, puis 10 octets chacune : succube u8 (rang), emplacement u8 (0 à 14),
+                                   drapeaux u8 (1 : le personnage joué est dans la scène, 2 : la partenaire aussi), 0, jouable u16 (PERS ; 65535 :
+                                   toutes), planche u16 (SPRS), durée u16 (centièmes de s) ; gardées dans le paquet (ile.c, offr_scene) */
+                                if (a + 4 <= fin) {
+                                    w->ile_jou_repli = (uint16_t)(a[0] | a[1] << 8);
+                                    const int no = a[2] | a[3] << 8; a += 4;
+                                    if (no > 0 && a + (size_t)no * 10 <= fin) { w->ile_osc = a; w->ile_nosc = (uint16_t)no; }
+                                    a += (size_t)no * 10;
+                                    /* puis (13/11/2026, chantier 3) les cut-ins propres à un personnage joué : nombre u16, puis 6 octets
+                                       chacun : succube u8, emplacement u8, jouable u16 (PERS), image u16 (IMAG) */
+                                    if (a + 2 <= fin) {
+                                        const int nj = a[0] | a[1] << 8; a += 2;
+                                        if (nj > 0 && a + (size_t)nj * 6 <= fin) { w->ile_ocj = a; w->ile_nocj = (uint16_t)nj; }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
         }
     }
 #if ECHOES_ENFANT
@@ -712,9 +831,12 @@ int eng_init(const uint8_t *pak, size_t len, const eng_config_t *cfg) {
         uint32_t ns = rd32(p);
         const uint8_t *q2 = p + 4;
         int last = -1;   /* dernière planche de base : les animations (personnage 2) qui suivent s'y rattachent */
+        ile_offr_reset(); st_grand = -1;
         if (!(w->sheets = alloc(sizeof(sheet_t) * (ns < MAX_SHEETS ? ns : MAX_SHEETS), 0)) && ns) FAIL("mémoire : planches");
         for (uint32_t i = 0; i < ns && i < MAX_SHEETS; i++) {
             int who = q2[0], dirs = q2[1], frames = q2[2], a = q2[3] < ANIM_N ? q2[3] : ANIM_WALK, fw = rd16(q2 + 4), fh = rd16(q2 + 6), t = rd16(q2 + 14);
+            const int offr = who == 2 && q2[3] >= ANIM_OFFR0 && q2[3] < ANIM_OFFR0 + ANIM_OFFR_N ? q2[3] - ANIM_OFFR0 : -1;   /* île : une animation d'offrande (ile.c) */
+            const int inconnue = who == 2 && q2[3] >= ANIM_N && offr < 0;   /* (un numéro inconnu ne remplace pas la marche) */
             sheet_t *sh = &w->sheets[w->nsheets++];
             memset(sh->anim, -1, sizeof sh->anim);
             sh->tissu = NULL;
@@ -722,7 +844,7 @@ int eng_init(const uint8_t *pak, size_t len, const eng_config_t *cfg) {
             sh->data = sh->ok && !sprx ? q2 + 16 : NULL; sh->foff = sprx ? rd32(q2 + 16) : 0;
             for (int d = 0; d < 8; d++) sh->sl[d] = -1;
             sh->footok = sh->data ? 0xFF : 0;
-            if (who == 2) { if (last >= 0 && sh->ok) w->sheets[last].anim[a] = (int16_t)i; }
+            if (who == 2) { if (last >= 0 && sh->ok && offr >= 0) ile_offr_noter(last, offr, (int)i); else if (last >= 0 && sh->ok && !inconnue) w->sheets[last].anim[a] = (int16_t)i; }
             else { last = (int)i; if (sh->ok) sh->anim[a] = (int16_t)i; }   /* 0 joueur, 1 personnage, 3 tenue */
             sh->fw = fw; sh->fh = fh; sh->frames = frames;
             sh->px = rd16(q2 + 8); sh->py = rd16(q2 + 10); sh->psize = rd16(q2 + 12);
@@ -802,6 +924,50 @@ int eng_init(const uint8_t *pak, size_t len, const eng_config_t *cfg) {
             c->perso = (uint16_t)cp; c->carte = cq[1]; c->quest = rd16(cq + 2); c->step = cq[4]; c->vaincue = 0;
             c->x = rd16(cq + 6) / 8.0f; c->z = rd16(cq + 8) / 8.0f;
         }
+    /* Coulées (COUL, 14/11/2026 : avalanches du scénario) : nombre u32, puis chacune : carte u8, mode u8, drapeau u16, événement
+       u16 (65535 : aucun), polygones u16, x, z, rx, rz, angle f32, octets u32 des polygones, puis les polygones au format des
+       chunks (tile u16, drapeaux u8, sommets u8, normale 3 f32 si POLY_CULL, puis par sommet x, y, z i16 en 1/256 de case, x et
+       z depuis le centre de la coulée, u, v i16 en 1/4, lumière u8 en 1/16, un octet libre). Décodés au chargement dans
+       coul_mem (pak_poly_t, alignés) : render.c les soumet comme ceux d'un bâtiment */
+    {
+        static uint32_t coul_mem[COUL_OCTETS / 4] ENG_FROID;
+        uint32_t csz;
+        uint8_t *m = (uint8_t *)coul_mem, *mend = m + sizeof coul_mem;
+        w->ncoul = 0;
+        if ((p = section(pak, len, "COUL", &csz)) && csz >= 4) {
+            const uint8_t *q = p + 4, *qend = p + csz;
+            const int ncl = (int)rd32(p);
+            for (int k = 0; k < ncl && w->ncoul < COUL_MAX && q + 32 <= qend; k++) {
+                coulee_t *c = &w->coul[w->ncoul];
+                const uint32_t oct = rd32(q + 28);
+                const uint8_t *pp = q + 32, *ppend = pp + oct;
+                c->carte = q[0]; c->drapeau = rd16(q + 2); c->ev = rd16(q + 4); c->npoly = rd16(q + 6);
+                c->x = rdf(q + 8); c->z = rdf(q + 12); c->rx = rdf(q + 16); c->rz = rdf(q + 20); c->ang = rdf(q + 24);
+                c->ca = cosf(c->ang); c->sa = sinf(c->ang);
+                q = ppend;
+                if (ppend > qend) break;
+                c->poly = m;
+                int ok = 1;
+                for (int i = 0; i < c->npoly && ok; i++) {
+                    if (pp + 4 > ppend) { ok = 0; break; }
+                    const uint8_t fl = pp[2], nv = pp[3];
+                    if (m + 16 + nv * 24 > mend || pp + 4 + ((fl & POLY_CULL) ? 12 : 0) + nv * 12 > ppend) { ok = 0; break; }
+                    pak_poly_t *pq = (pak_poly_t *)m;
+                    pq->tile = rd16(pp); pq->flags = (uint8_t)(fl & 3); pq->nv = nv;
+                    pp += 4;
+                    if (fl & POLY_CULL) { for (int a = 0; a < 3; a++) pq->n[a] = rdf(pp + a * 4); pp += 12; }
+                    else pq->n[0] = pq->n[1] = pq->n[2] = 0;
+                    for (int v = 0; v < nv; v++, pp += 12) {
+                        pak_vert_t *vv = &pq->v[v];
+                        vv->x = c->x + rds16(pp) / 256.0f; vv->y = rds16(pp + 2) / 256.0f; vv->z = c->z + rds16(pp + 4) / 256.0f;
+                        vv->u = rds16(pp + 6) / 4.0f; vv->v = rds16(pp + 8) / 4.0f; vv->l = pp[10] / 16.0f;
+                    }
+                    m += 16 + nv * 24;
+                }
+                if (ok) w->ncoul++;
+            }
+        }
+    }
     /* Lueur des feux (LUMI) : nombre u32, puis 12 octets chacune (lus à chaque image par render.c, lum_setup) */
     uint32_t lusz;
     w->lum = NULL; w->nlum = 0;
@@ -1305,7 +1471,7 @@ int eng_init(const uint8_t *pak, size_t len, const eng_config_t *cfg) {
     {
         carte_t *C0 = &w->cartes[0];
         snprintf(C0->nom, sizeof C0->nom, "MONDE"); C0->n = w->n; C0->ciel = 0; C0->wl = w->wl; memcpy(C0->fog, w->fog_rgb, 3);
-        C0->vol = 0; C0->visite = 0; C0->vol_alt = 0;
+        C0->vol = 0; C0->course = 0; C0->vision = 0; C0->visite = 0; C0->vol_alt = 0;
         C0->sx = w->start_x; C0->sz = w->start_z; C0->ax = w->arena_x; C0->az = w->arena_z;
         w->c0.dir = w->chunk_dir; w->c0.nc = w->nc; w->c0.cdat_off = w->cdat_off;
         w->c0.zone = w->zone; w->c0.zone_n = w->zone_n; w->c0.map = w->map_rgb; w->c0.map_n = w->map_n;
@@ -1318,7 +1484,7 @@ int eng_init(const uint8_t *pak, size_t len, const eng_config_t *cfg) {
             memcpy(C->nom, cq, 23); C->nom[23] = 0;
             C->n = (int)rd32(cq + 24); C->ciel = cq[28]; C->wl = rdf(cq + 32); memcpy(C->fog, cq + 36, 3);
             /* octet 29 : drapeaux de la carte (1 vol permanent), 30 : drapeau de visite + 1 u16, 39 : altitude du vol (1/10) */
-            C->vol = cq[29] & 1; C->course = cq[29] >> 1 & 1; C->visite = (uint16_t)rd16(cq + 30); C->vol_alt = cq[39] / 10.0f;   /* 2 : carte de course */
+            C->vol = cq[29] & 1; C->course = cq[29] >> 1 & 1; C->vision = cq[29] >> 2 & 1; C->visite = (uint16_t)rd16(cq + 30); C->vol_alt = cq[39] / 10.0f;   /* 2 : carte de course, 4 : vision */
             C->sx = rdf(cq + 40); C->sz = rdf(cq + 44); C->ax = rdf(cq + 48); C->az = rdf(cq + 52);
             C->chnk_off = rd32(cq + 56); C->chnk_len = rd32(cq + 60); C->zone_off = rd32(cq + 64); C->zone_len = rd32(cq + 68);
             C->map_off = rd32(cq + 72); C->map_len = rd32(cq + 76);
@@ -1443,6 +1609,10 @@ int eng_init(const uint8_t *pak, size_t len, const eng_config_t *cfg) {
     if (w->img_cap < pilote_taille()) w->img_cap = pilote_taille();
     if (w->img_cap < hud_apercus_taille()) w->img_cap = hud_apercus_taille();
     if (w->img_cap < course_fantome_taille()) w->img_cap = course_fantome_taille();   /* fantôme du contre-la-montre (31 Ko) */
+    if (w->ile[0] && w->stream) for (int i = 0; i < w->nsheets; i++) {   /* île : les scènes d'offrande (sheet_block, TC_SCENE) */
+        const uint32_t sz = (uint32_t)w->sheets[i].fw * w->sheets[i].frames * w->sheets[i].fh;
+        if (w->sheets[i].ok && sz > ST_SIZE_ILE[ST_NCLASS - 1] && w->img_cap < sz) w->img_cap = sz;
+    }
     carte_init();   /* carte du menu (PLAN, carte.c) : la fin du tampon, à côté des champs du pilote */
     if (carte_taille() && w->img_cap < ((pilote_taille() + 15) & ~15u) + carte_taille()) w->img_cap = ((pilote_taille() + 15) & ~15u) + carte_taille();
     if (!img_tampon()) FAIL("mémoire insuffisante (tampon des images)");
@@ -1475,7 +1645,6 @@ const uint8_t *pak_section(const char *tag, uint32_t *size) { return section(E.p
 /* Le tampon (img_cap octets : les index, dessinés par ui_image_pal avec la palette de leur place) n'est relu que si
    l'image précédente de l'interface ne l'a pas dessiné : son rendu peut encore être en cours. Deux places : une image
    seule prend la première ; une paire face / dos, les deux (la seconde juste après la première). */
-static uint8_t *img_buf;
 static struct { int k; uint32_t off; uint16_t pal[256]; } img_pl[2] = { { -1, 0, { 0 } }, { -1, 0, { 0 } } };
 static uint32_t img_n, img_vu = 0xFFFFFFF0u;
 static int img_prete;   /* tampon prêté (TC_PILOTE, TC_APERCUS, TC_PLATEFORME) ; 0 : aux images */
@@ -1486,6 +1655,7 @@ static void img_perdu(int qui) {
     if (qui == TC_PILOTE) pilote_arreter(NULL);
     else if (qui == TC_APERCUS) hud_apercus_perdus();
     else if (qui == TC_FANTOME) course_fantome_perdu();
+    else if (qui == TC_SCENE) st_grand = -1;
 }
 /* Carte du menu (TC_CARTE, carte.c) : elle tient la fin du tampon (img_carte octets), le début reste au pilote */
 static uint32_t img_carte;

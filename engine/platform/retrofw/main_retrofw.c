@@ -22,7 +22,7 @@
  *   CROIX : haut et bas comme le stick de la manette
  *   X / Y  vaisseau : monter / descendre ; Y tenu : au pas (et gaz à moitié en véhicule)
  *   SELECT + START tenus 1 s : retour à RetroFW (partie sauvegardée si c'est le moment) ; SELECT + R : images par seconde ;
- *   SELECT + L : rouge et bleu échangés (si un écran les inverse)
+ *   SELECT + L tenus 1,5 s : rouge et bleu échangés (si un écran les inverse)
  * Aussi la ligne VERS RETROFW du menu SYSTÈME (eng_config_t.regls_jeu). Réglages gardés dans reglages.txt ; journal.txt :
  * écran, boutons, son, erreurs. Mesures (temps de chaque étape de l'image, banc du processeur, profileur) : seulement dans le
  * banc d'essai (11/11/2026, demande de l'utilisateur : « enlève le profilage dans les apps qui ne sont pas de banc de test »).
@@ -56,6 +56,7 @@
 #include <termios.h>
 #include <sys/ioctl.h>
 #include <sys/mman.h>
+#include <sys/utsname.h>
 #include <linux/fb.h>
 #include <linux/input.h>
 #include <linux/kd.h>
@@ -78,6 +79,10 @@
 #define SAUVE_DOSSIER ".ile"
 #define TITRE_JEU "ILE DE NACRE"
 #define NOM_JEU "L'Île de Nacre"
+#elif CHOEUR_ANTIGRAV   /* course anti-gravité (13/11/2026 ; core/antigrav.c) : son paquet seul, data/antigrav */
+#define SAUVE_DOSSIER ".antigrav"
+#define TITRE_JEU "ANTIGRAV"
+#define NOM_JEU "AntiGraV"
 #elif ECHOES_ENFANT
 #define SAUVE_DOSSIER ".choeur_enfant"
 #else
@@ -99,7 +104,10 @@ static int voir_ips, ips_vu;
    secondes (Sera court à midi : eng_essai_monde, les essais de la montre), une ligne de journal par scène, le profil, et
    retour à GMenuNX ; aucune sauvegarde écrite. Simulateur : une image toutes les 60 dans banc_<scène>_<n>.bmp */
 static const struct { const char *nom; float x, z, cap; } BANC[] = {
-#if CHOEUR_ILE
+#if CHOEUR_ANTIGRAV   /* course anti-gravité (14/11/2026) : chaque piste en vue extérieure puis cockpit (x : piste, z : vue), course pilotée */
+    { "neons", 0, 0, 0 }, { "neons_cockpit", 0, 1, 0 }, { "crete", 1, 0, 0 }, { "crete_cockpit", 1, 1, 0 },
+    { "canyon", 2, 0, 0 }, { "canyon_cockpit", 2, 1, 0 }, { "col", 3, 0, 0 }, { "col_cockpit", 3, 1, 0 },
+#elif CHOEUR_ILE
     { "village", -1, -1, 0 },          /* départ de la partie : Port-Nacre */
     { "lagon", 240, 363, 90 },         /* plage de Port-Nacre, au bord du lagon */
     { "jungle", 384, 232, 270 },       /* le cœur de la jungle de l'est (le plus dense de la carte de 512), vers le temple */
@@ -110,7 +118,11 @@ static const struct { const char *nom; float x, z, cap; } BANC[] = {
 #endif
 };
 #define BANC_N ((int)(sizeof BANC / sizeof BANC[0]))
+#if CHOEUR_ANTIGRAV
+#define BANC_S 12.0
+#else
 #define BANC_S 15.0
+#endif
 static int banc, banc_k = -1;
 static double banc_t0 = -1;
 void banc_couper_script(void);   /* banc.c : le prologue coupé */
@@ -121,6 +133,11 @@ static int fb_inverse;                                 /* rouge et bleu échang�
 static int gachettes = 1;                              /* en véhicule : R accélère, L freine (SYSTÈME › CONDUITE LDK, reglages.txt) */
 static void reglages_ecrire(void);
 static FILE *journal_f;
+#ifndef RETROFW_SIMU
+static pthread_t fil_jeu;                /* le fil du jeu (gestionnaire de plantage, chien de garde) */
+static volatile uint32_t images_jeu;     /* images montrées (chien de garde du fil du son) */
+#define CHIEN_S 3                        /* chien de garde : secondes sans image avant de noter où en est le jeu (« FIGÉ ») */
+#endif
 /* Relevé des temps (journal.txt toutes les 5 s) : jeu, préparation, bandes du moteur, réduction 640 -> 320, écran */
 static double perf_bandes;
 static double sommeil_pas = 0.002;                     /* pas du sommeil du noyau (mesuré au démarrage : banc_processeur) */
@@ -131,6 +148,19 @@ enum { B_HAUT, B_BAS, B_GAUCHE, B_DROITE, B_A, B_B, B_X, B_Y, B_L, B_R, B_START,
 static uint32_t tenus;
 #define T(b) (tenus & (1u << (b)))
 
+/* Écriture directe dans le journal, sans le tampon de stdio, puis forcée sur la carte (gestionnaire de plantage, chien de garde :
+   14/11/2026, un plantage en course n'a laissé aucune ligne ; le journal en fprintf n'était vidé qu'à la fin du gestionnaire, et
+   jamais forcé sur la carte, perdu si la console s'éteint ou se fige) */
+#ifndef RETROFW_SIMU
+static int journal_fd = -1;
+static void jecrire(const char *fmt, ...) {
+    char b[700];
+    va_list a;
+    va_start(a, fmt); int n = vsnprintf(b, sizeof b, fmt, a); va_end(a);
+    if (n > (int)sizeof b - 1) n = (int)sizeof b - 1;
+    if (journal_fd >= 0 && n > 0) { const ssize_t w = write(journal_fd, b, (size_t)n); (void)w; fsync(journal_fd); }
+}
+#endif
 static void journal(const char *fmt, ...) {
     va_list a;
     va_start(a, fmt); vfprintf(stderr, fmt, a); va_end(a); fputc('\n', stderr);
@@ -233,8 +263,16 @@ static void profil_demarrer(void) {}
 static void profil_ecrire(void) {}
 static void son_ouvrir(void) {}
 static void peripheriques_fermer(void) {}
+static int tri_max;   /* triangles de la plus chargée des images montrées (journal des captures : budget de la course anti-gravité) */
 static void ecran_afficher(const uint16_t *src) {
     simu_t += 1.0 / IPS_MAX;
+    {   /* le son mixé comme par la tâche de la console (fondus de la musique, changements de piste), sans sortie */
+        static int16_t m[24000 / IPS_MAX + 1];
+        memset(m, 0, sizeof m);
+        eng_audio_mix(m, 24000 / IPS_MAX, 24000);
+    }
+    const int tris = eng_stats()->tris;
+    if (tris > tri_max) tri_max = tris;
     if (!capture[0]) return;
     char f[640]; snprintf(f, sizeof f, "%s/%s.bmp", sortie, capture);
     capture[0] = 0;
@@ -252,7 +290,11 @@ static void ecran_afficher(const uint16_t *src) {
         fputc(b, o); fputc(g, o); fputc(r, o);
     }
     fclose(o);
-    journal("capture : %s", f);
+    int d[4];
+    eng_ag_detail(d);
+    float cv[3]; int cs, cg;
+    eng_ag_vis_diag(cv, &cs, &cg);
+    journal("capture : %s (%d triangles, %d au plus depuis le départ ; engins %d, piste %d, relief %d, sol %d ; caméra %.2f %.2f %.2f, section %d, groupe %d)", f, tris, tri_max, d[0], d[1], d[2], d[3], cv[0], cv[1], cv[2], cs, cg);
 }
 static uint32_t bouton_nomme(const char **s) {
     static const char *NOMS[B_N] = { "HAUT", "BAS", "GAUCHE", "DROITE", "A", "B", "X", "Y", "L", "R", "START", "SELECT", "POWER" };
@@ -276,6 +318,13 @@ static void boutons_lire(void) {   /* une image du script */
         if (!strcmp(tok, "banc")) { banc = 1; continue; }
         if (!strncmp(tok, "charger:", 8)) { journal("script : partie %d chargée : %d", atoi(tok + 8) + 1, banc_charger(atoi(tok + 8))); continue; }
         if (!strcmp(tok, "rencontre")) { banc_rencontre(); continue; }
+        if (!strcmp(tok, "pilote")) { eng_ag_pilote(1); continue; }
+        if (!strncmp(tok, "classe:", 7)) { eng_ag_classe_essai(atoi(tok + 7)); continue; }   /* course anti-gravité : catégorie de vitesse */
+        if (!strncmp(tok, "carriere:", 9)) { int l = 0, e = 0; sscanf(tok + 9, "%d:%d", &l, &e); eng_ag_carriere_essai(l, e); continue; }   /* course anti-gravité : une épreuve de la carrière */
+        if (!strncmp(tok, "arme:", 5)) { eng_ag_arme_essai(atoi(tok + 5)); continue; }   /* course anti-gravité : une arme au joueur */
+        if (!strcmp(tok, "bilan")) { char b[320]; eng_ag_bilan(b, sizeof b); journal("bilan : %s", b); continue; }   /* course anti-gravité : le joueur à cet instant */
+        if (!strncmp(tok, "tunnel:", 7)) { int k = 0; float d = 8, h = 2, l = 0; sscanf(tok + 7, "%d:%f:%f:%f", &k, &d, &h, &l); eng_ag_vue_tunnel(k, d, h, l); continue; }   /* caméra devant un tunnel */
+        if (!strncmp(tok, "camera:", 7)) { float d = 0, p = 0; sscanf(tok + 7, "%f:%f", &d, &p); eng_ag_camera_essai(d, p); continue; }   /* course anti-gravité : caméra reculée et baissée */   /* course anti-gravité : le joueur piloté comme un adversaire */
         const char *s = tok; uint32_t b = 0, u;
         while ((u = bouton_nomme(&s))) { b |= u; if (*s == '+') s++; }
         if (!b) { journal("script : « %s » inconnu", tok); continue; }
@@ -287,7 +336,22 @@ static void boutons_lire(void) {   /* une image du script */
 #else
 /* --- La console : /dev/fb0, /dev/input ou la console en mode brut, /dev/dsp --- */
 #define O_FICHIER O_RDONLY
-static double maintenant(void) { struct timespec t; clock_gettime(CLOCK_MONOTONIC, &t); return t.tv_sec + t.tv_nsec * 1e-9; }
+/* Heure lue par l'appel système clock_gettime du noyau, sans le vDSO (14/11/2026 : un plantage en pleine course, instruction illégale
+   dans le vDSO de RetroFW que clock_gettime de musl appelle, une fois après des minutes de jeu ; environ une microseconde de plus par
+   lecture) ; structure du noyau de la console : secondes et nanosecondes sur 32 bits. Simulateur : clock_gettime */
+#ifndef RETROFW_SIMU
+#include <sys/syscall.h>
+#endif
+static double horloge_noyau(clockid_t h) {
+#if !defined(RETROFW_SIMU) && defined(SYS_clock_gettime32)
+    struct { long sec, nsec; } k;
+    if (syscall(SYS_clock_gettime32, h, &k) == 0) return (double)k.sec + (double)k.nsec * 1e-9;
+#endif
+    struct timespec t;
+    clock_gettime(h, &t);
+    return (double)t.tv_sec + (double)t.tv_nsec * 1e-9;
+}
+static double maintenant(void) { return horloge_noyau(CLOCK_MONOTONIC); }
 static void dormir(double s) { struct timespec t = { (time_t)s, (long)((s - (time_t)s) * 1e9) }; while (nanosleep(&t, &t) && errno == EINTR) {} }
 
 static int fb_fd = -1, fb_pages = 1, fb_page, fb_bgr, fb_change;
@@ -418,6 +482,13 @@ static void ecran_afficher(const uint16_t *src) {
                 for (int i = 0; i < LW / 4; i++) od[i] = sd[i];
             }
             else if (w == LW && !rb) memcpy(o, s, LW * 2);
+            else if (w == LW && !(((uintptr_t)o | (uintptr_t)s) & 7)) {
+                /* rouge et bleu échangés (écran BGR, ou réglage) : deux pixels par mot de 32 bits (14/11/2026 : pixel par pixel, 4,8 ms par
+                   image, 10 % du temps au banc de la LDK) */
+                const uint32_t *s32 = (const uint32_t *)(const void *)s;
+                volatile uint32_t *o32 = (volatile uint32_t *)(void *)o;   /* (14/11/2026 : entiers seulement ; par 64 bits avec la FPU, deux plantages) */
+                for (int i = 0; i < LW / 2; i++) { const uint32_t c = s32[i]; o32[i] = ((c >> 11) & 0x001F001Fu) | (c & 0x07E007E0u) | ((c << 11) & 0xF800F800u); }
+            }
             else for (int x = 0; x < w; x++) {
                 const uint16_t c = s[w == LW ? x : x * LW / w];
                 o[x] = rb ? (uint16_t)((c >> 11) | (c & 0x07E0) | (c << 11)) : c;
@@ -550,7 +621,14 @@ static void *son_tache(void *arg) {
     sigset_t sp_;   /* le signal du profileur (SIGPROF) pour le seul fil du jeu : comme pour le fil des pages */
     sigemptyset(&sp_); sigaddset(&sp_, SIGPROF); pthread_sigmask(SIG_BLOCK, &sp_, NULL);
     int16_t m[256], st[512];
+    uint32_t chien_vu = 0;
+    int chien_n = 0, chien_dit = 0;
     while (!fin) {
+        {   /* chien de garde : 256 échantillons par tour, son_freq / 256 tours par seconde */
+            const uint32_t im = images_jeu;
+            if (im != chien_vu || im == 0) { chien_vu = im; chien_n = 0; chien_dit = 0; }
+            else if (++chien_n > CHIEN_S * son_freq / 256 && !chien_dit) { chien_dit = 1; pthread_kill(fil_jeu, SIGUSR2); }
+        }
         eng_audio_mix(m, 256, son_freq);
         const uint8_t *p = (const uint8_t *)m;
         size_t n = sizeof m;
@@ -590,30 +668,43 @@ static void peripheriques_fermer(void) {   /* aussi en cas de plantage (signal) 
    pages), le compteur ordinal, l'adresse de retour, la pile, et les mots de la pile qui pointent dans le code (adresses de
    retour probables) : tools/plantage_retrofw.py les traduit en fonctions et lignes avec build/retrofw/<nom>.elf */
 extern char __ehdr_start[] __attribute__((weak)), etext[] __attribute__((weak));
-static pthread_t fil_jeu;
-static void plantage(int sig, siginfo_t *si, void *ctx) {
-    if (journal_f) {
-        const ucontext_t *u = ctx;
-        const uint32_t pc = (uint32_t)u->uc_mcontext.pc, ra = (uint32_t)u->uc_mcontext.gregs[31], sp = (uint32_t)u->uc_mcontext.gregs[29];
-        const pthread_t moi = pthread_self();
-        const char *fil = pthread_equal(moi, fil_jeu) ? "jeu" : son_lance && pthread_equal(moi, son_fil) ? "son" : fb_fil_on && pthread_equal(moi, fb_fil) ? "pages" : "?";
-        fprintf(journal_f, "PLANTAGE signal %d, adresse %08lx, fil %s : pc %08lx ra %08lx sp %08lx\n", sig, (unsigned long)(uintptr_t)si->si_addr, fil,
-                (unsigned long)pc, (unsigned long)ra, (unsigned long)sp);
-        fprintf(journal_f, "REGISTRES");
-        for (int r = 1; r < 32; r++) fprintf(journal_f, " %d:%08lx", r, (unsigned long)(uint32_t)u->uc_mcontext.gregs[r]);
-        fputc('\n', journal_f);
-        { char d[512]; eng_diag_rendu(d, sizeof d); fprintf(journal_f, "RENDU %s\n", d); }
-        const uintptr_t t0 = (uintptr_t)__ehdr_start, t1 = (uintptr_t)etext;
-        if (t0 && t1 > t0) {
-            fprintf(journal_f, "PILE");
-            const uint32_t *w = (const uint32_t *)(uintptr_t)(sp & ~3u);
-            for (int k = 0, n = 0; k < 2048 && n < 40; k++) if (w[k] >= t0 && w[k] < t1 && (w[k] & 3) == 0) { fprintf(journal_f, " %08lx", (unsigned long)w[k]); n++; }
-            fputc('\n', journal_f);
-        }
-        fflush(journal_f);
+/* Une ligne à la fois, écrite et forcée sur la carte aussitôt (jecrire) : ce qui suit peut fauter (pile abîmée, fil à petite pile) ;
+   une faute dans le gestionnaire le rappelle (SA_NODEFER) : noté, puis fin */
+static volatile sig_atomic_t dans_plantage;
+static void contexte_ecrire(const char *titre, int sig, const siginfo_t *si, const ucontext_t *u) {
+    const uint32_t pc = (uint32_t)u->uc_mcontext.pc, ra = (uint32_t)u->uc_mcontext.gregs[31], sp = (uint32_t)u->uc_mcontext.gregs[29];
+    const pthread_t moi = pthread_self();
+    const char *fil = pthread_equal(moi, fil_jeu) ? "jeu" : son_lance && pthread_equal(moi, son_fil) ? "son" : fb_fil_on && pthread_equal(moi, fb_fil) ? "pages" : "?";
+    jecrire("%s signal %d, adresse %08lx, fil %s : pc %08lx ra %08lx sp %08lx\n", titre, sig, si ? (unsigned long)(uintptr_t)si->si_addr : 0ul, fil,
+            (unsigned long)pc, (unsigned long)ra, (unsigned long)sp);
+    char b[400];
+    int n = snprintf(b, sizeof b, "REGISTRES");
+    for (int r = 1; r < 32 && n < (int)sizeof b - 16; r++) n += snprintf(b + n, sizeof b - (size_t)n, " %d:%08lx", r, (unsigned long)(uint32_t)u->uc_mcontext.gregs[r]);
+    jecrire("%s\n", b);
+    const uintptr_t t0 = (uintptr_t)__ehdr_start, t1 = (uintptr_t)etext;
+    if (t0 && t1 > t0) {
+        n = snprintf(b, sizeof b, "PILE");
+        const uint32_t *w = (const uint32_t *)(uintptr_t)(sp & ~3u);
+        for (int k = 0, m = 0; k < 2048 && m < 40 && n < (int)sizeof b - 12; k++) if (w[k] >= t0 && w[k] < t1 && (w[k] & 3) == 0) { n += snprintf(b + n, sizeof b - (size_t)n, " %08lx", (unsigned long)w[k]); m++; }
+        jecrire("%s\n", b);
     }
+}
+static void plantage(int sig, siginfo_t *si, void *ctx) {
+    if (dans_plantage) {
+        jecrire("PLANTAGE DANS LE GESTIONNAIRE signal %d, adresse %08lx\n", sig, si ? (unsigned long)(uintptr_t)si->si_addr : 0ul);
+        _exit(128 + sig);
+    }
+    dans_plantage = 1;
+    contexte_ecrire("PLANTAGE", sig, si, (const ucontext_t *)ctx);
+    { char d[512]; eng_diag_rendu(d, sizeof d); jecrire("RENDU %s\n", d); }
     peripheriques_fermer();
     _exit(128 + sig);
+}
+/* Chien de garde (14/11/2026) : le fil du son, qui tourne toujours, voit si le jeu n'a pas montré d'image depuis CHIEN_S secondes ;
+   il lui envoie alors SIGUSR2, dont le gestionnaire note où il en est (« FIGÉ », sans l'arrêter), une fois par gel */
+static void fige(int sig, siginfo_t *si, void *ctx) {
+    (void)si;
+    contexte_ecrire("FIGÉ (aucune image depuis 3 s)", sig, NULL, (const ucontext_t *)ctx);
 }
 static void arreter(int sig) { (void)sig; fin = 1; }
 
@@ -795,7 +886,7 @@ static void banc_processeur(void) {
    Commandes : boutons de la console -> entrée du moteur */
 static void entree(eng_input_t *in, float dt) {
     static uint32_t avant;
-    static float quitter_t;
+    static float quitter_t, couleurs_t;
     const uint32_t appuyes = tenus & ~avant;
     avant = tenus;
     memset(in, 0, sizeof *in);
@@ -803,10 +894,16 @@ static void entree(eng_input_t *in, float dt) {
     if (T(B_SELECT)) {   /* SELECT tenu : combinaisons de la console, rien pour le jeu */
         if (T(B_START)) { if ((quitter_t += dt) >= 1) quitter = 1; } else quitter_t = 0;
         if (appuyes & (1u << B_R)) voir_ips = !voir_ips;
-        if (appuyes & (1u << B_L)) { fb_inverse = !fb_inverse; reglages_ecrire(); journal("écran : rouge et bleu %s (SELECT + L)", fb_inverse ? "échangés" : "tels quels"); }
+        /* rouge et bleu échangés : SELECT + L tenus 1,5 s (14/11/2026 : à l'appui, un aérofrein de la course anti-gravité pendant
+           SELECT + R, pour voir les images par seconde, inversait les couleurs sans qu'on le veuille, et c'était gardé) */
+        if (T(B_L)) {
+            const float t0 = couleurs_t;
+            couleurs_t += dt;
+            if (t0 < 1.5f && couleurs_t >= 1.5f) { fb_inverse = !fb_inverse; reglages_ecrire(); journal("écran : rouge et bleu %s (SELECT + L tenus)", fb_inverse ? "échangés" : "tels quels"); }
+        } else couleurs_t = 0;
         return;
     }
-    quitter_t = 0;
+    quitter_t = 0; couleurs_t = 0;
     uint32_t k = 0;
     if (T(B_HAUT)) k |= ENG_KEY_UP;
     if (T(B_BAS)) k |= ENG_KEY_DOWN;
@@ -861,6 +958,16 @@ static void echec(const char *titre, const char *l1, const char *l2) {   /* écr
 }
 
 int main(int argc, char **argv) {
+#ifndef RETROFW_SIMU
+    /* vDSO du noyau désactivé pour musl (14/11/2026 : deux plantages de la LDK avec des adresses de la zone du vDSO dans les registres ;
+       musl le cherche par AT_SYSINFO_EHDR des valeurs auxiliaires, juste après l'environnement : son adresse effacée, il lit l'heure par
+       les appels système) ; avant toute lecture de l'heure */
+    {
+        char **ev = argv + argc + 1;
+        while (*ev) ev++;
+        for (size_t *ax = (size_t *)(void *)(ev + 1); ax[0]; ax += 2) if (ax[0] == 33 /* AT_SYSINFO_EHDR */) ax[1] = 0;
+    }
+#endif
     /* Dossier du programme (données à côté de lui), dossier des sauvegardes */
 #ifdef RETROFW_SIMU
     if (argc < 4) { fprintf(stderr, "usage : choeur_simu dossier_des_donnees dossier_de_sortie script\n"); return 1; }
@@ -887,10 +994,14 @@ int main(int argc, char **argv) {
     {
         char f[640]; snprintf(f, sizeof f, "%s/%s", dossier_sauve, banc ? "banc.txt" : "journal.txt");
         journal_f = fopen(f, "w");
+#ifndef RETROFW_SIMU
+        if (journal_f) journal_fd = fileno(journal_f);
+#endif
     }
     journal(NOM_JEU " pour RetroFW%s, version %s : données %s, sauvegardes %s", ECHOES_ENFANT ? " (édition enfant)" : "",
             CHOEUR_VERSION, dossier, dossier_sauve);   /* (la version qui tourne vraiment : une copie par l'USB peut rester dans le cache de Windows) */
 #ifndef RETROFW_SIMU
+    { struct utsname un; if (uname(&un) == 0) journal("noyau : %s %s %s %s", un.sysname, un.release, un.version, un.machine); }
     signal(SIGINT, arreter); signal(SIGTERM, arreter); signal(SIGHUP, arreter);
     {   /* plantage : adresse et pile dans le journal (SA_SIGINFO), sur une pile à part (une pile débordée ne l'empêche pas) */
         static uint8_t pile_secours[64 * 1024];
@@ -898,10 +1009,12 @@ int main(int argc, char **argv) {
         sigaltstack(&ss, NULL);
         struct sigaction sa;
         memset(&sa, 0, sizeof sa);
-        sa.sa_sigaction = plantage; sa.sa_flags = SA_SIGINFO | SA_ONSTACK | SA_RESETHAND;
+        sa.sa_sigaction = plantage; sa.sa_flags = SA_SIGINFO | SA_ONSTACK | SA_NODEFER;   /* (une faute dans le gestionnaire le rappelle : notée) */
         sigemptyset(&sa.sa_mask);
         const int sigs[5] = { SIGSEGV, SIGBUS, SIGILL, SIGFPE, SIGABRT };
         for (int k = 0; k < 5; k++) sigaction(sigs[k], &sa, NULL);
+        sa.sa_sigaction = fige; sa.sa_flags = SA_SIGINFO | SA_ONSTACK | SA_RESTART;
+        sigaction(SIGUSR2, &sa, NULL);
         fil_jeu = pthread_self();
     }
     signal(SIGPIPE, SIG_IGN);
@@ -932,7 +1045,9 @@ int main(int argc, char **argv) {
     cfg.clock_us = horloge_us;
     cfg.regls_jeu = REGLS_JEU; cfg.nregls_jeu = (int)(sizeof REGLS_JEU / sizeof REGLS_JEU[0]);
     if ((fd_monde = ouvrir("monde.pak", &cfg.pak_size)) >= 0) cfg.pak_read = pak_lire;
+#if !CHOEUR_ANTIGRAV   /* (course anti-gravité : tout est dans son paquet) */
     else echec("FICHIER MANQUANT", "MONDE.PAK", "A COPIER A COTE DU PROGRAMME");
+#endif
     if ((fd_scen = ouvrir("histoire.scn", &cfg.scen_size)) >= 0) cfg.scen_read = scen_lire;
     else journal("histoire : section SCEN du paquet (pas de histoire.scn)");
     if ((fd_intr = ouvrir("interieurs.bin", &cfg.intr_size)) >= 0) cfg.intr_read = intr_lire;
@@ -968,7 +1083,7 @@ int main(int argc, char **argv) {
         (void)heure_vue;
 #else
         {   /* heure et date de la console, une fois par seconde (cycle « RÉEL ») ; inconnue avant 2020 */
-            const time_t now = time(NULL);
+            const time_t now = (time_t)horloge_noyau(CLOCK_REALTIME);   /* (time() passe aussi par le vDSO) */
             if (now != heure_vue) {
                 struct tm m;
                 heure_vue = now; localtime_r(&now, &m);
@@ -978,7 +1093,12 @@ int main(int argc, char **argv) {
 #endif
         eng_input_t in;
         entree(&in, dt);
-        if (banc && banc_k >= 0) { banc_couper_script(); memset(&in, 0, sizeof in); }   /* banc : ni prologue ni bouton, l'essai seul */
+        if (banc && banc_k >= 0) {
+#if !CHOEUR_ANTIGRAV
+            banc_couper_script();
+#endif
+            memset(&in, 0, sizeof in);
+        }   /* banc : ni prologue ni bouton, l'essai seul */
         const double ta = maintenant();
         eng_update(dt, &in); diag("eng_update");
         const double tb = maintenant();
@@ -1002,6 +1122,9 @@ int main(int argc, char **argv) {
         if (banc_k >= 0 && banc_k < BANC_N && (perf_n % 60) == 59) snprintf(capture, sizeof capture, "banc_%s_%d", BANC[banc_k].nom, perf_n / 60);
 #endif
         ecran_afficher(img); diag("l'écran");
+#ifndef RETROFW_SIMU
+        images_jeu++;   /* (chien de garde du fil du son) */
+#endif
         p_ecran += maintenant() - td;
         {   /* à-coups : la pire image de la période, et celles de plus de 66 ms (moins de 15 i/s) */
             const double di = maintenant() - t;
@@ -1026,12 +1149,16 @@ int main(int argc, char **argv) {
             if (banc_k < 0) banc_k = 0;
             if (banc_k >= BANC_N) quitter = 1;
             else {
+                float x = BANC[banc_k].x, z = BANC[banc_k].z;
+#if CHOEUR_ANTIGRAV
+                const int ok = eng_ag_essai((int)x, (int)z);
+#else
                 if (eng_ecran_titre()) eng_skip_opening();
                 banc_couper_script();
                 banc_passage();
-                float x = BANC[banc_k].x, z = BANC[banc_k].z;
                 if (x < 0) eng_start_position(&x, &z);
                 const int ok = eng_essai_monde(x, z, BANC[banc_k].cap, 0, 0.45f, BANC_S + 2);
+#endif
                 journal("banc : scène %s en %.0f, %.0f%s", BANC[banc_k].nom, x, z, ok ? "" : " REFUSÉE");
                 banc_t0 = maintenant(); perf_t = banc_t0; perf_n = 0;
                 p_jeu = p_prep = p_ecran = p_us3d = p_usui = perf_bandes = p_pire = 0; p_lentes = 0;

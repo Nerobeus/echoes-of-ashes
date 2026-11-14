@@ -134,6 +134,10 @@ int item_loot(void) { for (int i = 0; i < n_items; i++) if (ITEMS[i].butin) retu
 #define NMENU 10
 static const char *MENU_NAME[NMENU] = { "OBJETS", "TECHNIQ.", "ÉQUIP.", "STATUT", "CARTE", "SYSTÈME", "QUÊTES", "GUIDAGE", "ÉQUIPE", "JOURNAL" };
 static const char *MENU_ICON[NMENU] = { "obj", "tech", "equip", "stat", "map", "sys", "quest", "guide", "team", "jour" };
+/* Angle de l'entrée k de la roue, depuis le haut, dans le sens des aiguilles : place fixe (draw_menu) */
+static float menu_angle(int k) { return k / (float)NMENU * 2 * PI_F; }
+/* Entrée de la roue la plus proche de l'angle a (atan2 depuis le haut) : celle que montre le doigt sur le bord */
+static int menu_a(float a) { const int k = (int)lroundf(a / (2 * PI_F) * NMENU) % NMENU; return k < 0 ? k + NMENU : k; }
 #define MENU_JOURNAL 9   /* entrée de la roue, en-tête du sous-menu (SUB_JOURNAL : les rangs de la roue ne vont pas au-delà de ÉQUIPE) */
 /* SUB_EQUIPE : les compagnons au combat (menu ÉQUIPE, sous-menu 12 de l'émulateur) */
 enum { SUB_ITEMS, SUB_TECH, SUB_EQUIP, SUB_STATUS, SUB_MAP, SUB_SYSTEM, SUB_QUESTS, SUB_GUIDE, SUB_EQUIPE, SUB_SHOP, SUB_TELE, SUB_GALERIE, SUB_CODE };
@@ -182,9 +186,9 @@ static struct {
 
 /* Zones tactiles construites à l'image précédente */
 enum { A_TALK, A_MENU_ITEM, A_OPEN, A_ROW, A_BACK, A_BATTLE, A_COURSE, A_RACE_CHG, A_RACE_GO, A_RACE_BACK, A_RACE_PAGE, A_FIRE, A_CHOICE, A_PAUSE, A_REPRENDRE, A_ABANDON, A_RECOMMENCER, A_PORTE,
-       A_MENU_BTN, A_MENU_GO, A_VALIDER, A_CODE, A_COFFRE, A_BUTIN, A_DEFAITE, A_CARTE, A_EQUIPER, A_PAUSE_SEL, A_PAUSE_GO, A_PAUSE_REGL, A_SHOP_MEMBRE, A_PANNEAU };   /* SHOP_MEMBRE : fiche de la boutique, un autre membre */   /* PAUSE_REGL : RÉGLAGES de la pause de course */   /* PAUSE_SEL, PAUSE_GO : pause de course du plein écran (choisir une ligne, la toucher encore ; VALIDER) */   /* EQUIPER : fiche du menu ÉQUIP., 0 OUI, 1 NON (d'un toucher) */   /* CARTE : toucher sur la carte du menu, en véhicule (pilote automatique) */   /* COFFRE : fouiller le coffre à portée ; BUTIN : fermer son panneau ; DEFAITE : choix de l'écran de défaite (0 REPRENDRE, 1 ÉCRAN TITRE) */   /* VALIDER : la ligne choisie d'un sous-menu (plein écran) */   /* plein écran : bouton du menu (ouvrir, fermer), entrée du menu en grille (ouvrir d'un toucher) */
+       A_MENU_BTN, A_MENU_GO, A_VALIDER, A_CODE, A_COFFRE, A_BUTIN, A_DEFAITE, A_CARTE, A_EQUIPER, A_PAUSE_SEL, A_PAUSE_GO, A_PAUSE_REGL, A_SHOP_MEMBRE, A_PANNEAU, A_DORMIR };   /* DORMIR : la couche d'un abri de l'île (ile.c) */   /* SHOP_MEMBRE : fiche de la boutique, un autre membre */   /* PAUSE_REGL : RÉGLAGES de la pause de course */   /* PAUSE_SEL, PAUSE_GO : pause de course du plein écran (choisir une ligne, la toucher encore ; VALIDER) */   /* EQUIPER : fiche du menu ÉQUIP., 0 OUI, 1 NON (d'un toucher) */   /* CARTE : toucher sur la carte du menu, en véhicule (pilote automatique) */   /* COFFRE : fouiller le coffre à portée ; BUTIN : fermer son panneau ; DEFAITE : choix de l'écran de défaite (0 REPRENDRE, 1 ÉCRAN TITRE) */   /* VALIDER : la ligne choisie d'un sous-menu (plein écran) */   /* plein écran : bouton du menu (ouvrir, fermer), entrée du menu en grille (ouvrir d'un toucher) */
 /* Choix du scénario en cours : réponses, réponse surlignée */
-static struct { int on, n, sel, porte, commerce, vol, shop, tele, arene; char opts[4][48], titre[40], texte[2][72]; } CHX ENG_FROID;   /* arene : choix de l'arène (arene_choix) */   /* shop : confirmation d'un achat ou d'une vente (shop_k) ; tele : téléport vers le point touché sur la carte du menu (carte_tele_aller) */   /* porte : choix d'une porte fermée (int_choix) ; commerce : ce que propose un commerçant ; vol : confirmation du vol d'un véhicule du trafic (vol_k) ; texte : lignes sous le titre (ce qui est en jeu) */
+static struct { int on, n, sel, porte, commerce, vol, shop, tele, arene, dormir, succube; char opts[4][48], titre[40], texte[2][72]; } CHX ENG_FROID;   /* succube : se battre ou s'offrir à elle (île, ile.c) */   /* dormir : DORMIR jusqu'au matin dans un abri de l'île (ile.c) */   /* arene : choix de l'arène (arene_choix) */   /* shop : confirmation d'un achat ou d'une vente (shop_k) ; tele : téléport vers le point touché sur la carte du menu (carte_tele_aller) */   /* porte : choix d'une porte fermée (int_choix) ; commerce : ce que propose un commerçant ; vol : confirmation du vol d'un véhicule du trafic (vol_k) ; texte : lignes sous le titre (ce qui est en jeu) */
 static int vol_k = -1;   /* véhicule du trafic dont le vol attend sa confirmation */
 /* Commerce en cours (openCommerce de l'émulateur) : commerce (COMM), exemplaire qui le tient, action de chaque réponse
    (0 acheter, 1 vendre, 2 soins, 3 un verre, 4 partir), boutique ouverte (0 achat, 1 vente), nom du commerçant ; liste :
@@ -591,6 +595,9 @@ static void sv_remplir(save_t *sv) {
     memset(sv, 0, sizeof *sv);
     int_position(&sv->x, &sv->z, &sv->yaw); sv->dir = E.sera.dir;   /* dans un intérieur : devant sa porte, dans la rue */
     int renc = essai_partie(&sv->x, &sv->z); if (renc < 0) renc = E.renc_mode;   /* essai de fluidité en cours : l'état d'avant lui (game.c) */
+    /* Vision (la ville d'avant la Cendre) : la partie reprend au point d'avant le voyage (world_carte ; partieObjet de l'émulateur) */
+    const int vision = E.w.cartes[E.w.carte].vision, carte = vision ? E.vis_carte : E.w.carte;
+    if (vision) { sv->x = E.vis_x; sv->z = E.vis_z; }
     sv->theme = (uint8_t)E.theme; sv->fog = (uint8_t)(E.fog_on | (E.volant + 1) << 1); sv->dither = (uint8_t)E.dither_on; sv->bright = (uint8_t)(H.bright | E.eveil_essai << 3 | renc << 4 | E.essai << 7);   /* fog, bits 1 à 3 : DIRECTION + 1 (0 : sauvegarde d'avant) ; bright, bit 3 : ÉVEIL, 4 à 6 : rencontres, 7 : mode d'essai */
     for (int i = 0; i < 4; i++) { sv->hp[i] = PARTY[i].hp; sv->mp[i] = PARTY[i].mp; }
     for (int i = 0; i < n_items; i++) sv->items[i] = (uint8_t)ITEMS[i].count;
@@ -598,6 +605,7 @@ static void sv_remplir(save_t *sv) {
     sv->team = (uint8_t)E.team; sv->obj[0] = E.obj[0]; sv->obj[1] = E.obj[1];
     memcpy(sv->quests, E.quests, sizeof sv->quests); sv->qtrack = (int16_t)E.qtrack; sv->mus_force = E.mus_force;
     memcpy(sv->flags, E.flags, sizeof sv->flags); memcpy(sv->done, E.ev_done, sizeof sv->done);
+    if (E.w.ile[0]) ile_enleve_ecrire(sv->libre);   /* île : l'habitant enlevé (ile.c ; ailleurs, la réserve reste à zéro) */
     memcpy(sv->tenue, E.tenue_eq, sizeof sv->tenue);
     memcpy(sv->job, E.job, sizeof sv->job); memcpy(sv->jobs_known, E.jobs_known, sizeof sv->jobs_known); memcpy(sv->eq, E.eq, sizeof sv->eq);
     sv->rec.team = (uint16_t)E.team; sv->rec.recrues = (uint16_t)E.recrues; sv->rec.impose = (uint16_t)E.impose;   /* les recrues (ESVE) */
@@ -607,9 +615,9 @@ static void sv_remplir(save_t *sv) {
     }
     sv->guide = (int16_t)E.guide;
     if (E.heroine >= 0) snprintf(sv->heroine, sizeof sv->heroine, "%s", E.w.persos[E.heroine].nom);
-    if (E.w.carte) snprintf(sv->lieu, sizeof sv->lieu, "%.23s", E.w.cartes[E.w.carte].nom);   /* ailleurs que sur la planète : sa carte (lieuDe de l'émulateur : villes de la carte, aucune) */
+    if (carte) snprintf(sv->lieu, sizeof sv->lieu, "%.23s", E.w.cartes[carte].nom);   /* ailleurs que sur la planète : sa carte (lieuDe de l'émulateur : villes de la carte, aucune) */
     else lieu_de(sv->x, sv->z, sv->lieu, sizeof sv->lieu);
-    sv->temps = (uint32_t)E.temps_jeu; sv->carte = (uint32_t)E.w.carte;
+    sv->temps = (uint32_t)E.temps_jeu; sv->carte = (uint32_t)carte;
     memcpy(sv->cof_ouv, E.cof_ouv, sizeof sv->cof_ouv); memcpy(sv->tres_ouv, E.tres_ouv, sizeof sv->tres_ouv);
     memcpy(sv->tele_vu, E.tele_vu, sizeof sv->tele_vu); sv->conduite = (uint8_t)(E.conduite | (E.commandes + 1) << 1 | (E.tele_tout ? 8 : 0) | (E.zoom_libre ? 16 : 0));   /* lieux visités, conduite, commandes, téléport partout et zoom manuel (ESVF) */
     memcpy(sv->best_vu, E.best_vu, sizeof sv->best_vu); memcpy(sv->best_bat, E.best_bat, sizeof sv->best_bat);   /* bestiaire (ESVJ) */
@@ -652,6 +660,7 @@ static int save_game(void) { return save_ecrire(0); }
    l'écran titre, un combat, une course, une scène ou un dialogue : la position ou l'état ne vaudraient rien) */
 void eng_set_horloge(int secondes) { E.horloge = secondes >= 0 && secondes < 86400 ? secondes : -1; }
 int eng_sauvegarder(void) {
+    if (AG.on) return 0;   /* course anti-gravité : rien à sauvegarder */
     if (!E.cfg.save_write || accueil_on() || BT.on || CR.on || script_running() || H.dialog || carriere_on()) return 0;   /* (pas en mode course) */
     return save_game();
 }
@@ -739,7 +748,7 @@ void hud_reprendre(void) {
     hud_sauve_repartir();
     E.sera_y_ok = 0; E.stream_hold = 1; BT.fade_t = E.clock;
 }
-int eng_ecran_titre(void) { return accueil_on(); }
+int eng_ecran_titre(void) { return AG.on ? AG.phase == AGP_TITRE : accueil_on(); }
 int hud_camera_tourne(void) { return H.down && H.rim_on && !H.menu && H.sub < 0; }
 
 /* Ancienne sauvegarde (n octets) : la même jusqu'à end, puis sa somme de contrôle (alignée sur 4) */
@@ -907,6 +916,9 @@ static void partie_appliquer(save_t *s, int p) {
     E.partie = p; H.seq = (int)s->seq;
     s->heroine[15] = 0; E.heroine = heroine_de(s->heroine);   /* avant les tenues : elles sont à elle */
     ile_equipe(0);   /* île : ses compagnes et leurs fiches, avant le niveau, les PV et l'équipe de la sauvegarde */
+    ile_rodeurs_reset();   /* île : ni rôdeur ni nuit commencée */
+    ile_offrande_reset();  /* ni séquence d'une succube */
+    ile_enleve_lire(s->libre);   /* l'habitant enlevé de la partie (13/11/2026 : save_t.libre ; des zéros : personne) */
     E.temps_jeu = (float)s->temps;
     int_reset();   /* on reprend dans la rue, sans alarme */
     police_reset();   /* ni recherche ni poursuite (pas sauvegardées) */
@@ -1961,7 +1973,7 @@ static void advance_dialog(void) {
     int len = 0; for (const char *s = dlg_texte(); *s; s++) if ((*s & 0xC0) != 0x80) len++;
     if ((H.now - H.line_t0) / 0.028f < len) { H.line_t0 = -1e9f; return; }
     parle_maj = 1;
-    if (++H.line >= D.n) { H.dialog = 0; if (H.apres) { H.apres = 0; commerce_ouvrir(); } } else H.line_t0 = H.now;
+    if (++H.line >= D.n) { H.dialog = 0; if (H.apres == 2) { H.apres = 0; ile_enleve_retrouve(); } else if (H.apres) { H.apres = 0; commerce_ouvrir(); } } else H.line_t0 = H.now;   /* (2 : l'habitant enlevé retrouvé, ile.c) */
 }
 
 /* Nom de l'exemplaire k : « PRÉNOM NOM » tiré des tables (NOMT) d'après sa graine pour un personnage générique ou à
@@ -1996,6 +2008,16 @@ static void open_dialog(void) {
     const perso_vue_t pv = perso_vue(E.npcs[E.talk].perso, E.npcs[E.talk].var);   /* (la recrue de l'héroïne choisie : en Sera) */
     make_portrait(1, pv.sheet, pv.remap);   /* dans ses couleurs (palette PVAR) */
     D.n = 0;
+    {   /* île : l'habitant enlevé, retrouvé (ile.c) : ses mots, puis la récompense et son retour */
+        const char *l1, *l2; int rec;
+        if (ile_enleve_lignes(E.talk, &l1, &l2, &rec)) {
+            snprintf(D.who[0], sizeof D.who[0], "%s", nm); D.text[0] = l1; D.n = 1;
+            if (l2) { snprintf(D.who[1], sizeof D.who[1], "%s", nm); D.text[1] = l2; D.n = 2; }
+            H.apres = rec ? 2 : 0;
+            H.dialog = 1; H.line = 0; H.line_t0 = H.now; E.has_dest = 0; parle_maj = 1;
+            return;
+        }
+    }
     /* Sans répliques à lui : une générique, celle de son métier dans un intérieur, sinon celle des rues (REPL) */
     static char gen[256];
     const int metier = int_metier_pnj(E.talk);
@@ -2711,6 +2733,30 @@ static void vol_confirme(void) {
     if (vehicle_steal(k)) toast(vol_cri);   /* le cri du conducteur éjecté */
 }
 static void carte_tele_aller(void);   /* téléport depuis la carte du menu (plus bas) */
+/* Couche d'un abri de l'île (ile.c, 12/11/2026) : dormir jusqu'au matin, après confirmation, ce qui est en jeu sous le titre ; DORMIR, ou
+   ANNULER (RETOUR) qui ne fait rien (ileDormirDemander de l'émulateur de l'île) */
+static void dormir_demander(void) {
+    if (ile_dormir_k() < 0) return;
+    char opts[2][48];
+    snprintf(opts[0], sizeof opts[0], "DORMIR"); snprintf(opts[1], sizeof opts[1], "ANNULER");
+    ile_dormir_retenir();
+    hud_choice(opts, 2);
+    CHX.dormir = 1;
+    snprintf(CHX.titre, sizeof CHX.titre, "DORMIR JUSQU'AU MATIN ?");
+    snprintf(CHX.texte[0], sizeof CHX.texte[0], "L'équipe se repose : PV et PM rendus");
+    snprintf(CHX.texte[1], sizeof CHX.texte[1], "La partie est sauvegardée au réveil");
+}
+/* Une succube nommée au contact (île, ile.c, 13/11/2026, édition 18+) : TE BATTRE ou T'OFFRIR À ELLE ; RETOUR n'annule pas (elle est là)
+   (succubeProposer de l'émulateur de l'île) */
+void hud_succube_demander(const char *nom, const char *nom2, int r, int n) {   /* nom2 : sa partenaire (paire), sinon NULL */
+    char opts[2][48];
+    snprintf(opts[0], sizeof opts[0], "TE BATTRE"); snprintf(opts[1], sizeof opts[1], nom2 ? "T'OFFRIR À ELLES" : "T'OFFRIR À ELLE");
+    hud_choice(opts, 2);
+    CHX.succube = 1;
+    if (nom2) snprintf(CHX.titre, sizeof CHX.titre, "SUCCUBES %s ET %s", nom, nom2); else snprintf(CHX.titre, sizeof CHX.titre, "%s", nom);
+    snprintf(CHX.texte[0], sizeof CHX.texte[0], nom2 ? "Elles te tendent la main en souriant" : "Elle te tend la main en souriant");
+    snprintf(CHX.texte[1], sizeof CHX.texte[1], "Rencontre %d sur %d", r, n);
+}
 /* Réponse k d'un choix : au scénario, ou à la porte fermée (forcer ou annuler), au vol (voler ou annuler) */
 static void choice_pick(int k) {
     CHX.on = 0;
@@ -2724,6 +2770,8 @@ static void choice_pick(int k) {
     else if (CHX.commerce) { CHX.commerce = 0; commerce_choix(k); }
     else if (CHX.arene) { CHX.arene = 0; arene_choix(k); }   /* arène (arene.c) : rang, combat suivant ou abandon */
     else if (CHX.tele) { CHX.tele = 0; if (k == 0) carte_tele_aller(); }   /* TÉLÉPORTER, ou ANNULER : rien (la carte reste ouverte) */
+    else if (CHX.dormir) { CHX.dormir = 0; if (k == 0) ile_dormir_lancer(); }   /* DORMIR, ou ANNULER : rien */
+    else if (CHX.succube) { CHX.succube = 0; ile_succube_choix(k); }   /* TE BATTRE, ou T'OFFRIR À ELLE (ile.c) */
     else script_choose(k + 1);
 }
 /* Toucher sur la carte du menu, en véhicule : le pilote automatique jusqu'à ce point ; nommé d'après le lieu du guidage le
@@ -2824,6 +2872,7 @@ static void do_action(int act, int arg) {
     case A_SHOP_MEMBRE: shop_membre(arg); break;
     case A_COFFRE: coffre_ouvrir(); break;   /* devant un coffre : le fouiller (coffres.c) */
     case A_PANNEAU: hud_panneau_ouvrir(E.panneau); break;   /* devant un panneau de quêtes : le lire (panneaux.c) */
+    case A_DORMIR: dormir_demander(); break;   /* devant la couche d'un abri de l'île : dormir jusqu'au matin (ile.c) */
     case A_BUTIN: butin_fermer(); break;
     case A_DEFAITE: battle_defaite(arg); break;
     case A_MENU_BTN: H.menu = !H.menu; E.has_dest = 0; son_jouer(SON_MENU, 0.35f, 1); break;
@@ -2966,6 +3015,7 @@ static void tap(float x, float y) {
         return;
     }
     if (script_image_seule()) { script_image_passer(); return; }   /* illustration montrée seule : le toucher l'abrège */
+    if (ile_offrande_passer()) return;   /* île : la séquence d'une succube, l'animation suivante (ile.c) */
     if (BUT.on) { butin_fermer(); return; }   /* panneau du butin : le toucher le ferme */
     if (H.dialog) { advance_dialog(); return; }
     if (CHX.on) { const int cb = button_at(x, y); if (cb >= 0 && BTN[cb].act == A_CHOICE) do_action(A_CHOICE, BTN[cb].arg); return; }
@@ -3018,7 +3068,7 @@ static void pointer(const eng_input_t *in) {
         int on_btn = button_at(x, y) >= 0;
         H.down = 1; H.x0 = H.cx = x; H.y0 = H.cy = y; H.moved = 0; H.t0 = H.now; H.acc = 0; H.walking = 0;
         E.dest_bloque = 0;   /* nouveau toucher : Sera peut retenter le point où elle s'est arrêtée */
-        H.rim = d > 186 && !H.dialog && H.sub != SUB_MAP && !BT.on && !BUT.on;   /* en combat : seulement des touchers */
+        H.rim = (d > 186 || (H.menu && H.sub < 0 && d > 100)) && !H.dialog && H.sub != SUB_MAP && !BT.on && !BUT.on;   /* en combat : seulement des touchers ; roue du menu : le bord et l'anneau des icônes */
 #if ENG_DYN
         H.rim = y > UH - BANDE_H && !H.dialog && !H.menu && H.sub < 0 && !BT.on && !BUT.on && E.ride < 0;   /* bande du bas */
 #endif
@@ -3054,10 +3104,8 @@ static void pointer(const eng_input_t *in) {
 #endif
             float a = atan2f(x - CX, -(y - CY)), da = a - H.ang;
             da = atan2f(sinf(da), cosf(da)); H.ang = a; H.rim_on = 1; H.rim_a = a;
-            if (H.menu && H.sub < 0) {
-                H.acc += da;
-                while (H.acc > 0.5f) { H.sel = (H.sel + NMENU - 1) % NMENU; H.acc -= 2 * PI_F / NMENU; }
-                while (H.acc < -0.5f) { H.sel = (H.sel + 1) % NMENU; H.acc += 2 * PI_F / NMENU; }
+            if (H.menu && H.sub < 0) {   /* roue à places fixes : l'entrée sous le doigt (au-delà d'un toucher) */
+                if (H.moved > 8) H.sel = menu_a(a);
             } else if (H.sub >= 0) {
                 int n = sub_rows();
                 H.acc += da;
@@ -3092,7 +3140,7 @@ static int def_choix(int *c) {
 static void battle_keys(uint32_t pressed) {
     const int ph = BT.phase, menu = ph == BP_CMD || ph == BP_TECH || ph == BP_MAGIE || ph == BP_ITEM || ph == BP_TARGET || ph == BP_ALLIE;
     if (ph == BP_LOSE) {   /* défaite : bas (droite) au choix suivant, haut (gauche) au précédent, OK choisit */
-        if (BT.police || BT.arene) return;   /* contre la police : pas d'écran de défaite, l'arrestation suit ; arène : la sortie (battle.c) */
+        if (BT.police || BT.arene || BT.nuit) return;   /* contre la police : pas d'écran de défaite, l'arrestation suit ; arène : la sortie ; nuit : le réveil (battle.c) */
         int c[3];
         const int n = def_choix(c);
         if (pressed & (ENG_KEY_LEFT | ENG_KEY_RIGHT | ENG_KEY_UP | ENG_KEY_DOWN)) {
@@ -3277,11 +3325,11 @@ void hud_update(float dt, const eng_input_t *in) {
         return;
     }
     if ((pressed & ENG_KEY_MENU) && CR.on) course_pause(1);
-    if ((pressed & ENG_KEY_MENU) && !CR.on) { if (!H.dialog) { H.menu = !H.menu; H.sub = -1; E.has_dest = 0; } }
+    if ((pressed & ENG_KEY_MENU) && !CR.on && !ile_offrande_en_cours()) { if (!H.dialog) { H.menu = !H.menu; H.sub = -1; E.has_dest = 0; } }
     if ((MISE.fuite_on || police_bloque()) && (H.menu || H.sub >= 0)) { H.menu = 0; H.sub = -1; }   /* pas de menu pendant une fuite ni une arrestation */
     if (pressed & ENG_KEY_BACK) {
         if (H.dialog) H.dialog = 0;
-        else if (CHX.on) { if (CHX.porte || CHX.vol || CHX.shop || CHX.tele) { choice_pick(CHX.n - 1); son_jouer(SON_ANNULER, 0.4f, 1); } }   /* confirmation : RETOUR annule (la dernière réponse) ; un choix du scénario attend sa réponse */
+        else if (CHX.on) { if (CHX.porte || CHX.vol || CHX.shop || CHX.tele || CHX.dormir) { choice_pick(CHX.n - 1); son_jouer(SON_ANNULER, 0.4f, 1); } }   /* confirmation : RETOUR annule (la dernière réponse) ; un choix du scénario attend sa réponse */
         else if (H.sub >= 0) sub_back();
         else { H.menu = !H.menu; E.has_dest = 0; }
     }
@@ -3293,12 +3341,14 @@ void hud_update(float dt, const eng_input_t *in) {
         return;
     }
     if (pressed & ENG_KEY_OK) {
-        if (H.dialog) advance_dialog();
+        if (ile_offrande_passer()) { }   /* île : la séquence d'une succube, l'animation suivante (ile.c) */
+        else if (H.dialog) advance_dialog();
         else if (H.sub >= 0) activate_row(H.sub_sel);
         else if (H.menu) open_sub(MENU_SUB(H.sel));
         else if (CR.on) { if (CR.phase == CP_RESULTATS) course_end(); else course_tir(); }
         else if (E.coffre >= 0 && E.ride < 0 && coffre_avant()) coffre_ouvrir();   /* un coffre, plus près que l'interlocuteur */
         else if (E.panneau >= 0 && E.ride < 0 && panneau_avant()) hud_panneau_ouvrir(E.panneau);   /* un panneau de quêtes, plus près que l'interlocuteur */
+        else if (ile_dormir_k() >= 0 && E.ride < 0 && ile_dormir_avant()) dormir_demander();   /* la couche d'un abri de l'île, plus près que l'interlocuteur */
         else if (E.porte >= 0 && E.ride < 0 && (E.talk == -2 || E.talk <= TALK_TRAF(0))) int_interagir();   /* la porte avant un véhicule du trafic */
         else if (near_npc()) do_action(A_TALK, 0);
     }
@@ -3320,7 +3370,7 @@ void hud_update(float dt, const eng_input_t *in) {
 }
 
 void hud_choice(char opts[][48], int n) {
-    CHX.n = n < 1 ? 1 : n > 4 ? 4 : n; CHX.sel = 0; CHX.on = 1; CHX.porte = 0; CHX.commerce = 0; CHX.vol = 0; CHX.shop = 0; CHX.tele = 0; CHX.titre[0] = 0; E.has_dest = 0;
+    CHX.n = n < 1 ? 1 : n > 4 ? 4 : n; CHX.sel = 0; CHX.on = 1; CHX.porte = 0; CHX.commerce = 0; CHX.vol = 0; CHX.shop = 0; CHX.tele = 0; CHX.dormir = 0; CHX.succube = 0; CHX.titre[0] = 0; E.has_dest = 0;
     CHX.texte[0][0] = CHX.texte[1][0] = 0;
     for (int k = 0; k < CHX.n; k++) snprintf(CHX.opts[k], sizeof CHX.opts[k], "%s", opts[k]);
 }
@@ -3724,6 +3774,76 @@ static void draw_course_fx(void) {
     }
 }
 
+/* Avalanche (game.c : AVAL, aval_avance ; internal.h, « Avalanche » ; drawAvalanche de l'émulateur, à garder identiques) :
+   bouffées de poudre dans le monde, du plus loin au plus proche, sur la bande de AVAL_QUEUE du trajet derrière le front
+   (de plus en plus large en descendant, plus hautes, plus grosses et plus claires en arrière, opaques au front) ; chacune en
+   trois disques : son ombre en bas à droite, son corps, un reflet en haut à gauche (une masse de neige qui roule) ; blocs de
+   neige et cailloux qui rebondissent devant ; à l'arrivée, la poudre s'étale, monte et retombe en AVAL_APRES s, et un voile
+   blanc couvre l'image (il monte dans les 0,3 dernières secondes du front, s'efface en AVAL_VOILE s) */
+static float aval_h(int k, int s) {
+    uint32_t h = (uint32_t)k * 2654435761u ^ (uint32_t)s * 2246822519u;
+    h ^= h >> 15; h *= 2654435761u; h ^= h >> 13;
+    return (h & 0xFFFF) / 65536.0f;
+}
+static void draw_avalanche(void) {
+    if (!AVAL.on || E.in.on || BT.on) return;
+    const float t = AVAL.t, s = aval_avance(t), ta = t > AVAL.d ? t - AVAL.d : 0, fa = 1 - ta / AVAL_APRES;
+    const float dx = AVAL.bx - AVAL.ax, dz = AVAL.bz - AVAL.az, L = sqrtf(dx * dx + dz * dz);
+    if (L < 0.01f || fa <= 0) return;
+    const float ux = dx / L, uz = dz / L, px = -uz, pz = ux;
+    static const uint32_t TON[5] = { 0xF4F5F6, 0xDADDE2, 0xB4BAC4, 0x8E95A0, 0x4A4642 };   /* neige claire, ombres bleutées, cendre ; caillou */
+    typedef struct { float sx, sy, r, z; uint8_t c, a, bloc; } bouffee_t;
+    bouffee_t b[AVAL_BOUFFEES + AVAL_BLOCS];
+    int n = 0;
+    for (int k = 0; k < AVAL_BOUFFEES; k++) {
+        const float q = aval_h(k, 1), h2 = aval_h(k, 2), h3 = aval_h(k, 3), h4 = aval_h(k, 4);
+        const float pos = s - q * AVAL_QUEUE;   /* place sur le trajet (0 en haut, 1 à l'arrivée) */
+        if (pos < 0) continue;
+        const float lat = (h2 - 0.5f) * AVAL.w * (0.45f + 0.55f * pos) * (1 + 0.7f * ta) + 0.25f * sinf(t * 1.7f + k);
+        const float x = AVAL.ax + ux * pos * L + px * lat + ux * 0.8f * ta * (0.5f + h4), z = AVAL.az + uz * pos * L + pz * lat + uz * 0.8f * ta * (0.5f + h4);
+        const float r = (0.3f + 0.7f * q + 0.3f * h4) * (1 + 0.5f * ta), y = height_at(x, z) + r * 0.6f + (0.15f + 1.1f * q + 0.4f * h3) * (0.4f + 0.6f * pos) + 0.5f * ta * h3;
+        float sx, sy, sx2, sy2;
+        if (!project(x, y, z, &sx, &sy) || !project(x, y + r, z, &sx2, &sy2)) continue;
+        const float rp = fabsf(sy - sy2);
+        if (rp < 1) continue;
+        const float entree = pos < 0.06f ? pos / 0.06f : 1;   /* une bouffée naît en haut sans paraître d'un coup */
+        b[n].sx = sx; b[n].sy = sy; b[n].r = rp < AVAL_R_MAX ? rp : AVAL_R_MAX;
+        b[n].z = (x - E.cam.x) * E.cam.sy + (z - E.cam.z) * E.cam.cy;
+        const int ci = (int)(h3 * 1.5f + q * 1.6f);
+        b[n].c = (uint8_t)(ci > 2 ? 2 : ci); b[n].bloc = 0;
+        b[n].a = (uint8_t)((255 - 150 * q) * fa * entree);
+        n++;
+    }
+    for (int k = 0; k < AVAL_BLOCS && ta < 0.4f; k++) {   /* blocs et cailloux au front, qui rebondissent */
+        const float h1 = aval_h(k, 5), h2 = aval_h(k, 6), h3 = aval_h(k, 7);
+        const float pos = s - 0.07f * h1;
+        if (pos < 0.02f) continue;
+        const float lat = (h2 - 0.5f) * AVAL.w * (0.4f + 0.5f * pos);
+        const float x = AVAL.ax + ux * pos * L + px * lat, z = AVAL.az + uz * pos * L + pz * lat, r = 0.1f + 0.16f * h3;
+        const float y = height_at(x, z) + r + fabsf(sinf(t * (5 + 3 * h1) + 7 * h2)) * 0.5f;
+        float sx, sy, sx2, sy2;
+        if (!project(x, y, z, &sx, &sy) || !project(x, y + r, z, &sx2, &sy2)) continue;
+        const float rp = fabsf(sy - sy2);
+        b[n].sx = sx; b[n].sy = sy; b[n].r = rp < 1.5f ? 1.5f : rp > 9 ? 9 : rp;
+        b[n].z = (x - E.cam.x) * E.cam.sy + (z - E.cam.z) * E.cam.cy;
+        b[n].c = h3 < 0.35f ? 4 : 1; b[n].bloc = 1;
+        b[n].a = (uint8_t)(255 * (1 - ta / 0.4f));
+        n++;
+    }
+    /* Du plus loin au plus proche (tri par insertion : quelques dizaines) */
+    for (int i = 1; i < n; i++) { const int j0 = i; for (int j = j0; j > 0 && b[j - 1].z < b[j].z; j--) { const bouffee_t e = b[j]; b[j] = b[j - 1]; b[j - 1] = e; } }
+    for (int i = 0; i < n; i++) {
+        const bouffee_t *o = &b[i];
+        if (o->bloc) { ui_circle(o->sx, o->sy, o->r, ui_rgb(TON[o->c]), o->a); continue; }
+        ui_circle(o->sx + 0.12f * o->r, o->sy + 0.22f * o->r, o->r, ui_rgb(TON[o->c + 1]), o->a);           /* ombre */
+        ui_circle(o->sx, o->sy, 0.9f * o->r, ui_rgb(TON[o->c]), o->a);                                     /* corps */
+        ui_circle(o->sx - 0.22f * o->r, o->sy - 0.28f * o->r, 0.5f * o->r, ui_rgb(0xFBFBFC), o->a * 7 / 8); /* reflet */
+    }
+    /* Voile blanc de l'arrivée */
+    const float va = t < AVAL.d - 0.3f ? 0 : t < AVAL.d ? (t - (AVAL.d - 0.3f)) / 0.3f : ta < AVAL_VOILE ? 1 - ta / AVAL_VOILE : 0;
+    if (va > 0) voile_ecran(ui_rgb(0xEEF1F4), (int)(215 * va));
+}
+
 /* Éclair (eclair_age de game.c, 01/11/2026) : seulement un voile de lumière blanche en deux coups (fort de 0 à 0,06 s,
    moins fort de 0,10 à 0,16 s, puis il s'éteint jusqu'à 0,5 s), sans trait de foudre (jugé bizarre par l'utilisateur),
    sous le reste de l'interface (drawEclair de l'émulateur) */
@@ -3871,6 +3991,7 @@ static void draw_world_hud(void) {
     draw_eclair();
     draw_club();
     draw_course_fx();   /* hors course : éclats, feuilles et poussière des décors cassés */
+    draw_avalanche();   /* avalanche du scénario : poudre, blocs, voile blanc de l'arrivée */
     draw_gyrophares();
     if (hud_scene()) {
         if (eveil_hors_combat() && E.scr_sera.vis && E.ride < 0) aura(&E.scr_sera, eveil_aura(0), E.clock * 4);
@@ -4073,6 +4194,22 @@ static void draw_world_hud(void) {
         ui_text(ui_fit(FONT_MONO, nom, 200, 18, 13), x, y - 42, UI_CENTER, or_, 255, nom);
         if (panneau_quetes(E.panneau) > 0) marque_dessin(x + 34, y - 28, MQ_OUVRE, 0.8f);
     }
+    /* Devant la couche d'un abri de l'île (ile.c, 12/11/2026 : la natte, le hamac, le feu, le pied de la Gardienne) : DORMIR, le nom de
+       l'abri au-dessus (bulleDormir de l'émulateur de l'île) */
+    if (ile_dormir_k() >= 0 && E.ride < 0 && !BUT.on && !H.dialog && !H.menu && !CHX.on && !RM.on && !CR.on && ile_dormir_position(&kx, &ky, &kz)) {
+        if (!project(kx, ky, kz, &sx, &sy)) { sx = E.scr_sera.cx; sy = E.scr_sera.top; }
+        float x = sx, y = sy - 46;
+        if (near_npc() && E.scr_npc.vis && fabsf(E.scr_npc.cx - x) < 84 && fabsf(bulle_y(E.scr_npc.top) - y) < 70) x = E.scr_npc.cx + (x >= E.scr_npc.cx ? 84 : -84);
+        if (E.porte >= 0 && E.scr_sera.vis && fabsf(E.scr_sera.cx - x) < 84 && fabsf(E.scr_sera.top - 50 - y) < 70) x = E.scr_sera.cx + (x >= E.scr_sera.cx ? 84 : -84);
+        const uint16_t ca = ui_rgb(ABRI_RGB);
+        float q[12]; ui_hex_path(x, y, 76, 66, q);
+        ui_poly(q, 6, ui_rgb(0x060E1A), 235);
+        glow_outline(q, 6, 2, ca);
+        ui_text(ui_fit(FONT_DISP, "DORMIR", 64, 20, 14), x, y + 7, UI_CENTER, ca, 255, "DORMIR");
+        button(x, y, 38, A_DORMIR, 0);
+        const char *nom = ile_dormir_nom();
+        ui_text(ui_fit(FONT_MONO, nom, 200, 18, 13), x, y - 42, UI_CENTER, ca, 255, nom);
+    }
 }
 /* Alarme d'une effraction : halo rouge au bord de l'écran rond, qui clignote en fondu (1,2 Hz), et compte à rebours
    (drawAlarme de l'émulateur) */
@@ -4164,9 +4301,13 @@ static void draw_menu(void) {
 #endif
     backdrop();
     dashed_ring(160, 4, 6, 1, C1, 56);
-    if (!ENG_RECT) ui_arc(CX, CY, 226, -PI_F / 2 - 0.13f, -PI_F / 2 + 0.13f, 5, C2, 255);   /* (repère sur le pourtour du cadran) */
+    /* Icônes à place fixe (13/11/2026, demande de l'utilisateur : l'anneau qui tournait pour amener l'entrée choisie en haut
+       désorientait) : l'entrée k à l'angle k / NMENU du tour depuis le haut, dans le sens des aiguilles ; seule la sélection
+       se déplace, avec son repère sur le pourtour (menu_angle ; drawMenu de l'émulateur) */
+    const float as = menu_angle(H.sel);
+    if (!ENG_RECT) ui_arc(CX, CY, 226, as - PI_F / 2 - 0.13f, as - PI_F / 2 + 0.13f, 5, C2, 255);   /* (repère sur le pourtour du cadran) */
     for (int k = 0; k < NMENU; k++) {
-        float a = (k - H.sel) / (float)NMENU * 2 * PI_F, x = CX + sinf(a) * 160, y = CY - cosf(a) * 160;
+        float a = menu_angle(k), x = CX + sinf(a) * 160, y = CY - cosf(a) * 160;
         int sel = k == H.sel;
         uint16_t col = sel ? C2 : C1;
         ui_line(CX + sinf(a) * 80, CY - cosf(a) * 80, CX + sinf(a) * 122, CY - cosf(a) * 122, sel ? 2 : 1, col, sel ? 255 : 77);
@@ -5474,6 +5615,8 @@ static void portrait_world(void) {
         act = "FOUILLER"; a = A_COFFRE; col = C2;
     } else if (!CR.on && !RM.on && !CHX.on && !BUT.on && E.panneau >= 0 && E.ride < 0 && panneau_avant()) {   /* un panneau de quêtes (panneaux.c) */
         act = "LIRE"; a = A_PANNEAU; col = ui_rgb(MQ_RGB);
+    } else if (!CR.on && !RM.on && !CHX.on && !BUT.on && ile_dormir_k() >= 0 && E.ride < 0 && ile_dormir_avant()) {   /* la couche d'un abri de l'île (ile.c) */
+        act = "DORMIR"; a = A_DORMIR; col = ui_rgb(ABRI_RGB);
     } else if (!CR.on && !RM.on && near_npc() && E.scr_npc.vis && !(E.ride >= 0 && (fabsf(E.ride_v) > 0.3f || E.ride_phase))) {
         act = E.ride >= 0 ? "DESCENDRE" : talk_is_vehicle() ? "CONDUIRE" : "PARLER"; a = A_TALK;
     } else if (!CR.on && !RM.on && !CHX.on && E.porte >= 0 && E.scr_sera.vis) {
@@ -7416,7 +7559,7 @@ static void draw_butin(void) {
    (battle_defaite de battle.c), le clavier passe de l'un à l'autre. Avant : une bannière, et Sera revenait au départ de la
    planète en gardant tout */
 static void draw_defaite(void) {
-    if (!BT.on || BT.phase != BP_LOSE || BT.police || BT.arene) return;   /* contre la police : la bannière, puis l'arrestation ; arène : ÉLIMINÉE */
+    if (!BT.on || BT.phase != BP_LOSE || BT.police || BT.arene || BT.nuit) return;   /* contre la police : la bannière, puis l'arrestation ; arène : ÉLIMINÉE ; nuit : À TERRE */
     const float t = E.clock - BT.t0, cx = UW / 2, oy = PORTRAIT ? (UH - ENG_SCREEN) * 0.4f : 0, pw = PORTRAIT ? UW - 48 : 300, l = cx - pw / 2;
     const uint16_t w = ui_rgb(WHITE), dim = ui_rgb(DIM), rouge = ui_rgb(RED_HEX);
     char tx[96];
@@ -7683,7 +7826,7 @@ void eng_set_date(int jour, int mois, int jsem) { MT.jour = jour; MT.mois = mois
 /* Date pour le défi du jour du mode course (carriere.c) : mois × 32 + jour, -1 inconnue */
 int eng_date_jour(void) { return MT.mois >= 1 && MT.mois <= 12 && MT.jour >= 1 && MT.jour <= 31 ? MT.mois * 32 + MT.jour : -1; }
 void eng_set_batterie(int pct, int charge) { MT.batt = pct; MT.charge = charge; }
-void eng_verrouiller(void) { V.on = 1; V.doigt = 0; V.touche = 0; V.dx = V.dy = 0; V.t = 0; }
+void eng_verrouiller(void) { if (AG.on) return; V.on = 1; V.doigt = 0; V.touche = 0; V.dx = V.dy = 0; V.t = 0; }
 int eng_verrouille(void) { return V.on; }
 int hud_verrou_on(void) { return V.on; }
 
@@ -7902,14 +8045,15 @@ void hud_build(void) {
 
 /* Hors combat : HUD de la world map, puis dialogue, écran du menu, menu ou message */
 /* Illustration de la scène (instruction « image », E.scene) : plein écran, sous la bulle du dialogue */
-static void draw_scene(void) {
+static void draw_image_plein(int k) {   /* une image du jeu en plein écran (illustration d'une scène, cut-in d'une succube de l'île) */
     int iw, ih;
     const uint16_t *pal;
-    const uint8_t *ix = img_ix(E.scene - 1, &iw, &ih, &pal, 1);
+    const uint8_t *ix = img_ix(k, &iw, &ih, &pal, 1);
     if (!ix) return;
     const float s = (UW - 2) / iw, y = (PORTRAIT ? UH * 0.42f : CY) - ih * s / 2;
     ui_image_pal(ix, pal, iw, ih, (UW - iw * s) / 2, y, s, UW / 2, UH / 2, PORTRAIT ? UW + UH : 233);
 }
+static void draw_scene(void) { draw_image_plein(E.scene - 1); }
 
 #ifdef ENG_COMPTE
 #define HT0() uint32_t ht_ = E.cfg.clock_us ? E.cfg.clock_us() : 0
@@ -7934,6 +8078,7 @@ static void hud_world_layers(void) {
     HT(4);
     /* Illustration de la scène : sous le carton de titre, les annonces, le fondu et la bulle du dialogue */
     if (E.scene && script_running() && !H.menu) draw_scene();
+    { const int oc = ile_offrande_cutin(); if (oc >= 0 && !H.menu) draw_image_plein(oc); }   /* île : le cut-in d'une animation d'offrande (ile.c) */
     if (TT.on) { cadre(1); draw_title(); cadre(0); }
     else if (H.nann && !H.menu && H.sub < 0 && !H.dialog && !course_portrait) {   /* (plein écran : après la course, elle cacherait son bandeau) */
         if (PORTRAIT) ui_translate((UW - ENG_SCREEN) / 2, 80);   /* sous la barre du haut */

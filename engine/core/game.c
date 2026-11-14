@@ -65,9 +65,14 @@ static int walkable_for(float x, float z, const npc_t *self, int swim) {
 }
 /* Pas de Sera à pied : comme walkable_for, mais on peut toujours s'éloigner de quelqu'un qu'on touche (posée contre un
    garde, sinon elle resterait collée) */
+static int coul_sortie;   /* coulées (plus bas, avec l'avalanche) */
+static int coulee_quitter(float x0, float z0, float x, float z, float marge);
 static int sera_pas(float x, float z) {
     if (E.in.on) return int_libre(x, z);
-    return sol_libre(x, z, 1) && !char_block(x, z, E.sera.x, E.sera.z, NULL);
+    coul_sortie = E.w.ncoul ? coulee_quitter(E.sera.x, E.sera.z, x, z, COUL_MARGE / E.w.ech) : -1;   /* dans une coulée : on en sort */
+    const int ok = sol_libre(x, z, 1) && !char_block(x, z, E.sera.x, E.sera.z, NULL);
+    coul_sortie = -1;
+    return ok;
 }
 /* Place libre pour le corps de Sera dehors (marges MARGE_MUR et MARGE_DECOR comprises ; sortie d'un intérieur : interieur.c) */
 int sera_libre(float x, float z) { return !E.in.on && sol_libre(x, z, 0); }
@@ -91,7 +96,7 @@ static int sol_libre(float x, float z, int swim) {
     const chunk_t *c = chunk_of_cell(i, j);   /* chunk pas encore chargé : on attend */
     if (!c) return 0;
     uint8_t f = c->flags[cell_local(i, j)];
-    if (f & F_RAIDE) return 0;
+    if ((f & F_RAIDE) && !(swim == 1 && case_denivele(i, j) <= PIED_RAIDE)) return 0;   /* trop raide : à pied, seulement au-delà de PIED_RAIDE */
     const int wk = water_kind(f);
     if (swim == 2) { if (!wk) return 0; }   /* bateau acteur (scene_libre_r) : l'eau seulement */
     else if (wk && !(swim && (wk == 1 || sera_etanche()))) return 0;
@@ -104,6 +109,7 @@ static int sol_libre(float x, float z, int swim) {
         const float m = r[2] - r[0] < 1 && r[3] - r[1] < 1 ? md : mm;
         if (x > r[0] - m && x < r[2] + m && z > r[1] - m && z < r[3] + m && !rect_casse(r)) return 0;
     }
+    if (w->ncoul && coulee_dans(x, z, COUL_MARGE / w->ech)) return 0;   /* coulée d'une avalanche (sauf celle qu'on quitte : coul_sortie) */
     return 1;
 }
 
@@ -652,7 +658,7 @@ static int voiture_ok(float x, float z) {
         const float *r = &c->solids[s * 4];
         if (x > r[0] - m && x < r[2] + m && z > r[1] - m && z < r[3] + m && !rect_casse(r)) return 0;
     }
-    return 1;
+    return !(E.w.ncoul && coulee_dans(x, z, m));
 }
 /* Rien n'arrête une voiture de (x0, z0) jusqu'à une case de (x1, z1) (tous les demi-cases) */
 static int voie_libre(float x0, float z0, float x1, float z1) {
@@ -1259,6 +1265,11 @@ static int ride_ok(float x, float z) {
             if (fabsf(E.ride_v) > 1.2f && casser(c, r)) continue;   /* lancé : le grand décor casse au lieu d'arrêter */
             return 0;
         }
+        if (w->ncoul) {   /* coulée d'une avalanche : on peut en sortir, pas y entrer */
+            const int q = coulee_quitter(E.sera.x, E.sera.z, x, z, 0.45f / w->ech);
+            coul_sortie = q; const int dans = coulee_dans(x, z, 0.45f / w->ech); coul_sortie = -1;
+            if (dans) return 0;
+        }
     }
     return !char_block(x, z, E.sera.x, E.sera.z, &E.npcs[E.ride]);
 }
@@ -1612,7 +1623,7 @@ static int talk_target(void) {
 #define PROM_RAYON 30.0f
 #define PROM_TRAVERSE 0.06f   /* part des promeneurs qui traversent la chaussée (promCible de l'émulateur) */
 #define PROM_TRAVERSE_L 9.0f  /* cases : une traversée va jusqu'au trottoir d'en face (artère de 5 cases comprise) */
-static int promeneur(const npc_t *n) { return n->meneur || ((n->graine * 2654435761u) >> 16) % 5 < 3; }   /* meneur d'une patrouille : toujours */
+static int promeneur(const npc_t *n) { return !ile_enleve_est(n) && (n->meneur || ((n->graine * 2654435761u) >> 16) % 5 < 3); }   /* meneur d'une patrouille : toujours ; l'habitant enlevé (île) : jamais */
 /* Suiveur d'une patrouille (comme suivreChef de l'émulateur) : un point derrière son meneur, 0,9 case par rang, dans la
    direction où il regarde ; il presse le pas s'il traîne, le rejoint s'il s'est perdu ; arrêté, il regarde où regarde
    son meneur */
@@ -1767,7 +1778,7 @@ int zone_urbaine(float x, float z) {
     return t == 8 || t == 10 || t == 11;
 }
 static void ville_maj(float dt) {
-    const int ville = !E.w.carte && zone_urbaine(E.sera.x, E.sera.z);
+    const int ville = (!E.w.carte && zone_urbaine(E.sera.x, E.sera.z)) || E.w.cartes[E.w.carte].vision;   /* (vision : la ville d'avant la Cendre, toute en ville) */
     const float cible = ville ? fmaxf(0, 1 - 2 * cendre_dehors()) : 0;
     E.ville_v += (cible - E.ville_v) * fminf(1, dt / VILLE_FONDU * 3);
     /* Zoom fixe selon le lieu (01/11/2026, demande de l'utilisateur) : ZOOM_VILLE (300 %) en ville, ZOOM_DEHORS (300 % depuis le 07/11/2026, 200 % avant)
@@ -1793,25 +1804,25 @@ static void ville_maj(float dt) {
    ni ne revient sous les yeux de Sera : son état ne change qu'à plus de ABRI_LOIN cases d'elle (abriMaj de l'émulateur) */
 #define ABRI_PART 0.85f
 #define ABRI_LOIN 12.0f
-static void abri_maj(npc_t *n, float cendre) {
+static void abri_maj(npc_t *n, float cendre, float nuit) {
     const float dx = n->x - E.sera.x, dz = n->z - E.sera.z, loin = ABRI_LOIN / E.w.ech;
     if (dx * dx + dz * dz < loin * loin) return;
     const perso_t *pe = &E.w.persos[n->perso];
     const int passant = (pe->flags & PERS_FLANE) && PERS_GENRE(pe->flags) && !n->meneur && !n->chef && !n->depart && !n->fuit;
-    n->abri = passant && (((uint32_t)n->graine * 2246822519u) >> 16) % 100 < cendre * ABRI_PART * 100;
+    n->abri = passant && (((uint32_t)n->graine * 2246822519u) >> 16) % 100 < fmaxf(cendre * ABRI_PART, nuit) * 100;   /* île : la nuit, ils rentrent (ile_nuit_part) */
 }
 
 /* Exemplaires proches de Sera : l'interlocuteur la regarde ; ceux qui flânent marchent vers un point tiré autour de
    leur place, s'arrêtent quelques secondes et repartent (comme l'émulateur) ; les promeneurs suivent les trottoirs
    (prom_cible) ; les autres restent immobiles ; sous la cendre, des passants se mettent à l'abri (abri_maj) */
 static void update_npcs(float dt) {
-    const float act = 24.0f / E.w.ech, cendre = cendre_dehors();
+    const float act = 24.0f / E.w.ech, cendre = cendre_dehors(), nuit = ile_nuit_part();
     for (int k = 0; k < E.nnpc; k++) {
         npc_t *n = &E.npcs[k];
         const float ax = fabsf(n->x - E.sera.x), az = fabsf(n->z - E.sera.z);
         if (!n->place_ok && !E.in.on && ax < 2 * act && az < 2 * act) hors_chaussee(n);   /* pas posé sur la chaussée (avant d'être vu) */
         if (ax > act || az > act) continue;
-        if (cendre > 0 || n->abri) abri_maj(n, cendre);
+        if (cendre > 0 || nuit > 0 || n->abri) abri_maj(n, cendre, nuit);
         if (!npc_present(n)) continue;
         const perso_t *pe = &E.w.persos[n->perso];
         if (pe->flags & PERS_VEHICULE) continue;
@@ -1998,7 +2009,7 @@ static float enc_poids(const enemy_t *en, float cendre) {
    cases d'ordinaire, 64 × 64 sur le système solaire (zoneOctets de l'émulateur) */
 int encounter_zone(float x, float z) {
     const world_t *w = &E.w;
-    if (!w->zone || !w->nenemies) return -1;
+    if (!w->zone || !w->nenemies || w->cartes[w->carte].vision) return -1;   /* vision (la ville d'avant la Cendre) : aucun ennemi (zoneRenc de l'émulateur) */
     const int i = (int)floorf(x) * w->zone_n / (w->n > 0 ? w->n : 1), j = (int)floorf(z) * w->zone_n / (w->n > 0 ? w->n : 1);
     if (i < 0 || j < 0 || i >= w->zone_n || j >= w->zone_n) return -1;
     const int t = w->zone[j * w->zone_n + i];
@@ -2346,7 +2357,7 @@ int mise_marche(int qui) {
     for (int k = 0; k < ACT_MAX; k++) if (MISE.act[k].on && !MISE.act[k].chasse && MISE.act[k].walking) return 1;
     return 0;
 }
-int mise_bloque(void) { return MISE.cam_on || MISE.sera_on || police_bloque(); }   /* arrestation (police.c) aussi */
+int mise_bloque(void) { return MISE.cam_on || MISE.sera_on || police_bloque() || ile_dort() || ile_offrande_en_cours(); }   /* île : la séquence d'une succube (ile.c) */   /* arrestation (police.c) aussi */
 /* Lacet de la caméra au multiple de 45° le plus proche */
 float cam_pas(float yaw) { const float p = PI_F / 4; return roundf(yaw / p) * p; }
 /* Le point est-il dans la boîte d'un bâtiment (d'après ses polygones) ? Un bâtiment est rangé dans le chunk de son centre : les 3 × 3 autour du point. pointDansBat de l'émulateur */
@@ -2458,7 +2469,65 @@ void mise_cam_stop(void) {
     if (MISE.cam_on) { E.yaw = MISE.yaw0; eng_set_zoom(MISE.zoom0); }
     MISE.cam_on = MISE.coupe = 0;
 }
+/* ---------- Avalanche et coulées (14/11/2026 ; internal.h, « Avalanche » ; avalancheMaj, coulee* de l'émulateur) ---------- */
+aval_t AVAL ENG_FROID;
+/* Part du trajet parcourue par le front : il part doucement et prend de la vitesse en dévalant */
+float aval_avance(float t) {
+    const float k = AVAL.d > 0 ? t / AVAL.d : 1;
+    return k >= 1 ? 1 : k <= 0 ? 0 : k * k * (1.6f - 0.6f * k);
+}
+void aval_lancer(float ax, float az, float bx, float bz, float w, float d, int drapeau) {
+    AVAL.on = 1; AVAL.t = 0; AVAL.d = d > 0.2f ? d : 0.2f; AVAL.ax = ax; AVAL.az = az; AVAL.bx = bx; AVAL.bz = bz;
+    AVAL.w = w > 0.5f ? w : 0.5f; AVAL.drapeau = drapeau; AVAL.leve = 0; AVAL.son_t = 0;
+}
+void aval_maj(float dt) {
+    if (!AVAL.on) return;
+    AVAL.t += dt;
+    const float s = aval_avance(AVAL.t);
+    if (AVAL.t < AVAL.d) {
+        /* grondement qui enfle (un roulement grave toutes les 0,3 s), l'image tremble de plus en plus */
+        if ((AVAL.son_t -= dt) <= 0) { AVAL.son_t = 0.3f; son_jouer(SON_TERRE, 0.35f + 0.55f * s, 0.45f + 0.1f * s); }
+        MISE.sec_f = 0.4f + 1.4f * s; MISE.sec_t = 0.2f;
+    } else if (!AVAL.leve) {
+        /* l'arrivée : choc, voile blanc (hud.c), la coulée paraît sous le voile */
+        AVAL.leve = 1;
+        if (AVAL.drapeau >= 0 && AVAL.drapeau < SC_MAX_FLAGS) E.flags[AVAL.drapeau >> 3] |= (uint8_t)(1 << (AVAL.drapeau & 7));
+        son_jouer(SON_CRASH, 0.9f, 0.5f); son_jouer(SON_EXPLOSION, 0.7f, 0.4f);
+        MISE.sec_f = 2.0f; MISE.sec_t = 1.0f;
+    }
+    if (AVAL.t >= AVAL.d + AVAL_APRES) AVAL.on = 0;
+}
+int coulee_visible(int k) {
+    const coulee_t *c = &E.w.coul[k];
+    return c->carte == E.w.carte && (c->drapeau >= SC_MAX_FLAGS || (E.flags[c->drapeau >> 3] >> (c->drapeau & 7) & 1));
+}
+/* Place de (x, z) dans l'ellipse de la coulée k agrandie de marge : moins de 1 dedans */
+static float coulee_val(int k, float x, float z, float marge) {
+    const coulee_t *c = &E.w.coul[k];
+    const float dx = x - c->x, dz = z - c->z, u = (dx * c->ca + dz * c->sa) / (c->rx + marge), v = (dz * c->ca - dx * c->sa) / (c->rz + marge);
+    return u * u + v * v;
+}
+static int coul_sortie = -1;   /* coulée où Sera se trouve et qu'elle quitte (sera_pas, ride_ok) : pas un obstacle pour ce pas */
+int coulee_dans(float x, float z, float marge) {
+    for (int k = 0; k < E.w.ncoul; k++) if (k != coul_sortie && coulee_visible(k) && coulee_val(k, x, z, marge) < 1) return 1;
+    return 0;
+}
+/* Pas de (x0, z0) vers (x, z) : dans une coulée visible où l'on est déjà, on peut toujours s'en éloigner (posée dedans par une
+   scène, une partie chargée) */
+static int coulee_quitter(float x0, float z0, float x, float z, float marge) {
+    for (int k = 0; k < E.w.ncoul; k++)
+        if (coulee_visible(k) && coulee_val(k, x0, z0, marge) < 1 && coulee_val(k, x, z, marge) >= coulee_val(k, x0, z0, marge)) return k;
+    return -1;
+}
+/* Partie chargée : l'événement d'une avalanche est fait, sa coulée est là (parties d'avant les coulées comprises) */
+void coulee_apres_chargement(void) {
+    for (int k = 0; k < E.w.ncoul; k++) {
+        const coulee_t *c = &E.w.coul[k];
+        if (c->drapeau < SC_MAX_FLAGS && c->ev < E.w.sc_nev && script_ev_fait(c->ev)) E.flags[c->drapeau >> 3] |= (uint8_t)(1 << (c->drapeau & 7));
+    }
+}
 void mise_fin(int tout) {
+    if (tout) AVAL.on = 0;
     for (int k = 0; k < ACT_MAX; k++) if (tout || !MISE.act[k].garder || MISE.act[k].chasse) MISE.act[k].on = 0;
     MISE.sera_on = MISE.fuite_on = 0;
     MISE.fondu = MISE.fondu_t = MISE.fondu_d = 0; MISE.sec_t = 0;
@@ -2644,6 +2713,7 @@ void eng_update(float dt, const eng_input_t *in) {
     loc.touch_x -= ui_ox; loc.touch_y -= ui_oy; loc.touch2_x -= ui_ox; loc.touch2_y -= ui_oy;
     in = &loc;
 #endif
+    if (AG.on) { ag_update(dt, in); return; }   /* course anti-gravité (antigrav.c) */
     if (dt > 0.05f) dt = 0.05f;
     E.clock += dt;
     E.manette = in->manette;
@@ -2784,6 +2854,7 @@ void eng_update(float dt, const eng_input_t *in) {
     if (!E.in.on) patrouille_maj(dt);   /* patrouilles hostiles (battle.c) : elles rôdent, chassent Sera, engagent le combat */
     UP(UPROF_PNJ);
     mise_update(dt);   /* mise en scène du scénario : caméra, acteurs, fondu, fuite */
+    aval_maj(dt);      /* avalanche du scénario : front, grondement, secousse, drapeau de sa coulée */
     passage_step();   /* passage vers une autre carte (puits, égout, ascenseur…) */
     /* Chunks qui entrent dans la fenêtre : autour de ce que vise la caméra d'une scène (travelling vers un lieu lointain :
        sans cela, il n'y avait rien à montrer là-bas ; les 3 × 3 autour du point visé se chargent tout de suite, le reste
@@ -2792,6 +2863,10 @@ void eng_update(float dt, const eng_input_t *in) {
     UP(UPROF_CHUNKS);
     weather_update(dt);
     cendre_update(dt);   /* pluie de cendre : l'équipe tousse dehors sans masque */
+    ile_soir_maj();      /* île : le coucher du soleil et la nuit s'annoncent */
+    ile_dormir_maj(dt);  /* île : la couche d'un abri à portée, le sommeil jusqu'au matin */
+    ile_rodeurs_maj(dt); /* île : le reflet de la nuit paraît, chasse, se glisse dans les maisons (ile.c) */
+    ile_offrande_maj(dt); /* île : la séquence d'une succube, jusqu'au matin (ile.c) */
     ville_maj(dt);       /* brouillard reculé en ville */
     repl_maj();          /* répliques : le lot de la zone de Sera, lu quand elle en change (repliques.c) */
     script_update(dt);   /* scénario : déclencheurs, script en cours */

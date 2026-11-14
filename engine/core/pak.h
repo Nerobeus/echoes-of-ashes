@@ -246,6 +246,13 @@
  *        toutes cartes) : nombre u32, puis 12 octets chacune : x u16, z u16 (1/8 de case), y i16 (1/64 : la flamme),
  *        carte u8, rayon u8 (1/16 de case), couleur r, g, b u8, intensité u8 (1/255) ; la nuit, les 4 plus proches de
  *        Sera éclaircissent l'image (render.c : lum_band ; aussi dans le paquet léger de l'ESP32)
+ *  COUL  coulées des avalanches (facultative, 14/11/2026 ; « avalanche … coulee DRAPEAU » du scénario, construites par
+ *        l'émulateur) : nombre u32, puis chacune : carte u8, mode u8 (0), drapeau u16 (65535 : toujours là), événement
+ *        u16 (65535 : aucun ; fait dans une partie chargée : le drapeau est levé), polygones u16, x, z, rx, rz, angle f32
+ *        (ellipse infranchissable), octets u32 des polygones, puis les polygones au format des chunks (tile u16, drapeaux
+ *        u8 (POLY_CULL), sommets u8, normale 3 f32 si POLY_CULL, puis par sommet x, y, z i16 en 1/256 de case, x et z
+ *        depuis le centre, u, v i16 en 1/4, lumière u8 en 1/16, un octet libre) ; dessinées une fois le drapeau levé
+ *        (world.c, render.c ; aussi dans le paquet léger de l'ESP32)
  *  ZONE  terrain des rencontres (facultative) : côté M u32 (0 : aucun), puis M × M index de terrain u8, un par bloc de
  *        2 × 2 cases (celui de la case du coin), ligne par ligne (255 : inconnu, aucune rencontre) ; lue à l'échelle du
  *        côté N de la carte (bloc de N / M cases : 64 × 64 sur le système solaire, une seule zone, « espace »)

@@ -43,6 +43,9 @@ enum { OP_BATTLE2 = 51 };
 enum { OP_PARTY2 = 52 };
 /* Police (les casses de Lucerne) : niveau u8 ; si (non) recherchée : adresse u16 */
 enum { OP_POLICE = 53, OP_JMP_IF_NOT_WANTED = 54, OP_JMP_IF_WANTED = 55 };
+/* Avalanche (14/11/2026) : de (ax, az) vers (bx, bz) u16 (1/8 de case), largeur u8 (1/4 de case), durée u16 (1/100 s),
+   drapeau u16 de sa coulée (65535 : aucune) ; le script attend l'arrivée du front (game.c, aval_maj ; internal.h) */
+enum { OP_AVALANCHE = 56 };
 #define SC_ONCE 1
 #define SC_NEG 2
 #define SC_ADULTE 4             /* événement 18+ (édition unique) */
@@ -467,6 +470,7 @@ static int code_combat(const uint8_t *c, int len) {
         case OP_ACTOR: case OP_WALK: n = 8; break;
         case OP_FLEE: n = 10; break;
         case OP_CAMERA: n = 12; break;
+        case OP_AVALANCHE: n = 14; break;
         case OP_CHOICE: n = pc + 1 < len ? 2 + 2 * c[pc + 1] : 2; break;
         case OP_RACE2: n = pc + 10 < len ? 11 + (c[pc + 10] == 255 ? 0 : c[pc + 10]) : 11; break;
         default: return 0;   /* OP_END, ou inconnue */
@@ -803,6 +807,13 @@ static void exec(void) {
             return;
         }
         case OP_SHAKE: MISE.sec_f = c[pc + 1] / 10.0f; MISE.sec_t = rd16(c + pc + 2) / 100.0f; VM.pc += 4; break;   /* force u8 (1/10), durée u16 */
+        case OP_AVALANCHE: {   /* de A vers B, largeur, durée, drapeau de la coulée : le script attend le front */
+            const float d = rd16(c + pc + 10) / 100.0f;
+            const int dr = rd16(c + pc + 12);
+            aval_lancer(rd16(c + pc + 1) / 8.0f, rd16(c + pc + 3) / 8.0f, rd16(c + pc + 5) / 8.0f, rd16(c + pc + 7) / 8.0f, c[pc + 9] / 4.0f, d, dr == 65535 ? -1 : dr);
+            VM.pc += 14; VM.wait = AVAL.d;
+            return;
+        }
         case OP_FLEE:   /* x, z u16, rayon u8 (1/4 de case), temps u16 (1/10 s), poursuivant u8 (255 : aucun), nombre u8 */
             mise_fuite(rd16(c + pc + 1) / 8.0f, rd16(c + pc + 3) / 8.0f, c[pc + 5] / 4.0f, rd16(c + pc + 6) / 10.0f, c[pc + 8] == 255 ? -1 : c[pc + 8], c[pc + 9]);
             VM.pc += 10; VM.fuite = 1;
@@ -929,6 +940,7 @@ int script_talk(int target) {
 }
 
 int script_running(void) { return VM.on; }
+int script_essai_pc(void) { return VM.on ? VM.pc : -1; }   /* essais (rendu_test : SCENE_TRACE) */
 int script_ev_ok(int k) { return k >= 0 && k < E.w.sc_nev && ev_ok(k); }
 /* Quête « d'affichage » choisie sur un panneau de quêtes (déclencheur 4, panneaux.c) : son événement part maintenant */
 int script_panneau(int k) {
@@ -946,6 +958,7 @@ void script_after_load(void) {
     memset(&VM, 0, sizeof VM); VM.started = 1; VM.marche = -1;
     for (int k = 0; k < E.w.sc_nev; k++) if (ev_dedans(k)) set_bit(VM.inzone, k, 1);
     mise_fin(1);
+    coulee_apres_chargement();   /* l'avalanche jouée : sa coulée est là (parties d'avant les coulées) */
     if (E.qtrack < 0 || E.qtrack >= E.w.sc_nq || !active(E.qtrack)) E.qtrack = next_active();
 }
 

@@ -22,12 +22,17 @@ enum {
     /* moteurs d'autres sortes de véhicules, choisis par l'atelier d'après le nom (section SONM) */
     SON_MOTEUR_MOTO, SON_MOTEUR_SPORT, SON_MOTEUR_CHENILLES, SON_MOTEUR_ELECTRIQUE, SON_MOTEUR_REACTEUR,
     SON_PAS_MECH,   /* pas lourd du mech conduit, une fois par foulée (ride_drive de game.c) */
+    /* course anti-gravité (14/11/2026) : synthétisés par tools/antigrav/sons_course.js, dans le paquet de la course seulement (Echoes
+       ne les a pas : REPLI de audio.c) ; grondement du SÉISME et charge du rayon en boucle */
+    SON_AG_SEISME, SON_AG_MISSILE, SON_AG_MINE, SON_AG_CHARGE, SON_AG_RAYON, SON_AG_BOUCLIER, SON_AG_EXPLOSION, SON_AG_ABSORBE,
+    SON_AG_ALERTE, SON_AG_IMPACT,
     SON_N
 };
 #define SON_SIRENE SON_N         /* sirène de l'alarme : fabriquée par le moteur (dent de scie de 700 Hz) */
 /* CLE_TRAFIC + k : véhicule k du trafic ; CLE_COURSE + k : concurrent k ; CLE_FROTTEMENT : tôle du véhicule conduit qui
    frotte contre un mur ou un obstacle */
-enum { CLE_VEHICULE = 1, CLE_TRAFIC = 2, CLE_FROTTEMENT = 16, CLE_SIRENE = 17, CLE_COURSE = 32 };
+enum { CLE_VEHICULE = 1, CLE_TRAFIC = 2, CLE_FROTTEMENT = 16, CLE_SIRENE = 17, CLE_COURSE = 32,
+       CLE_AG_ONDE = 48, CLE_AG_CHARGE = 56 };   /* course anti-gravité : grondement de l'onde k du SÉISME, charge du rayon du joueur */
 
 /* Mixage (SYSTÈME › SON, 01/11/2026) : chaque son appartient à un canal, dont le niveau (0 à 1) s'ajoute au volume
    général ; moteurs : les boucles des véhicules ; interface : bips du texte, menus, valider, annuler ; effets : le reste */

@@ -113,7 +113,7 @@ int accueil_calme(void) {
     return A.on && !A.fondu && !A.down && A.t >= T_TITRE && A.t - A.vu >= 1
         && (A.page == AP_TITRE || A.page == AP_PARTIES || A.page == AP_APPS || A.page == AP_REGL || A.page >= AP_CMENU);
 }
-int eng_ecran_calme(void) { return accueil_calme() || carte_calme(); }   /* carte du menu immobile aussi (carte.c) */
+int eng_ecran_calme(void) { return !AG.on && (accueil_calme() || carte_calme()); }   /* carte du menu immobile aussi (carte.c) */
 float accueil_heure(void) { return A.heure; }
 const char *accueil_musique(void) { return E.w.ouv_musique; }
 
@@ -201,6 +201,9 @@ static void jouer(int k) {
     hud_nouvelle(A.partie);
     E.heroine = her_perso(k);
     ile_equipe(1);   /* île : l'héroïne et ses deux compagnes, au niveau 1 */
+    ile_rodeurs_reset();   /* île : ni rôdeur ni nuit commencée */
+    ile_offrande_reset();  /* ni séquence d'une succube */
+    ile_enleve_reset();    /* ni habitant enlevé */
     if (E.w.carte) world_carte(0, E.w.start_x, E.w.start_z);
     E.sera.x = E.w.start_x; E.sera.z = E.w.start_z; E.sera.dir = 0.35f + PI_F; E.sera_y_ok = 0;
     E.yaw = A.yaw0; E.heure = A.heure0; eng_set_zoom(A.zoom0);
@@ -227,7 +230,7 @@ int accueil_heroine_changer(void) {
     A.page = AP_HEROINE; A.geste = 1; A.her = her_rang(E.heroine);
     return 1;
 }
-void eng_skip_opening(void) { accueil_fin(); }
+void eng_skip_opening(void) { if (!AG.on) accueil_fin(); }
 static void charger(int p) {
     E.heure = A.heure0; eng_set_zoom(A.zoom0);
     E.yaw = A.yaw0;

@@ -274,6 +274,16 @@ void eng_move_to(float x, float z);
    piste k avec le premier véhicule de course et des rivaux d'autres planches, le joueur piloté vers l'axe de la piste ;
    allege = 0 : sans l'allègement du rendu en course (sol simplifié plus tôt, render.c), pour comparer. 0 : refusée */
 int eng_essai_course(int piste, int allege);
+void eng_ag_vis_diag(float *xyz, int *sec, int *groupe);   /* course anti-gravité : caméra de la dernière image, section la plus proche, groupe de visibilité (-1 : sans liste) */
+void eng_ag_detail(int *d);   /* course anti-gravité : triangles de la dernière image par poste (engins, piste, relief, sol ; journal du simulateur) */
+int eng_ag_essai(int piste, int vue);   /* course anti-gravité : banc d'essai de la LDK (course pilotée sur la piste, dans la vue) */
+void eng_ag_camera_essai(float d, float p);   /* course anti-gravité : caméra de poursuite reculée et baissée (essais du simulateur) */
+void eng_ag_vue_tunnel(int k, float d, float h, float l);   /* course anti-gravité : caméra fixe devant l'entrée d'un tunnel (essais du simulateur) */
+void eng_ag_classe_essai(int k);
+void eng_ag_carriere_essai(int l, int e);   /* course anti-gravité : l'épreuve e de la ligue l de la carrière (essais du simulateur, « carriere:l:e ») */
+void eng_ag_bilan(char *b, int n);
+void eng_ag_arme_essai(int a);             /* course anti-gravité : le joueur porte l'arme a (essais : « arme:a ») */          /* course anti-gravité : le joueur à la fin de la course (essais : « bilan ») */   /* course anti-gravité : catégorie de vitesse (essais du simulateur, « classe:k ») */
+void eng_ag_pilote(int on);   /* course anti-gravité (antigrav.c) : le joueur piloté comme un adversaire (essais : simulateur de la LDK, commande « pilote ») */
 int eng_essai_monde(float x, float z, float cap, int pluie, float heure, float s);
 /* État des rencontres sur une ligne (SDX ETAT) : longueur écrite */
 int eng_etat_rencontres(char *b, int n);

@@ -24,6 +24,11 @@ battle_t BT ENG_FROID;
 #define RED 0xFF3B4Eu
 #define AMBER 0xFFB020u
 #define GREEN 0x7DFF9Au
+/* Le charme dans l'édition 18+ (13/11/2026, décision de l'utilisateur) : CHARME, SOUS LE CHARME ; ailleurs (18+ verrouillé, édition enfant),
+   ENVOÛTEMENT (le nom du répertoire), EMPRISE, SOUS L'EMPRISE (charme18 de l'émulateur de l'île) */
+static int charme18(void) { return E.w.edition != 1 && !verrou18(); }
+int charme18_ile(void) { return charme18(); }   /* (ile.c : s'offrir à une succube, la familière) */
+
 
 /* Générateur du combat (Math.random de l'émulateur) */
 static uint32_t rng_b = 0x2545F491u;
@@ -115,7 +120,7 @@ static void banner(const char *text, const char *sub, uint32_t color, int hold) 
 }
 
 /* Nombre flottant au-dessus d'une unité : la place libre, sinon la plus ancienne */
-static void popup(int unit, const char *text, uint32_t color) {
+static int popup(int unit, const char *text, uint32_t color) {   /* rend sa place (un état décalé au-dessus des dégâts : son t0 avancé) */
     int k = 0;
     for (int i = 0; i < BT_POPUPS; i++) {
         if (!BT.pop[i].on || E.clock - BT.pop[i].t0 > 1.3f) { k = i; break; }
@@ -124,6 +129,7 @@ static void popup(int unit, const char *text, uint32_t color) {
     snprintf(BT.pop[k].text, sizeof BT.pop[k].text, "%s", text);
     BT.pop[k].color = color; BT.pop[k].t0 = E.clock; BT.pop[k].unit = unit;
     BT.pop[k].dx = (int)(brand() * 20 - 10); BT.pop[k].on = 1;
+    return k;
 }
 
 /* Palette de l'ennemi d'un combat du scénario : celle de ce qu'on voit dans le monde (paletteVue de l'émulateur) :
@@ -224,6 +230,7 @@ void battle_start_groupe(const int *ks, int nk, int lvl, int boss, int mode, con
         vue[i] = vars ? vars[i] : boss && ks[i] >= 0 && ks[i] < w->nenemies ? palette_vue(w->enemies[ks[i]].perso) : -1;
     hud_battle_start();
     BT.boss = boss; BT.fuites = 0; BT.patr = -1; BT.police = 0; BT.arene = 0;   /* police_combat, arene.c le marquent après */
+    BT.nuit = BT.aube = 0; memset(BT.emprise, 0, sizeof BT.emprise);   /* ile.c marque un combat contre un rôdeur de la nuit (ile_rodeur_engage) */
     /* Niveau du combat (celui du chef) : PV et ATQ de chaque fiche suivent l'équipe, × (niveau + 6) / (niveau de la fiche + 6) */
     BT.lvl = lvl > 0 ? (lvl > NIV_MAX ? NIV_MAX : lvl) : w->enemies[ks[0]].lvl;
     /* L'ennemi se règle sur la taille de l'équipe : PV et attaque à (n + 1) / 5, puis TAILLE_PV, TAILLE_ATQ (startBattle de
@@ -283,7 +290,7 @@ void battle_start_groupe(const int *ks, int nk, int lvl, int boss, int mode, con
     RT.nk = BT.nen; RT.lvl = BT.lvl; RT.boss = boss; RT.mode = mode; RT.ok = BT.nen > 0;
     for (int k = 0; k < BT.nen; k++) { RT.ks[k] = BT.en[k].ek; RT.var[k] = BT.en[k].var; }
 }
-int battle_reessai_ok(void) { return RT.ok && BT.on && BT.phase == BP_LOSE && !BT.police && !BT.arene; }   /* pas contre la police, ni à l'arène */
+int battle_reessai_ok(void) { return RT.ok && BT.on && BT.phase == BP_LOSE && !BT.police && !BT.arene && !BT.nuit; }   /* pas contre la police, ni à l'arène */
 /* RÉESSAYER LE COMBAT (écran de défaite) : la copie du début remise, le même combat relancé tout de suite, avec la même
    entrée ; sans battle_end : le script qui attendait ce combat attend toujours (une victoire continue sa scène), la
    patrouille qui l'avait engagé reste la sienne */
@@ -664,6 +671,7 @@ static int soin_butin(int lvl) {
 static void battle_end(int won) {
     const int fui = won == 2;
     if (fui) won = 0;
+    ile_rodeur_fin(won, fui);   /* île : un rôdeur de la nuit vaincu ne revient plus de la nuit */
     /* Combat du scénario gagné : la cible de chasse de cet ennemi, là où il était, n'est plus dessinée (endBattle de
        l'émulateur) ; sinon l'ennemi vaincu restait debout pendant les répliques qui suivent */
     if (won) for (int k = 0; k < BT.nen; k++) E.best_bat[BT.en[k].ek >> 3] |= (uint8_t)(1 << (BT.en[k].ek & 7));   /* bestiaire : vaincu */
@@ -706,11 +714,29 @@ static void battle_end(int won) {
    (battle_reessayer) ; REPRENDRE (DEF_REPRENDRE) recharge le dernier point de sauvegarde de la partie en cours
    (hud_reprendre : sauvegarde automatique ou du menu ; celle du début de la partie au pis) ; ÉCRAN TITRE (DEF_TITRE) */
 void battle_defaite(int choix) {
-    if (!BT.on || BT.phase != BP_LOSE || BT.police || BT.arene || E.clock - BT.t0 < 0.4f) return;   /* pas avant que les choix paraissent */
+    if (!BT.on || BT.phase != BP_LOSE || BT.police || BT.arene || BT.nuit || E.clock - BT.t0 < 0.4f) return;   /* pas avant que les choix paraissent */
     son_jouer(SON_VALIDER, 0.45f, 1);
     if (choix == DEF_REESSAYER) { if (RT.ok) battle_reessayer(); return; }
     battle_end(0);
     if (choix == DEF_TITRE) accueil_debut(); else hud_reprendre();
+}
+
+/* Tour d'un membre sous l'emprise d'un rôdeur (île) : il frappe un autre membre debout, tiré au hasard ; seul, il perd son tour ;
+   puis il s'en libère (emprise_tour de l'émulateur de l'île) */
+static void emprise_tour(int a) {
+    int lv[NMEMB], nv = 0;
+    for (int i = 0; i < NMEMB; i++) if (i != a && alive(i)) lv[nv++] = i;
+    const int v = nv ? lv[(int)(brand() * nv) % nv] : -1;
+    char s[64];
+    if (v >= 0) snprintf(s, sizeof s, "%s frappe %s", PARTY[a].name, PARTY[v].name);
+    else snprintf(s, sizeof s, "%s ne peut pas agir", PARTY[a].name);
+    banner(charme18() ? "SOUS LE CHARME" : "SOUS L'EMPRISE", s, EMPRISE_RGB, 0);
+    son_jouer(SON_MAGIE, 0.5f, 0.7f);
+    BT.phase = BP_ANIM;
+    memset(&BT.an, 0, sizeof BT.an);
+    BT.an.who = a; BT.an.t0 = E.clock; BT.an.fx = -1; BT.an.col = EMPRISE_RGB; BT.an.k = 1; BT.an.cast = 1; BT.an.emprise = 1;
+    BT.an.act.name = "EMPRISE"; BT.an.seed = (int)(brand() * 65536);
+    if (v >= 0) { BT.an.targets[0] = v; BT.an.ntarget = 1; }
 }
 
 /* Tour suivant : fin du combat, ou l'unité en tête de la timeline */
@@ -726,6 +752,11 @@ static void advance(void) {
         /* contre la police : une bannière, puis l'arrestation (battle_update, POL_DEFAITE_S) */
         if (BT.police) { banner("MAÎTRISÉE", POL.clan ? "La milice vous passe les menottes" : "Les agents vous passent les menottes", RED, 1); son_jouer(SON_ANNULER, 0.5f, 0.7f); }
         else if (BT.arene) { banner("ÉLIMINÉE", "L'arène vous renvoie aux vestiaires", RED, 1); son_jouer(SON_ANNULER, 0.5f, 0.7f); }   /* arène : ni écran de défaite ni RÉESSAYER */
+        else if (BT.nuit) {   /* rôdeur de la nuit (île) : ni écran de défaite ni RÉESSAYER, le réveil à l'abri le plus proche au matin (ile.c) */
+            char s[64];
+            snprintf(s, sizeof s, "%s disparaît dans la nuit", BT.nen ? E.w.persos[BT.en[0].perso].nom : "");
+            banner("À TERRE", s, RED, 1); son_jouer(SON_ANNULER, 0.5f, 0.7f);
+        }
         return;
     }
     cible_maj();   /* ennemi visé abattu : le plus faible */
@@ -733,6 +764,7 @@ static void advance(void) {
     battle_timeline(1, &a);
     BT.actor = a; BT.locked = 0; memset(&BT.pending, 0, sizeof BT.pending);
     if (a >= BT_ENEMY) { BT.phase = BP_ENEMY; BT.t0 = E.clock; }
+    else if (BT.emprise[a]) { BT.emprise[a] = 0; BT.defending[a] = 0; emprise_tour(a); }   /* sous l'emprise : il frappe un allié */
     else { BT.defending[a] = 0; BT.phase = BP_CMD; }
 }
 
@@ -1261,17 +1293,24 @@ static void enemy_act(void) {
         const uint8_t *a = en->atq + (en->natq - 1) * ENAT_ATQ;
         for (int i = 0; i < en->natq; i++) { r -= en->atq[i * ENAT_ATQ + 22]; if (r < 0) { a = en->atq + i * ENAT_ATQ; break; } }
         if (bt_atq_force >= 0 && bt_atq_force < en->natq) a = en->atq + bt_atq_force * ENAT_ATQ;
-        const int tous = a[21] & 1, sig = a[23] & 1, fx = a[20];
+        const int tous = a[21] & 1, sig = a[23] & 1, fx = a[20], drain = (a[23] >> 1) & 1, envoute = (a[23] >> 2) & 1;
         const uint32_t col = (uint32_t)a[26] << 16 | (uint32_t)a[27] << 8 | a[28];
-        banner((const char *)a, NULL, RED, 0);
+        const char *nom_a = envoute && charme18() ? "CHARME" : (const char *)a;
+        banner(nom_a, NULL, RED, 0);
         BT.phase = BP_ANIM;
         memset(&BT.an, 0, sizeof BT.an);
         BT.an.who = BT.actor; BT.an.all = tous; BT.an.t0 = E.clock;
         BT.an.fx = fx; BT.an.col = col ? col : fx_couleur(fx) ? fx_couleur(fx) : 0xFF3B4Eu; BT.an.k = sig ? 1.4f : 1;
-        BT.an.act.name = (const char *)a; BT.an.act.mult = (a[24] | a[25] << 8) / 1000.0f; BT.an.act.fx = fx;
+        BT.an.act.name = nom_a; BT.an.act.mult = (a[24] | a[25] << 8) / 1000.0f; BT.an.act.fx = fx;
         BT.an.seed = (int)(brand() * 65536); BT.an.cue = 0; BT.an.cast = fx == FX_ARCANE || fx >= FX_MAGIE;
         if (sig) son_jouer(SON_TECHNIQUE, 0.7f, 0.7f);
+        BT.an.drain = drain; BT.an.envoute = envoute;
         if (tous) { memcpy(BT.an.targets, list, sizeof list); BT.an.ntarget = alive_n; }
+        else if (envoute) {   /* l'emprise vise une compagne debout, à défaut l'héroïne */
+            int lc[4], nc = 0;
+            for (int i = 0; i < alive_n; i++) if (list[i] != 0) lc[nc++] = list[i];
+            BT.an.targets[0] = nc ? lc[(int)(brand() * nc) % nc] : list[0]; BT.an.ntarget = 1;
+        }
         else { BT.an.targets[0] = list[(int)(brand() * alive_n) % alive_n]; BT.an.ntarget = 1; }
         return;
     }
@@ -1289,7 +1328,7 @@ static void enemy_act(void) {
 
 static void apply_enemy_hit(void) {
     char t[24];
-    int ko = 0;
+    int ko = 0, pris = 0;
     for (int k = 0; k < BT.an.ntarget; k++) {
         const int u = BT.an.targets[k];
         member_t *m = &PARTY[u];
@@ -1307,6 +1346,7 @@ static void apply_enemy_hit(void) {
         if (BT.transfo[u]) d = (int)lroundf(d * 0.7f);   /* transformée : dégâts reçus × 0,7 */
         const int avant = m->hp;
         m->hp = m->hp - d > 0 ? m->hp - d : 0; BT.hurt_t[u] = E.clock;
+        pris += avant - m->hp;
         /* Héroïne qui passe sous la moitié, puis sous le quart de ses PV : cut-in de dégâts (s'il y en a : édition 18+),
            une fois par combat et par degré, tiré et lu tout de suite, montré à la fin de l'attaque */
         const int deg = m->hp * 4 <= m->max ? 2 : m->hp * 2 <= m->max ? 1 : 0;
@@ -1320,11 +1360,35 @@ static void apply_enemy_hit(void) {
         }
         snprintf(t, sizeof t, "%s%d", rs ? "RÉSISTE " : "", d); popup(u, t, rs ? 0x8FA0B8u : 0xFF6A6Au);
         if (!m->hp) { popup(u, "KO", RED); son_jouer(SON_KO, 0.8f, 1); ko = 1; }
+        else if (BT.an.envoute) { BT.emprise[u] = 1; BT.pop[popup(u, charme18() ? "CHARME" : "EMPRISE", EMPRISE_RGB)].t0 -= 0.4f; }   /* au-dessus de ses dégâts */   /* à son prochain tour, il frappe un allié */
+    }
+    if (BT.an.drain && pris > 0) {   /* drain : l'ennemi reprend DRAIN_PART des dégâts faits */
+        bt_en_t *e = &BT.en[(BT.an.who - BT_ENEMY) % BT_EMAX];
+        const int h = (int)lroundf(pris * DRAIN_PART), g = h < e->max - e->hp ? h : e->max - e->hp;
+        if (g > 0 && e->hp > 0) { e->hp += g; snprintf(t, sizeof t, "+%d", g); popup(BT.an.who, t, GREEN); }
     }
     if (!BT.an.act.sort) son_jouer(SON_COUP, 0.7f, 1.15f);
     effet_manette(ko ? ENG_EFFET_KO : ENG_EFFET_COUP);   /* coup reçu, membre K.O. */
     if (BT.shake <= 0) BT.shake_amp = 1;   /* secousse d'un sort en cours : gardée */
     BT.shake = fmaxf(BT.shake, 0.3f);
+}
+
+/* Coup d'un membre sous l'emprise (emprise_tour) : son ATQ sur l'allié visé, comme un coup d'ennemi (défense, garde) */
+static void apply_emprise_hit(void) {
+    char t[24];
+    for (int k = 0; k < BT.an.ntarget; k++) {
+        const int u = BT.an.targets[k];
+        member_t *m = &PARTY[u];
+        if (m->hp <= 0) continue;
+        int d = (int)lroundf(PARTY[BT.an.who].atk * rnd(0.9f, 1.1f) * 200.0f / (200.0f + m->def));
+        if (BT.defending[u]) d = (int)lroundf(d / 2.0f);
+        m->hp = m->hp - d > 0 ? m->hp - d : 0; BT.hurt_t[u] = E.clock;
+        snprintf(t, sizeof t, "%d", d); popup(u, t, 0xFF6A6Au);
+        if (!m->hp) { popup(u, "KO", RED); son_jouer(SON_KO, 0.8f, 1); }
+        son_jouer(SON_COUP, 0.7f, 1);
+        if (BT.shake <= 0) BT.shake_amp = 1;
+        BT.shake = fmaxf(BT.shake, 0.2f);
+    }
 }
 
 void battle_update(float dt) {
@@ -1334,6 +1398,15 @@ void battle_update(float dt) {
         bt_en_t *e = &BT.en[k];
         if (e->hp <= 0 && e->mort_t > 0) e->flash = now - e->mort_t < ENNEMI_CHUTE && ((int)floorf((now - e->mort_t) / 0.09f) % 2) ? 0.1f : 0;
         else if (e->flash > 0) e->flash -= dt;
+    }
+    /* Île : un combat contre un rôdeur de la nuit qui dure jusqu'à l'aube s'arrête, la créature s'enfuit (entre deux actions) */
+    if (BT.nuit && !BT.aube && !ile_rodeurs_nuit() && (BT.phase == BP_CMD || BT.phase == BP_ENEMY || BT.phase == BP_TECH || BT.phase == BP_ITEM
+                                                      || BT.phase == BP_MAGIE || BT.phase == BP_TARGET || BT.phase == BP_ALLIE)) {
+        char s[64];
+        snprintf(s, sizeof s, "%s s'enfuit", BT.nen ? E.w.persos[BT.en[0].perso].nom : "");
+        banner("L'AUBE SE LÈVE", s, 0xFFD27Au, 1); son_jouer(SON_VALIDER, 0.6f, 0.8f);
+        BT.aube = 1; BT.phase = BP_FUI; BT.t0 = now;
+        return;
     }
     if (BT.phase == BP_INTRO && now - BT.t0 > INTRO_S) advance();
     for (int i = 0; i < NMEMB; i++) {   /* le membre qui choisit avance d'un pas, en marchant ; il y reste pendant son action ; les autres reviennent à leur place */
@@ -1368,7 +1441,7 @@ void battle_update(float dt) {
         while (fx_son(BT.an.fx, BT.an.cue, &so) && t >= so.t) { BT.an.cue++; son_jouer(so.son, so.vol, so.h); }
         fx_sec_t se;
         while (fx_sec(BT.an.fx, BT.an.scue, &se) && t >= se.t) { BT.an.scue++; BT.shake = fmaxf(BT.shake, se.dur); BT.shake_amp = se.amp; }
-        if (!BT.an.hit && t > fx_hit(BT.an.fx)) { BT.an.hit = 1; if (who >= BT_ENEMY) apply_enemy_hit(); else apply_hit(); }
+        if (!BT.an.hit && t > fx_hit(BT.an.fx)) { BT.an.hit = 1; if (who >= BT_ENEMY) apply_enemy_hit(); else if (BT.an.emprise) apply_emprise_hit(); else apply_hit(); }
         if (t > (BT.an.melee ? fmaxf(fx_fin(BT.an.fx), ELAN_FRAPPE + BT.an.retour) : fx_fin(BT.an.fx))) {
             if (who < BT_ENEMY) { BT.off[who] = 0; BT.frame[who] = 0; }
             /* Ennemis abattus par l'action : leur chute commence (le dernier : celle de la fin du combat, BP_DYING) */
@@ -1380,8 +1453,8 @@ void battle_update(float dt) {
             } else end_turn(1);
         }
     }
-    if (BT.phase == BP_FUI && now - BT.t0 > 0.8f) { battle_end(2); return; }
-    if (BT.phase == BP_LOSE && (BT.police || BT.arene) && now - BT.t0 > POL_DEFAITE_S) { battle_end(0); return; }   /* l'arrestation (police.c), la sortie de l'arène */
+    if (BT.phase == BP_FUI && now - BT.t0 > (BT.aube ? AUBE_S : 0.8f)) { battle_end(2); return; }
+    if (BT.phase == BP_LOSE && (BT.police || BT.arene || BT.nuit) && now - BT.t0 > POL_DEFAITE_S) { battle_end(0); return; }   /* l'arrestation (police.c), la sortie de l'arène, le réveil à l'abri après un rôdeur de la nuit (ile.c) */
     if (BT.phase == BP_DYING) {
         BT.shake = 0.1f; BT.shake_amp = 1;   /* le dernier tombe : il clignote (plus haut) */
         if (now - BT.t0 > ENNEMI_CHUTE) {
@@ -1654,6 +1727,46 @@ static int patr_chemin(float x0, float z0, float x1, float z1) {
 static int patr_pas(float x0, float z0, float x1, float z1) {
     return sol_marchable(x1, z1) && !zone_sure(x1, z1) && fabsf(ground_y(x1, z1) - ground_y(x0, z0)) <= PATR_PENTE * 2 * hypotf(x1 - x0, z1 - z0) + 0.02f;
 }
+/* Rôdeur de la nuit (île, 13/11/2026 ; ile.c) : les villages ne sont pas sûrs la nuit, seuls les abris (ile_abri_zone) l'arrêtent */
+static int patr_pas_rodeur(float x0, float z0, float x1, float z1) {
+    return sol_marchable(x1, z1) && ile_abri_zone(x1, z1) < 0 && fabsf(ground_y(x1, z1) - ground_y(x0, z0)) <= PATR_PENTE * 2 * hypotf(x1 - x0, z1 - z0) + 0.02f;
+}
+/* Le rôdeur de la nuit k (ile_rodeur) paraît en haut de l'écran, où on le voit venir, comme une patrouille d'un seul (à PATR_LOIN, 7 ou 5 cases ; plus large si rien n'y va), hors de la zone
+   d'un abri ; il rôde, chasse, engage le combat au contact (patrouille_maj) ; -1 : pas de place */
+int patrouille_rodeur(int k, int lvl) {
+    const int ek = ile_rodeur_ek(k);
+    if (ek < 0) return -1;
+    int s = 0;
+    while (s < PATR_MAX && PATR[s].on) s++;
+    if (s == PATR_MAX) return -1;
+    /* vers le haut de l'écran, où on le voit venir (une patrouille naît sur le chemin de Sera, souvent hors de la vue) ; rien là (l'eau, un
+       mur) : un angle de plus en plus large, jusqu'au tour complet */
+    static const float ECART[3] = { PATR_ANGLE, 1.6f, 2 * PI_F };
+    for (int essai = 0; essai < 18; essai++) {
+        const int e6 = essai % 6;   /* dans chaque angle : PATR_LOIN d'abord, puis 7, puis 5 cases */
+        const float loin = e6 < 3 ? PATR_LOIN : e6 < 5 ? 7.0f : 5.0f;
+        const float a = E.yaw + (brand() - 0.5f) * ECART[essai / 6], x = E.sera.x + sinf(a) * loin, z = E.sera.z + cosf(a) * loin;
+        if (!sol_marchable(x, z) || ile_abri_zone(x, z) >= 0 || !patr_chemin(E.sera.x, E.sera.z, x, z)) continue;
+        patr_t *p = &PATR[s];
+        memset(p, 0, sizeof *p);
+        p->n = 1; p->ek[0] = ek; p->var[0] = 0; p->lvl = lvl; p->rodeur = k + 1;
+        p->x[0] = x; p->z[0] = z; p->dir[0] = a + PI_F;
+        {   /* une paire de succubes (ile.c) : la partenaire derrière elle */
+            const int ek2 = ile_rodeur_ek2(k);
+            if (ek2 >= 0) { p->n = 2; p->ek[1] = ek2; p->var[1] = 0; p->x[1] = x - sinf(a) * PATR_FILE; p->z[1] = z - cosf(a) * PATR_FILE; p->dir[1] = a + PI_F; }
+        }
+        p->hx = p->tx = x; p->hz = p->tz = z; p->wait = 1; p->on = 1;
+        return s;
+    }
+    return -1;
+}
+/* Le combat de la patrouille s (au contact ; une succube : après le choix, ile.c) */
+void patrouille_combat(int s) {
+    if (s < 0 || s >= PATR_MAX || !PATR[s].on) return;
+    patr_t *p = &PATR[s];
+    battle_start_groupe(p->ek, p->n, p->lvl, 0, GROUPE_PARTS, p->var);
+    if (BT.on) { BT.patr = s; if (p->rodeur) ile_rodeur_engage(); }
+}
 int patrouille_poser(int force) {
     const world_t *w = &E.w;
     int s = 0;
@@ -1704,12 +1817,16 @@ void patrouille_maj(float dt) {
         if (!p->on) continue;
         const float dx = E.sera.x - p->x[0], dz = E.sera.z - p->z[0], d = hypotf(dx, dz);
         if (d > PATR_OUBLI) { p->on = 0; continue; }
+        /* un rôdeur de la nuit (île) : seuls les abris l'arrêtent ; Sera à l'abri plus de ROD_ABRI_S s, il s'en va (ile.c le fera revenir) */
+        const int sure_p = p->rodeur ? ile_abri_zone(E.sera.x, E.sera.z) >= 0 : sure;
+        if (p->rodeur) { p->abri = sure_p ? p->abri + dt : 0; if (p->abri > ROD_ABRI_S) { p->on = 0; continue; } }
         if (p->etat == 2 && (p->repos -= dt) <= 0) { p->etat = 0; p->hx = p->x[0]; p->hz = p->z[0]; }
-        if (p->etat == 0 && a_pied && !sure && d < PATR_VUE) p->etat = 1;   /* elle voit Sera : la chasse */
-        if (p->etat == 1 && (!a_pied || sure || d > PATR_PERDU)) { p->etat = 0; p->hx = p->x[0]; p->hz = p->z[0]; p->wait = 1; }
+        if (p->etat == 0 && a_pied && !sure_p && d < PATR_VUE) p->etat = 1;   /* elle voit Sera : la chasse */
+        if (p->etat == 1 && (!a_pied || sure_p || d > PATR_PERDU)) { p->etat = 0; p->hx = p->x[0]; p->hz = p->z[0]; p->wait = 1; }
         if (p->etat == 1 && d < PATR_CONTACT) {   /* au contact : le combat */
-            battle_start_groupe(p->ek, p->n, p->lvl, 0, GROUPE_PARTS, p->var);
-            if (BT.on) { BT.patr = s; return; }
+            if (p->rodeur && ile_succube_proposer(p->rodeur - 1, s)) { p->etat = 2; p->repos = 1e9f; return; }   /* une succube (île, 18+) : se battre ou s'offrir à elle (ile.c) */
+            patrouille_combat(s);
+            if (BT.on) return;
         }
         /* Le chef : vers Sera (chasse), sinon vers un point autour de sa place, avec des pauses */
         float tx = p->tx, tz = p->tz, v = PATR_MARCHE;
@@ -1724,8 +1841,9 @@ void patrouille_maj(float dt) {
             } else {
                 const float nx = p->x[0] + ex / el * pas, nz = p->z[0] + ez / el * pas;
                 int bouge = 0;
-                if (patr_pas(p->x[0], p->z[0], nx, p->z[0])) { p->x[0] = nx; bouge = 1; }
-                if (patr_pas(p->x[0], p->z[0], p->x[0], nz)) { p->z[0] = nz; bouge = 1; }
+                int (*pas_ok)(float, float, float, float) = p->rodeur ? patr_pas_rodeur : patr_pas;
+                if (pas_ok(p->x[0], p->z[0], nx, p->z[0])) { p->x[0] = nx; bouge = 1; }
+                if (pas_ok(p->x[0], p->z[0], p->x[0], nz)) { p->z[0] = nz; bouge = 1; }
                 if (bouge) { p->dir[0] = atan2f(ex, ez); p->marche = 1; }
                 else if (p->etat == 0) { p->tx = p->hx; p->tz = p->hz; p->wait = 0.5f + brand(); }   /* bloquée : retour à sa place */
             }

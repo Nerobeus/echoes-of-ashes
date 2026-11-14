@@ -68,7 +68,11 @@ typedef struct {
 /* Animations d'un personnage (planches de même cellule) ; anim[a] : index de la planche de l'animation a (-1 : absente).
    ANIM_NAGE (04/11/2026) : la nage d'une tenue de bain qui a aussi sa marche et sa course de terre (bikini porté comme
    armure : la marche était la nage) ; sans elle, dans l'eau, la marche comme avant */
-enum { ANIM_WALK, ANIM_IDLE, ANIM_RUN, ANIM_ATTACK, ANIM_HURT, ANIM_KO, ANIM_CAST, ANIM_DEFEND, ANIM_VICTORY, ANIM_DANSE, ANIM_DEPART, ANIM_NAGE, ANIM_TIR, ANIM_N };   /* ANIM_TIR (07/11/2026) : tir au fusil en combat, direction du combat */
+enum { ANIM_WALK, ANIM_IDLE, ANIM_RUN, ANIM_ATTACK, ANIM_HURT, ANIM_KO, ANIM_CAST, ANIM_DEFEND, ANIM_VICTORY, ANIM_DANSE, ANIM_DEPART, ANIM_NAGE, ANIM_TIR, ANIM_N };
+/* Île, édition 18+ (13/11/2026) : les animations d'offrande d'une succube (offrande<R><K> du studio des sprites), numéros ANIM_OFFR0 à
+   ANIM_OFFR0 + ANIM_OFFR_N - 1 dans SPRS, hors de anim[] des planches (une table à part d'ile.c, ile_offr_noter : Echoes n'en paie rien) */
+#define ANIM_OFFR0 32
+#define ANIM_OFFR_N 15   /* ANIM_TIR (07/11/2026) : tir au fusil en combat, direction du combat */
 /* foot : vide sous chaque direction (pixels sous la rangée la plus basse avec un pixel opaque, toutes images) */
 /* pv : ancrage par direction (PIVO, demi-pixels de cellule) si has_pv : le point posé sur la position au sol */
 /* tissu : masque du tissu d'une tenue (TIS2 : table de TISSU_TABLE octets, 8 par case, puis les bits ; NULL : aucun) :
@@ -288,7 +292,7 @@ typedef struct { int perso; uint16_t piste; } mus_enn_t;        /* piste de comb
    vol permanent (système solaire : Sera toujours à bord du vaisseau de l'équipe, à l'altitude vol_alt, cases) ; visite :
    drapeau du scénario + 1 levé à l'arrivée (0 : aucun) */
 #define MAX_CARTES 16
-typedef struct { char nom[24]; int n, ciel, vol, course; float wl, vol_alt;   /* course : carte de course de la carrière (CART, drapeau 2) */ uint16_t visite; uint8_t fog[3]; float sx, sz, ax, az; uint32_t chnk_off, chnk_len, zone_off, zone_len, map_off, map_len; const uint8_t *cmem; } carte_t;   /* cmem : tailles de ses chunks (CMEM) */
+typedef struct { char nom[24]; int n, ciel, vol, course, vision; float wl, vol_alt;   /* course : carte de course de la carrière (CART, drapeau 2) ; vision : la ville d'avant la Cendre (drapeau 4 : ni rencontre, ni brouillard ; sauvegarde au point d'avant le voyage) */ uint16_t visite; uint8_t fog[3]; float sx, sz, ax, az; uint32_t chnk_off, chnk_len, zone_off, zone_len, map_off, map_len; const uint8_t *cmem; } carte_t;   /* cmem : tailles de ses chunks (CMEM) */
 /* Astre (ASTR) de la carte carte (système solaire) : centre, rayon de sa sphère (0 : repère seul), point d'orbite (arrivée
    de son monde, saut), carte où l'on se pose (vers, -1 : aucune), drapeau de visite (65535 : toujours ; le saut n'y mène
    qu'une fois levé) */
@@ -306,7 +310,68 @@ typedef struct { uint16_t perso; uint8_t genre; char id[16]; } ile_her_t;
 #define ILE_GUE 0.55f
 #define ILE_GUE_ALLURE 0.75f
 #define ILE_NAGE_SINK 0.55f   /* (0,38 un moment le 11/11/2026 : trop peu immergée à côté du sous-marin) */
-typedef struct { uint16_t perso, drapeau; uint8_t arme, role, jet; char id[16], nom[28]; } ile_lame_t;
+typedef struct { uint16_t perso, drapeau, vision; uint8_t arme, role, jet, region; char id[16], nom[28]; float x, z; } ile_lame_t;   /* region : 0 plages … 6 sommet (255 : inconnue ; enlèvements) */
+/* Villages de l'île (13/11/2026, chantier des nuits, étape 5 ; section ILE après les régions des lames ; HistoireIle.villages du générateur) :
+   centre, rayon (cases), drapeau des lanternes de nacre (65535 : aucun), nom ; ile.c (lanternes, enlèvements) */
+#define ILE_VILLAGES_MAX 16
+typedef struct { float x, z, r; uint16_t lanterne; char nom[32]; } ile_village_t;   /* vision : drapeau levé quand son reflet est vaincu (section ILE après les rôdeurs, 13/11/2026 ; 65535 : aucun) */   /* x, z : sa place (section ILE après la hantise, 13/11/2026 ; x < 0 : inconnue) */
+/* Abris de l'île (12/11/2026, chantier des nuits, étape 2 ; section ILE après le drapeau « nuits » ; js/histoire-ile.js du générateur,
+   HistoireIle.abris) : couche (x, z : où l'on dort, la bulle DORMIR au-dessus), zone sûre (centre cx, cz, rayon r), sorte (0 fare,
+   1 buvette, 2 camp de la Garde, 3 campement, 4 temple), bâtiments visités qui en sont (rangs dans PORT), nom */
+#define ILE_ABRIS_MAX 16
+#define ILE_ABRI_BATS 6
+typedef struct { float x, z, cx, cz, r; uint8_t sorte, nbats; uint16_t bats[ILE_ABRI_BATS]; char nom[32]; } ile_abri_t;
+/* Rôdeurs de la nuit (13/11/2026, chantier des nuits, étape 3 ; section ILE après les abris ; js/histoire-ile.js du générateur,
+   HistoireIle.reflets et rodeurs) : les reflets de cendre (variantes aux couleurs inversées des héroïnes des lames endormies) : personnage
+   (un ennemi), lame (rang dans ile_lame, 255 aucune : son drapeau levé le purifie), drapeau qui l'ouvre (65535 : celui des nuits hantées
+   suffit) ; ile.c, section « Rôdeurs » de l'émulateur de l'île */
+#define ILE_RODEURS_MAX 40
+typedef struct { uint16_t perso, drapeau; uint8_t lame, sorte, succube; float x, z; } ile_rodeur_t;   /* sorte : 0 reflet, 1 succube nommée (succube : rang dans ile_succ) ; x, z : la place qui le fait choisir, sans lame (son village de chasse ; x < 0 : inconnue) */
+/* Succubes nommées (13/11/2026, demande de l'utilisateur ; section ILE après les régions des lames ; HistoireIle.SUCCUBES du générateur) :
+   son héroïne (PERS : la familière, ses animations d'offrande), son ennemie (PERS : SUCCUBE NOM), son drapeau d'apparition, ses cinq
+   drapeaux de charme (un par rencontre), ses animations « à deux » (bit 3 × (R - 1) + K - 1 : l'héroïne est dans l'image) ; ile.c */
+#define ILE_SUCCUBES_MAX 8
+typedef struct { uint16_t perso, ennemi, drapeau, charme[5], duo, cut[15], perso2, ennemi2; } ile_succ_t;   /* perso2, ennemi2 : sa partenaire (paire fixe, 13/11/2026 ; 65535 : seule) */   /* cut : cut-in de chaque animation d'offrande (index IMAG, 65535 aucun) */
+#define ROD_ATTENTE 18.0f      /* s dehors la nuit, hors d'un abri, avant qu'il paraisse (ROD_REVIENT : quand il revient) */
+#define ROD_REVIENT 25.0f
+#define ROD_ABRI_S 6.0f        /* s que l'héroïne passe à l'abri avant qu'il s'en aille */
+#define ROD_NIV 2              /* niveaux au-dessus de l'équipe */
+#define ROD_MAISON 20.0f       /* s dans une maison qui n'est pas un abri avant qu'il y entre */
+#define ROD_SUIT 0.55f        /* île : la partenaire d'une paire de succubes suit celle qui mène à cette distance (× f de l'intérieur) */
+#define ROD_INT_V 1.5f         /* sa marche dans une maison (× l'échelle de l'intérieur, par seconde) */
+#define ROD_INT_CONTACT 0.5f
+/* Combat de nuit (13/11/2026, chantier des nuits, étape 4 ; battle.c, enemyAct et suivantes de l'émulateur de l'île) : drain (ENAT, drapeau 2 :
+   l'ennemi reprend DRAIN_PART des dégâts faits), emprise (drapeau 4 : une compagne touchée, à défaut l'héroïne, frappe un allié à son tour),
+   fuite à l'aube (le combat s'arrête, la bannière AUBE_S s), défaite : le réveil à l'abri le plus proche au matin (ile.c) */
+/* Visions des lames (13/11/2026, chantier des nuits, étape 5 ; ile.c, carte.c ; ileVisions de l'émulateur de l'île) : son reflet vaincu, la zone où
+   dort la lame paraît sur la carte du menu, floue comme un rêve : VISION_R cases autour d'un point décalé de VISION_DEC × VISION_R de la lame,
+   dans la direction de l'angle d'or × son rang ; même dans le brouillard ; la lame éveillée, elle s'efface */
+#define VISION_R 9.0f
+#define VISION_DEC 0.45f
+#define VISION_RGB 0xB9A8FF
+int ile_visions(float *x, float *z, int max);   /* zones des visions à montrer (ile.c) ; leur nombre */
+#define LANTERNE_RGB 0xF4E6C8   /* anneau des villages aux lanternes allumées (carte du menu) */
+int ile_lanterne_zone(float x, float z);       /* île : le village aux lanternes allumées qui contient ce point ; -1 aucun */
+int ile_lanternes(float *x, float *z, float *r, int max);   /* villages aux lanternes allumées (carte du menu) */
+int ile_enleve_lignes(int npc, const char **l1, const char **l2, int *rec);   /* l'habitant enlevé retrouvé : ses répliques (hud.c) */
+void ile_enleve_retrouve(void);                 /* ses répliques dites : la récompense, il rentre */
+int ile_enleve(float *x, float *z);             /* un habitant enlevé, où il est (essais) */
+void ile_enleve_ecrire(uint8_t *o);             /* sauvegarde (save_t.libre, 12 octets) */
+void ile_enleve_lire(const uint8_t *o);         /* chargement (après ile_rodeurs_reset) ; des zéros : personne */
+void ile_enleve_reset(void);                    /* partie neuve : personne d'enlevé */
+int ile_enleve_est(const npc_t *n);             /* cet exemplaire est l'habitant enlevé, pas encore retrouvé (il ne se promène pas) */
+#define DRAIN_PART 0.5f
+#define EMPRISE_RGB 0xC86BFFu
+#define AUBE_S 2.2f
+#define ABRI_RGB 0xCFE3FF   /* couleur des abris : bulle DORMIR, repère de la carte (ABRI_COUL de l'émulateur de l'île) */
+
+/* Coulées (section COUL : volumes que l'émulateur construit pour chaque « avalanche … coulee DRAPEAU » du scénario, polygones
+   au format des chunks) : dessinées et infranchissables (ellipse rx × rz tournée de ang) une fois leur drapeau levé ; une
+   partie chargée où l'événement de l'avalanche est fait lève le drapeau (coulee_apres_chargement). Voir « Avalanche » plus bas */
+#define COUL_MAX 8
+#define COUL_OCTETS 24576    /* polygones de toutes les coulées (copiés au chargement : alignés) */
+#define COUL_MARGE 0.35f     /* m : le corps de Sera contre une coulée (comme MARGE_MUR de game.c) */
+typedef struct { uint8_t carte; uint16_t drapeau, ev; int npoly; float x, z, rx, rz, ang, ca, sa; const uint8_t *poly; } coulee_t;
 
 /* Monde (paquet) */
 typedef struct {
@@ -361,6 +426,7 @@ typedef struct {
     perso_t persos[MAX_PERSOS]; int npersos;
     cible_t cibles[CIBLE_MAX]; int ncibles;   /* cibles de chasse (CIBL) */
     const uint8_t *lum; int nlum;             /* lueur des feux (LUMI) : nlum entrées de 12 octets, toutes cartes (render.c : lum_band) */
+    coulee_t coul[COUL_MAX]; int ncoul;       /* coulées (COUL : avalanches du scénario) */
     const route_t *routes; int nroutes;   /* axes des routes (ROUT) */
     const guide_t *guides; int nguides;   /* lieux du menu GUIDAGE (GUID) */
     const uint8_t *sures; int nsures;     /* zones sûres (SURS, 16 octets chacune : carte u8, 0 × 3, x, z, r f32) */
@@ -406,6 +472,16 @@ typedef struct {
     ile_lame_t ile_lame[ILE_LAMES_MAX];
     uint8_t ile_nsocles; uint16_t ile_socle_perso[ILE_SOCLES_MAX]; float ile_socle[ILE_SOCLES_MAX];   /* statue : hauteur de sa base (unités) */
     uint16_t ile_epuise;   /* drapeau « epuise » (section ILE, 11/11/2026 ; 65535 : aucun) : pas de course tant qu'il est levé (ile_epuisee) */
+    uint16_t ile_nuits;    /* drapeau « nuits » (section ILE, 12/11/2026, après « epuise » ; 65535 : aucun) : le soir s'annonce, les passants rentrent (ile_soir_maj) */
+    uint8_t ile_nabris; ile_abri_t ile_abri[ILE_ABRIS_MAX];   /* abris de l'île (section ILE après « nuits », 12/11/2026 ; ile.c) */
+    uint16_t ile_hantise;  /* drapeau « hantise » (section ILE après les abris, 13/11/2026 ; 65535 : aucun, jamais de rôdeur) : les nuits hantées */
+    uint8_t ile_nrodeurs; ile_rodeur_t ile_rodeur[ILE_RODEURS_MAX];   /* rôdeurs de la nuit (ile.c) */
+    uint8_t ile_nvillages; ile_village_t ile_village[ILE_VILLAGES_MAX];   /* villages : lanternes, enlèvements (ile.c) */
+    uint8_t ile_nsucc; ile_succ_t ile_succ[ILE_SUCCUBES_MAX];   /* succubes nommées : s'offrir à elle, familière (ile.c) */
+    /* scènes d'offrande (13/11/2026, page Scènes de l'Atelier du combat) : ile_nosc entrées de 10 octets lues dans la section ILE (ile.c,
+       offr_scene) ; ile_jou_repli : la personne jouée quand aucune héroïne n'est choisie (PERS ; 65535 : inconnue) */
+    uint16_t ile_nosc, ile_jou_repli; const uint8_t *ile_osc;
+    uint16_t ile_nocj; const uint8_t *ile_ocj;   /* cut-ins propres à un personnage joué : 6 octets chacun (ile.c, offr_cut) */
     int rain_freq, rain_int;    /* météo (METE) : part du temps sous la pluie et intensité, en % */
     float jour_s, jour_debut;    /* cycle jour / nuit (CYCL) : durée d'une journée (s), heure de départ (0..1) */
     /* Rencontres : distance moyenne entre deux (RENC, unités du monde × ech, 0 : aucune), ennemis (ENNE), terrain par
@@ -539,6 +615,7 @@ typedef struct {
     float sy; int sy_ok;         /* hauteur de Sera, lissée (ground_y à sa place ; sy_ok : 0 = à reprendre du sol) */
     uint32_t *poly_off; uint8_t *poly_base;
     int_obj_t *obj; int_node_t *node; int_sortie_t *sort; uint8_t *grid, *fade;
+    uint8_t *libre; uint32_t nlibre;   /* place libre de la fenêtre après l'intérieur lu (13/11/2026 : le chemin d'un rôdeur, ile.c ; rien de réservé en plus) */
     float rx, rz, ryaw;
 } interieur_t;
 static inline const pak_poly_t *int_poly(const interieur_t *I, int i) { return (const pak_poly_t *)(I->poly_base + I->poly_off[i]); }
@@ -615,6 +692,7 @@ typedef struct {
        se chargent à la mise à jour suivante, quand plus aucune bande ne lit les textures réduites de l'ancienne fenêtre */
     int stream_hold;
     int pass_arme, nnpc_c0;      /* passage repris une fois Sera sortie de toute zone ; exemplaires de la carte 0 */
+    int vis_carte; float vis_x, vis_z;   /* vision (carte_t.vision) : le point d'avant le voyage, que la sauvegarde garde (world_carte, sv_remplir) */
     npc_t *npc_tous;             /* tous les exemplaires (PNJS) : la planète, sa réserve, puis un bloc par autre carte… */
     int npc_off[16], npc_cnt[16], npc_cap0;   /* … début et nombre du bloc de chaque carte ; capacité de la planète */
     float sera_y; int sera_y_ok;   /* hauteur de Sera suivie d'une image à l'autre (sous un pont, la route du dessous) */
@@ -776,6 +854,16 @@ static inline float hv(int i, int j) {
     const chunk_t *c = chunk_at(cx, cz);
     return c ? c->hv[(j - cz * CS) * CV + i - cx * CS] : 0;
 }
+/* Dénivelé de la case (i, j) : écart entre ses sommets le plus haut et le plus bas (CarteHistoire.rugosite le compare à
+   RUGO_RAIDE, 1,35, pour le drapeau F_RAIDE) */
+static inline float case_denivele(int i, int j) {
+    const float a = hv(i, j), b = hv(i + 1, j), c = hv(i, j + 1), d = hv(i + 1, j + 1);
+    return fmaxf(fmaxf(a, b), fmaxf(c, d)) - fminf(fminf(a, b), fminf(c, d));
+}
+/* Pente franchissable à pied (13/11/2026, demande de l'utilisateur : « trop souvent bloqué par le terrain trop abrupt alors
+   que je pourrais bien l'escalader ») : une case F_RAIDE ne bloque Sera à pied qu'au-delà de PIED_RAIDE de dénivelé (les
+   véhicules et les passants s'arrêtent toujours à F_RAIDE) ; groundWalkable des émulateurs, à garder identiques */
+#define PIED_RAIDE 3.0f
 
 /* Paquet */
 const uint8_t *pak_section(const char *tag, uint32_t *size);
@@ -790,7 +878,7 @@ int img_paire(int k, int dessin);   /* images k et k + 1 (paire face / dos) ense
 int scene_image(int k);
 /* Tampon commun (celui des images, réservé par eng_init) prêté à qui le demande, NULL s'il est trop petit ; celui qui
    l'avait est prévenu (pilote arrêté, aperçus refaits) ; rendu par img_rendre, repris par toute image demandée */
-enum { TC_PILOTE = 1, TC_APERCUS, TC_PLATEFORME, TC_CARTE, TC_FANTOME };   /* TC_FANTOME : fantôme du contre-la-montre (course.c) */
+enum { TC_PILOTE = 1, TC_APERCUS, TC_PLATEFORME, TC_CARTE, TC_FANTOME, TC_SCENE };   /* TC_SCENE : une direction d'une planche plus grande que le cache des planches (île : scènes d'offrande, sheet_block) */   /* TC_FANTOME : fantôme du contre-la-montre (course.c) */
 /* TC_CARTE (carte.c) : la fin du tampon, img_carte_place() octets, après la place des champs du pilote (les deux tiennent
    ensemble) ; une image, les aperçus ou la plateforme la reprennent (carte_perdue) */
 uint32_t img_carte_place(void);
@@ -1125,13 +1213,19 @@ typedef struct {
        animation de technique */
     /* an : action en cours ; melee : élan et frappe au contact, cast : technique (sort, piratage, objet), tir : à distance
        (ni élan ni frappe, recul au coup ; battle.c, lancer) */
-    struct { int who, hit, melee, cast, tir, all, ntarget, targets[4]; bt_act_t act; float t0; int fx, seed, cue, scue; uint32_t col; float k; float elan, retour, off0; } an;
+    /* drain : l'ennemi reprend DRAIN_PART des dégâts ; envoute : le membre touché passe sous l'emprise ; emprise : un membre sous l'emprise
+       frappe un allié (île, rôdeurs de la nuit : ENAT, drapeaux bits 1 et 2) */
+    struct { int who, hit, melee, cast, tir, all, ntarget, targets[4]; bt_act_t act; float t0; int fx, seed, cue, scue; uint32_t col; float k; float elan, retour, off0; int drain, envoute, emprise; } an;
     struct { char text[40], sub[112]; uint32_t color; float t0; int hold, on; } ban;         /* bannière */
     int boss;                    /* combat du scénario : récompense × BOSS_RW, pas de fuite */
     int police;                  /* combat contre les forces de l'ordre (police.c : police_combat) : pas de fuite ; perdu : ni
                                     écran de défaite ni RÉESSAYER, l'arrestation (police_apres_combat) */
     int arene;                   /* combat de l'arène (arene.c) : rang + 1, 0 aucun ; gains × ARN_RW, pas de fuite ; perdu : ni
                                     écran de défaite ni RÉESSAYER (arene_apres_combat) */
+    int nuit;                    /* île : combat contre un rôdeur de la nuit (ile.c) : perdu, ni écran de défaite ni RÉESSAYER, le réveil à
+                                    l'abri le plus proche au matin (ile_rodeur_fin) ; l'aube venue, il s'enfuit (aube) */
+    int aube;                    /* l'aube a fini ce combat (BP_FUI : la bannière AUBE_S s) */
+    uint8_t emprise[NMEMB];      /* sous l'emprise d'un rôdeur (ENVOÛTEMENT) : à son prochain tour, il frappe un allié, puis s'en libère */
     int fuites;                  /* essais de fuite ratés dans ce combat (chacun rend la suivante plus sûre) */
     int rw_xp, rw_cr, rw_loot;   /* récompense de la victoire (gagnée en revenant au monde) ; rw_loot : objet, -1 aucun */
     int rw_nloot;                /* nombre de rw_loot (un cœur par machine du groupe, selon sa part) */
@@ -1259,9 +1353,12 @@ typedef struct {
     float x[BT_EMAX], z[BT_EMAX], dir[BT_EMAX];   /* le chef (0) puis les suiveurs, en file derrière lui */
     float hx, hz, tx, tz, wait, anim, repos;
     int marche, frame;
+    int rodeur; float abri;      /* île : rôdeur de la nuit (rang + 1 dans ile_rodeur ; 0 : une patrouille) ; secondes que Sera passe à l'abri */
 } patr_t;
 extern patr_t PATR[PATR_MAX];
 void patrouille_maj(float dt);
+int ile_rodeur_ek2(int k);   /* île : l'ennemie de la partenaire du rôdeur k (paire de succubes) ; -1 aucune */
+int patrouille_rodeur(int k, int lvl);   /* île : le rôdeur de la nuit k paraît devant Sera, hors des abris ; -1 aucune place */
 int patrouille_poser(int force);   /* (force : sans effet, gardé pour les essais) */       /* une patrouille autour de Sera (force : hors des zones dangereuses aussi) ; -1 : aucune */
 #define PATR_REESSAI 2.0f   /* cases : rencontre sans place devant Sera, retentée après ce chemin (encounter_step, patrouille_poser) */
 
@@ -1610,6 +1707,28 @@ float cam_pas(float yaw);                /* lacet au multiple de 45° le plus pr
 #define CAM_PAS_VIF 8.0f                 /* pas magnétiques : vitesse du glissement de la caméra lâchée, par seconde */
 int hud_camera_tourne(void);             /* hud.c : le doigt fait tourner la caméra (bord de l'écran) */
 void mise_fin(int tout);                 /* fin de l'événement (tout : aussi les acteurs gardés, partie chargée) */
+/* Avalanche (14/11/2026, demande de l'utilisateur : la scène du col « doit montrer une avalanche, mais pas d'avalanche ni
+   même de neige ») : instruction « avalanche A vers B [largeur L] [duree D] [coulee DRAPEAU] » du scénario (OP_AVALANCHE) :
+   le front de neige descend de A vers B en D s (de plus en plus vite), large de L cases, en bouffées de poudre qui roulent
+   et montent, blocs et cailloux devant ; grondement et secousse qui enflent ; à l'arrivée, voile blanc (AVAL_VOILE) et
+   le drapeau levé (la coulée de la section COUL apparaît sous le voile) ; la poudre retombe ensuite en AVAL_APRES s
+   (le script n'attend que le front). Dessin : hud.c (draw_avalanche), état : game.c ; avalancheMaj, drawAvalanche de
+   l'émulateur, à garder identiques. engine/README.md, « Avalanche et coulées » */
+#define AVAL_BOUFFEES 64     /* bouffées de poudre (disques), du plus loin au plus proche */
+#define AVAL_BLOCS 14        /* blocs de neige et cailloux au front */
+#define AVAL_QUEUE 0.55f     /* part du trajet que la poudre couvre derrière le front */
+#define AVAL_APRES 3.0f      /* s : la poudre retombe après l'arrivée */
+#define AVAL_VOILE 1.4f      /* s : voile blanc de l'arrivée */
+#define AVAL_R_MAX 34.0f     /* px : rayon d'une bouffée au plus (le remplissage coûte sur la montre) */
+typedef struct { int on, drapeau, leve; float t, d, ax, az, bx, bz, w, son_t; } aval_t;
+extern aval_t AVAL;
+void aval_lancer(float ax, float az, float bx, float bz, float w, float d, int drapeau);
+void aval_maj(float dt);
+float aval_avance(float t);              /* part du trajet parcourue par le front à t (0 à 1) */
+/* Coulées : voir plus haut (coulee_t) */
+int coulee_dans(float x, float z, float marge);   /* (x, z) dans une coulée visible de la carte, à marge près (cases) */
+int coulee_visible(int k);
+void coulee_apres_chargement(void);
 int acteur_de(int perso);                /* place de l'acteur de ce personnage, -1 : aucun */
 int acteur_poser(int perso, float x, float z, float dir);
 int mise_marche(int qui);                /* qui (place, 255 : Sera, -2 : tous) marche encore */
@@ -1951,18 +2070,249 @@ uint32_t hud_theme_c1(void);
 uint32_t hud_theme_c2(void);
 
 /* ---------- Île tropicale du jeu des héroïnes (ile.c ; section ILE du paquet : E.w.ile, son nom) ---------- */
-#define ILE_COMPAGNES 2
+/* ILE_COMPAGNES : les esprits des lames (ILE_ESPRITS au plus : une arme de jet et une arme directe, décision de l'utilisateur du
+   09/11/2026) puis la familière, une succube charmée (13/11/2026, édition 18+) ; ILE_COMPAGNES et ILE_ESPRITS de l'émulateur de l'île */
+#define ILE_COMPAGNES 3
+#define ILE_ESPRITS 2
 #define ILE_VISIBLES 1   /* compagnes visibles hors combat : la première (09/11/2026, décision de l'utilisateur ; ILE_VISIBLES de l'émulateur de l'île) */
-typedef struct { int perso; float x, z, dir, anim, v; uint16_t frame; uint8_t st; } ile_comp_t;   /* st : 0 arrêt, 1 marche, 2 course */
+typedef struct { int perso; float x, z, dir, anim, v; uint16_t frame; uint8_t st, familiere; } ile_comp_t;   /* st : 0 arrêt, 1 marche, 2 course ; familiere : une succube charmée (sa fiche « id~succube ») */
 extern ile_comp_t ILE_COMP[ILE_COMPAGNES];
 extern int ile_ncomp;
 void ile_equipe(int nouvelle);           /* l'héroïne jouée et ses deux compagnes dans PARTY (nouvelle partie : niveau 1) */
 int ile_niveau(float x, float z);        /* niveau de la région sous (x, z), quand aucune quête n'en donne (script_niveau) */
 void ile_compagnes_maj(float dt);        /* chaque image (game.c) : les compagnes sur la trace des pas de l'héroïne */
 int ile_calme(void);
+float ile_nuit_part(void);                /* île : part des passants à l'abri la nuit (0 le jour, 1 de 20 h à 6 h ; drapeau ile_nuits) */
+void ile_soir_maj(void);                 /* île : le coucher du soleil (18 h) et la nuit (20 h) s'annoncent chaque soir */
+int ile_abri_ici(float x, float z);       /* île : l'abri où est ce point (sa zone ; dedans, un de ses bâtiments) ; -1 aucun */
+int ile_abri_proche(float x, float z);    /* île : l'abri dont la couche est la plus proche ; -1 aucun */
+int ile_abris_vus(void);                  /* île : les abris comptent (drapeau « nuits » levé, sur l'île) : repères de la carte */
+void ile_dormir_maj(float dt);            /* île : couche à portée (bulle DORMIR, de 17 h à 6 h), sommeil en cours */
+int ile_dormir_k(void);                   /* abri dont la couche est à portée ; -1 aucun */
+int ile_dormir_position(float *x, float *y, float *z);   /* point de la bulle DORMIR */
+int ile_dormir_avant(void);               /* la couche passe devant l'interlocuteur (OK) */
+const char *ile_dormir_nom(void);         /* nom de l'abri à portée */
+void ile_dormir_retenir(void);            /* la confirmation s'ouvre : l'abri à portée est retenu */
+void ile_dormir_lancer(void);             /* DORMIR confirmé : fondu au noir, le matin, l'équipe soignée, sauvegarde */
+int ile_dort(void);                       /* sommeil en cours : le joueur ne la dirige pas (mise_bloque) */
+/* Rôdeurs de la nuit (13/11/2026, chantier des nuits, étape 3 ; ile.c, section « Rôdeurs » de l'émulateur de l'île) */
+extern int ile_rodeurs_force;             /* essais (rendu_test rodeurs:1) : les nuits hantées sans le drapeau « hantise » */
+int ile_rodeurs_nuit(void);               /* une nuit hantée sur l'île (drapeau « hantise » levé, de 20 h à 6 h, sur l'île) */
+void ile_rodeurs_maj(float dt);           /* chaque image (game.c) : le reflet de la nuit paraît, chasse, se glisse dans les maisons */
+int ile_rodeur_k(void);                   /* le rôdeur de cette nuit (rang dans ile_rodeur) ; -1 aucun */
+int ile_rodeur_ek(int k);                 /* son ennemi (ENNE) ; -1 aucun */
+int ile_abri_zone(float x, float z);      /* l'abri dont la zone contient ce point, dehors ; -1 aucun (rien n'y entre) */
+void ile_rodeur_engage(void);             /* un rôdeur engage le combat (battle.c) */
+void ile_rodeur_fin(int won, int fui);    /* fin d'un combat (battle_end) : un rôdeur vaincu ne revient plus cette nuit */
+int ile_rodeur_intrus(void);              /* l'exemplaire du rôdeur entré dans la maison où l'on est ; -1 aucun */
+/* Succubes nommées : s'offrir à elle (ile.c, 13/11/2026, édition 18+) */
+void ile_offr_reset(void);                /* chargement du paquet : plus d'animation d'offrande notée */
+void ile_offr_noter(int base, int k, int sheet);   /* SPRS : l'animation d'offrande k (0 à 14) de la planche de base */
+int ile_succube_charmee(int s);           /* ses cinq rencontres faites */
+uint32_t ile_familieres(void);            /* bits des succubes charmées qui suivent l'héroïne (édition 18+ déverrouillée) */
+int ile_offrande_en_cours(void);
+int ile_succube_proposer(int k, int slot); /* contact du rôdeur k (patrouille slot, -1 : dans une maison) : le choix ; 0 : pas de choix */
+void ile_succube_choix(int c);            /* TE BATTRE (0), T'OFFRIR À ELLE (1) */
+void ile_offrande_maj(float dt);          /* chaque image (game.c) : la séquence */
+int ile_offrande_passer(void);            /* OK ou toucher pendant la séquence : l'animation suivante ; 1 : la touche est prise */
+int ile_offrande_acteur(int i, float *x, float *z, float *dir, int *perso, int *sheet, int *frame);   /* la succube à dessiner (render.c) ; i 1 : sa partenaire */
+int ile_offrande_npc(int i);              /* dans une maison : l'exemplaire qui joue la séquence (i 1 : sa partenaire) ; -1 aucun */
+int ile_offrande_cache_sera(void);        /* animation « à deux » : l'héroïne est dans l'image */
+int ile_offrande_cutin(void);             /* le cut-in à montrer en plein écran (index IMAG ; -1 aucun) : hud.c */
+void ile_offrande_reset(void);            /* partie neuve ou chargée */
+void ile_offrande_etat(int *phase, int *slot, float *t);   /* essais (rendu_test offretat) */
+int ile_offrande_essai(int s);            /* essais (rendu_test offrande:s) : la séquence de la succube s, sans le contact */
+void hud_succube_demander(const char *nom, const char *nom2, int r, int n);   /* hud.c : TE BATTRE ou T'OFFRIR À ELLE (rencontre r sur n ; nom2 : sa partenaire, ou NULL) */
+void patrouille_combat(int s);            /* battle.c : le combat de la patrouille s */
+int charme18_ile(void);                   /* battle.c : l'édition 18+ déverrouillée (CHARME, s'offrir à une succube) */
+void ile_rodeurs_reset(void);             /* partie neuve ou chargée : tout s'efface */
 int ile_epuisee(void);                   /* île : drapeau epuise levé (naufrage, avant le premier sommeil) : marche seulement */                     /* île : pas encore de monstres (drapeau ile_monstres baissé) : ni rencontre ni patrouille */
 int ile_compagnes_vues(void);            /* à dessiner (render.c, hors combat) */
 void ile_point(float d, float *q);       /* point de la trace à la distance de chemin d derrière l'héroïne */
 void ile_trace_oublier(void);            /* compagnes reposées dans son dos à la prochaine image */
+
+/* ---------- Course anti-gravité (antigrav.c, 13/11/2026 : variante du moteur, app à part) ----------
+   Paquet propre (tools/antigrav/generer.js : AGJE, AGPS, AGHZ, AGEM, AGNA, AGEC, PAL, TEX, DECO, FONT, ICON, AUDI) : quand il a la
+   section AGPS, eng_init ne charge que lui (ag_charger), eng_update joue le jeu (ag_update : menus, course), eng_build_frame
+   dessine sa scène (ag_image de render.c : horizon, piste en 3D, sol, piliers, engins en maillages low-poly texturés) et
+   l'interface est ag_hud. Conception : docs/course-anti-gravite.md */
+#define AG_SECT_MAX 4096
+#define AG_PLAQUES_MAX 64
+#define AG_NAV_MAX 8              /* engins en course (tableau) */
+#define AG_ADV_MAX 3              /* adversaires au plus : quatre engins en course (13/11/2026, demande de l'utilisateur : « un maxi de
+                                     4 concurrents pour garder du budget pour l'environnement ») */
+#define AG_TRACE_N 10             /* points de la traînée de chaque engin (un tous les AG_TRACE_DT de antigrav.c) */
+/* Armes (antigrav.c) : missiles en vol, mines posées, éclats et boules de feu des explosions */
+#define AG_PROJ_MAX 12
+#define AG_RAYON_CHARGE 1.2f      /* charge pleine du rayon (s) */
+#define AG_MINES_MAX 40
+#define AG_ECLATS_MAX 64
+#define AG_BOULES_MAX 10
+typedef struct { int on, tireur, cible; float prog, d, v, t, x, y, z, hx, hy, hz, ux, uy, uz; } ag_proj_t;   /* missile : progression, écart, vitesse, âge, position, devant, haut */
+typedef struct { int on, tireur; float s, d, t, x, y, z, ux, uy, uz; } ag_mine_t;                         /* mine : abscisse sur la piste, écart, âge, position, haut */
+typedef struct { float x, y, z, vx, vy, vz, t, vie, a, w; uint8_t col; } ag_eclat_t;                     /* éclat : position, vitesse, âge, vie (0 : libre), angle, rotation, couleur */
+typedef struct { float x, y, z, t, vie, taille; } ag_boule_t;                                          /* boule de feu */
+#define AG_OBST_MAX 48
+typedef struct { int sec, cotes; float s, d, r, h, a; } ag_obst_t;   /* obstacle d'un canyon (bloc OBS1) : section, abscisse, écart, rayon, hauteur, angle */
+#define AG_SOMMETS_MAX 1024       /* sommets d'un niveau de détail d'un engin */
+#define AG_FACES_MAX 1024
+#define AG_MODELES_MAX 8
+#define AG_LODS_MAX 3
+#define AG_PISTES_MAX 16
+#define AG_CLASSES 5            /* catégories de vitesse (antigrav.c, CLASSES) */
+#define AG_HZ_MAX 16
+#define AG_PAL_COMMUN 112         /* palette : 1 à AG_PAL_COMMUN - 1 commune (écuries, engins), la suite au thème de la piste chargée */
+/* 30 i/s fixes (13/11/2026, demande de l'utilisateur : « on sait que l'on tient environ 4000 triangles à l'écran pour ça ») :
+   jamais plus de AG_TRI_MAX triangles soumis par image (render.c, ag_image : engins, piste du plus proche au plus loin, sol) */
+#if ENG_PREMIUM || ENG_DYN
+#define AG_TRI_MAX 12000          /* PC et téléphone : distance de vue doublée (VUE_K de render.c), le processeur suit */
+#else
+#define AG_TRI_MAX 2000           /* LDK (14/11/2026, demande de l'utilisateur : 15 à 20 i/s avec 4 000 : « descendons le budget à 2000 ») */
+#endif
+#define AG_ECURIES_MAX 8
+#define AG_CK_TAILLES 2
+enum { AGT_PISTE, AGT_MUR, AGT_DESSOUS, AGT_SOL, AGT_PILIER, AGT_DEPART, AGT_VITESSE, AGT_ARME, AGT_TERRE, AGT_ROCHE, AGT_FEUILLE, AGT_N };   /* rôles des textures d'une piste (terre, roche : portions naturelles ; feuillage : décors végétaux) */
+enum { AGC_COQUE, AGC_BANDE, AGC_SOMBRE, AGC_VERRIERE, AGC_REACTEUR, AGC_METAL, AGC_NOIR, AGC_BORD, AGC_N };   /* places de couleur des faces des engins */
+/* Phases (AG_DEPART est pris : agents de la police) : titre, menu principal, écurie (vitrine), piste, réglages, départ, course,
+   arrivée, classement du championnat */
+enum { AGP_TITRE, AGP_MENU, AGP_ECURIE, AGP_PISTE, AGP_REGLAGES, AGP_DEPART, AGP_COURSE, AGP_ARRIVEE, AGP_CLASSEMENT,
+       AGP_CARRIERE, AGP_CALENDRIER, AGP_GARAGE, AGP_BILAN };   /* (carrière : ligues, épreuves d'une ligue, garage, médaille gagnée) */
+enum { AGM_RAPIDE, AGM_CHAMPIONNAT, AGM_CLM, AGM_CARRIERE };   /* modes : course rapide, championnat, contre-la-montre ; carrière (choix de l'écurie) */
+/* Carrière (antigrav.c, « Carrière » ; section AGCR, generer.js ; docs/course-anti-gravite.md, « 3 bis ») : ligues (une catégorie
+   chacune), leurs épreuves (sorte AGE_*, piste, tours, adversaires, conditions AGC_*, écurie du duel, objectifs des médailles or,
+   argent, bronze ; coupe : pistes et conditions des courses 2 à 4), l'avancement du joueur (sauvegarde) */
+#define AG_LIGUES_MAX 6
+#define AG_IM_MAX 72   /* (logo, scènes, trophées : 3 métaux × 16 vues et 3 icônes) */
+#define AG_EPREUVES_MAX 10
+enum { AGE_COURSE, AGE_CLM, AGE_ELIM, AGE_DUEL, AGE_COMBAT, AGE_ASCENSION, AGE_COUPE, AGE_N };
+#define AGC_INVERSE 1
+#define AGC_NUIT 2
+#define AGC_BRUME 4
+#define AGC_SANS_ARMES 8
+typedef struct { uint8_t type, piste, tours, adv, cond, rival, obj[3], cp[3], cc[3]; } ag_epreuve_t;
+typedef struct { char nom[25]; int classe, nep, seuil; uint16_t pistes; uint8_t armes; ag_epreuve_t ep[AG_EPREUVES_MAX]; } ag_ligue_t;
+typedef struct {
+    uint8_t debut, ligue_max, ecuries, classes, armes, ecurie, ameliore[4];   /* écurie choisie, ligue la plus haute ouverte, bits (écuries, catégories, armes), crans du garage */
+    uint16_t pistes; uint32_t credits;                                         /* bits des pistes ouvertes hors carrière, crédits */
+    uint8_t medaille[AG_LIGUES_MAX][AG_EPREUVES_MAX];                          /* 0 aucune, 1 bronze, 2 argent, 3 or */
+} ag_carriere_t;
+/* Section de la piste : centre, droite (dévers compris), haut, devant, demi-largeur, abscisse s, longueur jusqu'à la suivante,
+   écart de la trajectoire des adversaires (ligne), hauteur des parois de roche (portions naturelles), drapeaux (1 ligne de départ,
+   2 pilier dessous, 4 portion naturelle : chaussée de terre entre deux parois de roche, 8 tunnel : une voûte au-dessus) */
+#define AGS_DEPART 1
+#define AGS_PILIER 2
+#define AGS_NATUREL 4
+#define AGS_TUNNEL 8
+typedef struct { float x, y, z, rx, ry, rz, ux, uy, uz, fx, fy, fz, hw, s, l, ligne, paroi, vref; uint8_t drap; } ag_sect_t;   /* vref : vitesse du tour de référence (carrière) */
+typedef struct { int sec, len, sorte; float d, hw, repos; } ag_plaque_t;   /* sorte 0 accélération, 1 arme ; repos : s sans arme après qu'un engin a pris la sienne */
+#define AG_PLAQUE_REPOS 4.0f
+/* Engin : jusqu'à AG_LODS_MAX niveaux de détail, lus sur place dans le paquet (AGNA 3) : sommets f32 × 3, faces de 20 octets ;
+   dist : au-delà, le niveau suivant */
+typedef struct { int nv, nf; float dist; const uint8_t *v, *f; } ag_lod_t;
+typedef struct { char nom[17]; int nlod; ag_lod_t lod[AG_LODS_MAX]; } ag_modele_t;
+/* Écurie : nom, devise, engin, livrée (grande texture DECO), numéro, couleurs des places, vitesse, poussée, maniabilité ;
+   emblème (AGEM : -1 aucun) */
+typedef struct { char nom[17], devise[25]; int modele, livree, numero, embleme, modele2, livree2; uint8_t c[AGC_N]; float v, a, m; } ag_ecurie_t;   /* (modele2, livree2 : son second engin, AGE2 ; -1 : aucun) */
+/* Piste du paquet (AGPS) : son bloc, son nom et son lieu ; la piste chargée est dans AG (piste_charger d'antigrav.c) */
+typedef struct { const uint8_t *bloc; uint32_t len; char nom[25], lieu[25]; } ag_piste_t;
+/* Image à palette (horizons AGHZ, emblèmes AGEM) : largeur, hauteur, ligne d'horizon (horizons), couleurs (RVB), pixels (0 : vide) */
+typedef struct { int w, h, base, ncoul; const uint8_t *rgb, *px; uint16_t pal[256]; } ag_image_t;
+/* Engin : position, vitesse, cap (unitaire, dans le plan de la piste), haut lissé ; section, fraction, écart à l'axe ;
+   progression (cases depuis la ligne, tours compris ; négative sur la grille) ; rotation, roulis montré, accélération
+   restante, dernière plaque, choc (secousse et frottement), tours, temps */
+typedef struct {
+    int ecurie, joueur;
+    float x, y, z, vx, vy, vz, hx, hy, hz, ux, uy, uz;
+    int sec; float t, d, s_mod, prog;
+    float w, roulis, vmax, acc, man, niveau, decal, choc, boost, frotte, poussee;
+    int plaque, tour, fini, rang;
+    float t_tour, meilleur, fin, vitesse;
+    float trace[AG_TRACE_N][3]; int trace_i, trace_n; float trace_t;   /* traînée : points du réacteur (anneau, trace_i : le prochain écrit) */
+    int arme; float arme_t, saut, saut_v;   /* arme portée (ARME_* d'antigrav.c, 0 aucune), délai avant le tir d'un adversaire ; bond (au-dessus du vol) et sa vitesse */
+    float dep_prec, t_arme;                 /* chaussée soulevée sous lui à l'image d'avant (onde du SÉISME) ; ramassage de l'arme (chrono) */
+    float energie, bouclier, charge, touche, t_detruit;   /* énergie (0 à 1), bouclier restant (s), charge du rayon (s), éclat d'un coup reçu, moment de la destruction */
+    int detruit, elimine, coups;            /* sorti de la course : détruit (ou éliminé : élimination de la carrière) ; coups portés aux autres (épreuve COMBAT) */
+    float immun;                            /* après une mine : les autres de la grappe ne le touchent pas (s) */
+    float etourdi, vrille;                  /* SÉISME : désemparé (s restantes : ni poussée ni direction), sens de la vrille (-1, 1) */
+    int variante;                           /* 1 : le second engin de son écurie (AGE2) */
+    float rayon_t, rayon_f, rayon_fin[3];   /* trait du rayon tiré : temps restant, charge (0 à 1), bout */
+} ag_nav_t;
+/* Réglages (sauvegarde du jeu) : mixage (général, musique, effets, moteurs, interface : 0 à 20 crans, comme SYSTÈME › SON
+   d'Echoes), tours, adversaires, difficulté (0 facile, 1 normale, 2 difficile), tramage */
+typedef struct { uint8_t vol[5], tours, adversaires, difficulte, tramage; } ag_reglages_t;
+typedef struct {
+    int on;                       /* paquet de la variante chargé : tout le moteur est en mode course anti-gravité */
+    char jeu[25];                 /* nom du jeu */
+    ag_piste_t pistes[AG_PISTES_MAX]; int npistes, piste;   /* pistes du paquet, rang de la piste chargée */
+    ag_image_t hz[AG_HZ_MAX]; int nhz;
+    ag_image_t em[AG_ECURIES_MAX]; int nem;
+    /* Cockpits (AGCK, facultatif ; 14/11/2026) : le cadre vu de l'intérieur de l'engin de chaque écurie, dans l'ordre de AGEC, en
+       AG_CK_TAILLES définitions (la plus petite d'abord : 320 × 240 pour la LDK, 960 × 540 en 16:9) ; pixels 0 : la vitre */
+    ag_image_t ck[AG_ECURIES_MAX][AG_CK_TAILLES]; int nck[AG_ECURIES_MAX];
+    int vue;                      /* vue de la course : 0 extérieure, 1 cockpit (bouton B en course, RÉGLAGES › VUE ; sauvegarde) */
+    /* Piste chargée : nom, lieu, hauteur du sol, tours, horizon (-1 aucun), textures (DECO) de chaque rôle, ciel (haut, horizon,
+       brouillard), lumière, teinte ; sections (réservées au chargement), longueur du tour ; plaques ; plan (pour l'interface) */
+    char nom[25], lieu[25];
+    float sol; int tours, horizon; int tex[AGT_N], tex_d[AGT_N], tex_q[AGT_N];   /* textures de chaque rôle, leur moitié, leur quart (table MIPS) */
+    uint8_t ciel[3][3]; float lum, teinte[3];
+    int eau;                      /* thème au bord de l'eau (l'île) : le sol est la mer, le relief au-dessus d'elle prend la texture de la terre (sable) */
+    int n; ag_sect_t *s; float L;
+    ag_plaque_t pl[AG_PLAQUES_MAX]; int npl;
+    /* Terrain autour de la piste (bloc « TER1 » après les plaques, facultatif) : grille de ter_nx × ter_nz hauteurs (i16, 1/16 de case
+       au-dessus du sol) tous les ter_g cases depuis (ter_x0, ter_z0), lue sur place ; ter NULL : sol plat */
+    const uint8_t *ter; int ter_nx, ter_nz; float ter_x0, ter_z0, ter_g;
+    const uint8_t *dec; int ndec;   /* décors proches (bloc « DEC1 » après le terrain, facultatif ; generer.js, decorPiste) : 24 octets chacun */
+    ag_obst_t obst[AG_OBST_MAX]; int nobst;   /* obstacles des canyons (bloc « OBS1 » après la visibilité, facultatif) */
+    const uint8_t *vis, *vis_pos, *vis_fin; int vis_g, vis_ng;   /* visibilité précalculée (bloc « VIS1 » après les décors, facultatif ;
+                                                                     generer.js, visibilite) : données, positions des groupes, fin ; sections par groupe, groupes */
+    float plan[64][2];            /* 64 points de l'axe, dans un carré de côté 1 (x à droite, z vers le haut) */
+    ag_modele_t mod[AG_MODELES_MAX]; int nmod;
+    ag_ecurie_t ec[AG_ECURIES_MAX]; int nec;
+    ag_nav_t nav[AG_NAV_MAX]; int nn, joueur;   /* joueur : son rang dans nav (-1 : démonstration) */
+    int phase; float phase_t, chrono;           /* phase (AGP_*), temps dans la phase, chrono de la course */
+    int ecurie, mode, sel, pause, pause_sel, ncourses, suivi;   /* écurie choisie, mode, ligne choisie d'un menu, pause, courses lancées (musique), engin suivi */
+    int reglages_retour;          /* phase où revenir des réglages (AGP_MENU, ou la course en pause) */
+    int manche, points[AG_ECURIES_MAX];   /* championnat : course en cours (0 à npistes - 1), points de chaque écurie */
+    float cam_yaw, cam_pitch; int cam_ok;       /* caméra lissée */
+    float cam_roll;                             /* vue cockpit : roulis de la caméra (rad ; render.c, ENG_ROULIS) */
+    struct { int on, tireur; float s, v, fait; uint32_t touches; } onde[4];   /* ondes du SÉISME : front (progression, cases), vitesse, chemin fait, engins déjà touchés */
+    ag_proj_t proj[AG_PROJ_MAX]; ag_mine_t mines[AG_MINES_MAX]; ag_eclat_t eclats[AG_ECLATS_MAX]; ag_boule_t boules[AG_BOULES_MAX];
+    float alerte_t;               /* alarme d'un missile qui vise le joueur : prochain bip */
+    /* Carrière : ligues du paquet (AGCR), avancement, épreuve en cours (ev_on : ses règles s'appliquent ; ligue, épreuve, course de la
+       coupe), conditions de la piste chargée (AGC_*), armes permises (bits des ARME_*), tour de référence, éliminations faites, bilan */
+    ag_ligue_t ligues[AG_LIGUES_MAX]; int nligues;
+    ag_image_t im[AG_IM_MAX]; char im_nom[AG_IM_MAX][16]; int nim;   /* images du jeu (AGIM : logo, scènes), par nom */
+    ag_carriere_t car;
+    int ev_on, car_l, car_e, car_manche, cond, armes_ok, elim_n, palier;   /* (palier : ascension, quarts de tour bouclés) */
+    ag_epreuve_t ev;
+    float t_ref;
+    struct { int medaille, ancienne, credits, promu, ecurie, fin, ouvertes; } bilan;
+    float secousse;
+    int essai;                    /* essais (simulateur : commande « pilote ») : le joueur piloté comme un adversaire */
+    uint32_t prec;                /* touches de l'image d'avant (appuis) */
+    char annonce[32]; float annonce_t;
+    float pas_reste;              /* temps pas encore joué (physique à pas fixe AG_PAS) */
+    int tris, tris_max;           /* triangles de la dernière image, au plus depuis le départ (essais) */
+    ag_reglages_t reg;
+    float record_inv[AG_CLASSES][AG_PISTES_MAX];   /* … en sens inverse (sauvegarde « AGI1 ») */
+    int sens;                                      /* course rapide, contre-la-montre : 1 en sens inverse (écran de la piste, haut ou bas) */
+    int variante;                                  /* engin du joueur : 1 le second de son écurie (écran de l'écurie, haut ou bas) */
+    float record[AG_CLASSES][AG_PISTES_MAX];   /* meilleur tour de chaque piste dans chaque catégorie (sauvegarde) ; 0 : aucun */
+    int classe;                   /* catégorie de vitesse (0 CENDRE … 4 NOVA ; réglage VITESSE, sauvegarde) */
+} ag_t;
+extern ag_t AG;
+int ag_charger(const uint8_t *pak, size_t len);   /* eng_init : 1 si le paquet est celui de la variante (section AGPS) ; -1 erreur (E.error) */
+void ag_update(float dt, const eng_input_t *in);
+void ag_hud(void);
+int ag_cadre(int sec, float t, float *c, float *r, float *u, float *hw);   /* repère interpolé de la piste (render.c, essais) */
+void ag_camera(float *tx, float *ty, float *tz, float *yaw, float *pitch, float *dist);
+int ag_cockpit(void);
+float ag_onde_dep(int sec);              /* antigrav.c : la piste soulevée par les ondes du SÉISME à la section sec (cases) */
+int ag_onde_zone(int sec);               /* antigrav.c : la section est sous une onde (render.c : tronçons d'une section) */
+int ag_cockpit_ecran(int k, float *x0, float *y0, float *x1, float *y1);   /* render.c : écran k du tableau de bord (0 vitesse, 1 carte, 2 place), repère de l'interface ; 0 sans cockpit */                     /* vue cockpit en ce moment (course du joueur, vue choisie) : render.c ne dessine pas son engin */
+int ag_rendu_reserver(void);            /* render.c : tampons de la scène, réservés par ag_charger ; 0 : pas la place */
+void ag_rendu_piste(void);              /* render.c : piste chargée (ambiance, horizon, palette du thème) */
+void ag_course_lancer(int ecurie);         /* nouvelle course (ecurie -1 : démonstration) */
+const char *ag_musique(void);             /* piste voulue (music.c) ; NULL : aucune */
 
 #endif

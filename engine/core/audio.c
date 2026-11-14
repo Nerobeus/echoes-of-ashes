@@ -51,7 +51,10 @@ static int son_ok(int son) { return son >= 0 && (son < nsons || son == SON_SIREN
 /* Paquet d'avant les sons de SON_TIR à SON_PAS_MECH : le son le plus proche parmi les anciens */
 static const uint8_t REPLI[SON_N - SON_TIR] = { SON_EXPLOSION, SON_TECHNIQUE, SON_COUP, SON_EXPLOSION, SON_EXPLOSION, SON_COUP,
     SON_TECHNIQUE, SON_TECHNIQUE, SON_COUP, SON_EXPLOSION, SON_COUP, SON_ATTAQUE, SON_TECHNIQUE, SON_CHOC, SON_MENU, SON_MENU,
-    SON_PORTIERE, SON_MOTEUR_VOITURE, SON_MOTEUR_VOITURE, SON_MOTEUR_CAMION, SON_MOTEUR_VAISSEAU, SON_MOTEUR_VAISSEAU, SON_CHOC };
+    SON_PORTIERE, SON_MOTEUR_VOITURE, SON_MOTEUR_VOITURE, SON_MOTEUR_CAMION, SON_MOTEUR_VAISSEAU, SON_MOTEUR_VAISSEAU, SON_CHOC,
+    /* course anti-gravité (absents d'un paquet d'Echoes) : grondement -> frottement (une boucle), missile, mine, charge (boucle),
+       rayon, bouclier, explosion, absorption, alarme, impact */
+    SON_FROTTEMENT, SON_TIR, SON_BIP, SON_FROTTEMENT, SON_LASER, SON_MAGIE, SON_EXPLOSION, SON_SOIN, SON_BIP, SON_CRASH };
 static int repli(int son) { return son >= SON_TIR && son < SON_N && !son_ok(son) ? REPLI[son - SON_TIR] : son; }
 
 void eng_set_volume(float v) { general = v < 0 ? 0 : v > 1 ? 1 : v; }

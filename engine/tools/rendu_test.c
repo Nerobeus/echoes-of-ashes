@@ -990,6 +990,63 @@ int main(int argc, char **argv) {
             continue;
         }
         else if (!strcmp(tok, "ou")) { printf("Sera en %.2f %.2f%c", E.sera.x, E.sera.z, 10); continue; }
+        else if (sscanf(tok, "vers:%f:%f:%d", &a, &b, &n) == 3) {   /* vers:x:z:n : Sera marche vers (x, z) au plus n images ; arrêtée, ce qui la bloque juste devant (pente, eau, obstacle et sa taille) */
+            eng_input_t rien7 = { 0 }; int arret = 0; float ox = E.sera.x, oz = E.sera.z;
+            for (int im = 0; im < n; im++) {
+                E.has_dest = 1; E.dest_court = 1; E.dest_x = a; E.dest_z = b;
+                frame(&rien7); if (BT.on) BT.on = 0;
+                for (int s7 = 0; s7 < PATR_MAX; s7++) PATR[s7].on = 0;
+                arret = hypotf(E.sera.x - ox, E.sera.z - oz) < 0.002f ? arret + 1 : 0; ox = E.sera.x; oz = E.sera.z;
+                if (hypotf(a - E.sera.x, b - E.sera.z) < 0.5f) { printf("vers : arrivée en %d images (%.1f %.1f)%c", im, E.sera.x, E.sera.z, 10); break; }
+                if (arret < 12 && im < n - 1) continue;
+                const float dd = hypotf(a - E.sera.x, b - E.sera.z), px = E.sera.x + (a - E.sera.x) / dd * 0.2f, pz = E.sera.z + (b - E.sera.z) / dd * 0.2f;
+                const int pi = (int)floorf(px), pj = (int)floorf(pz); const chunk_t *cp = chunk_of_cell(pi, pj);
+                const int fl = cp ? cp->flags[cell_local(pi, pj)] : -1;
+                printf("vers : %s en %.2f %.2f après %d images, reste %.1f cases ; devant, case %d %d : drapeaux %d%s%s, dénivelé %.2f, sol %.2f -> %.2f%c",
+                       arret >= 12 ? "arrêtée" : "pas arrivée", E.sera.x, E.sera.z, im, dd, pi, pj, fl, fl >= 0 && (fl & F_RAIDE) ? " (raide)" : "",
+                       fl >= 0 && (fl & (F_WATER | F_RIVER)) && !(fl & F_ROAD) ? " (eau)" : "", case_denivele(pi, pj), ground_y(E.sera.x, E.sera.z), ground_y(px, pz), 10);
+                if (cp) for (uint32_t k = 0; k < cp->nsolid; k++) {
+                    const float *r = &cp->solids[k * 4], m = (r[2] - r[0] < 1 && r[3] - r[1] < 1 ? 0.1f : 0.35f) / E.w.ech;
+                    if (px > r[0] - m - 0.4f && px < r[2] + m + 0.4f && pz > r[1] - m - 0.4f && pz < r[3] + m + 0.4f)
+                        printf("  obstacle %.2f × %.2f cases en %.1f %.1f%s%c", r[2] - r[0], r[3] - r[1], (r[0] + r[2]) / 2, (r[1] + r[3]) / 2,
+                               px > r[0] - m && px < r[2] + m && pz > r[1] - m && pz < r[3] + m ? " (devant)" : "", 10);
+                }
+                for (int k = 0; k < E.nnpc; k++) if (hypotf(E.npcs[k].x - E.sera.x, E.npcs[k].z - E.sera.z) < 1.5f) printf("  personnage %d à %.2f case%c", k, hypotf(E.npcs[k].x - E.sera.x, E.npcs[k].z - E.sera.z), 10);
+                for (int dj = -1; dj <= 1; dj++) { printf("  dénivelés :"); for (int di = -1; di <= 1; di++) { const int qi = (int)E.sera.x + di, qj = (int)E.sera.z + dj; const chunk_t *cq = chunk_of_cell(qi, qj); printf(" %.2f%s", case_denivele(qi, qj), cq && (cq->flags[cell_local(qi, qj)] & F_RAIDE) ? "R" : " "); } printf("%c", 10); }
+                break;
+            }
+            continue;
+        }
+        else if (sscanf(tok, "raides:%d", &n) == 1) {   /* raides:r : cases F_RAIDE à moins de r cases de Sera, franchissables à pied ou non (PIED_RAIDE, 13/11/2026), puis Sera marche d'ouest en est à travers une de chaque sorte */
+            int nr = 0, np = 0, ci[2] = { -1, -1 }, cj[2] = { -1, -1 }; float cd[2] = { 0, 0 };
+            const int si = (int)E.sera.x, sj = (int)E.sera.z;
+            eng_input_t rien6 = { 0 };
+            for (int j = sj - n; j <= sj + n; j++) for (int i = si - n; i <= si + n; i++) {
+                const chunk_t *cr = i >= 3 && j >= 3 && i < E.w.n - 3 && j < E.w.n - 3 ? chunk_of_cell(i, j) : NULL;
+                if (!cr || !(cr->flags[cell_local(i, j)] & F_RAIDE)) continue;
+                const float d = case_denivele(i, j); const int k = d <= PIED_RAIDE;
+                nr++; np += k;
+                const chunk_t *c2 = chunk_of_cell(i - 1, j), *c3 = chunk_of_cell(i + 1, j);   /* départ à l'ouest et arrivée à l'est praticables */
+                if (ci[k] < 0 && c2 && c3 && !(c2->flags[cell_local(i - 1, j)] & F_RAIDE) && !(c3->flags[cell_local(i + 1, j)] & F_RAIDE)
+                    && sol_marchable(i - 0.5f, j + 0.5f) && sol_marchable(i + 1.5f, j + 0.5f)) { ci[k] = i; cj[k] = j; cd[k] = d; }
+            }
+            printf("raides : %d case(s) trop raide(s) à moins de %d cases, %d franchissable(s) à pied (dénivelé <= %.2f)%c", nr, n, np, PIED_RAIDE, 10);
+            for (int k = 1; k >= 0; k--) {
+                if (ci[k] < 0) { printf("  %s : aucune case essayable%c", k ? "franchissable" : "trop raide", 10); continue; }
+                E.sera.x = ci[k] - 0.5f; E.sera.z = cj[k] + 0.5f; E.has_dest = 0;
+                int dedans = 0, passe = 0;
+                for (int im = 0; im < 120 && !passe; im++) {
+                    E.has_dest = 1; E.dest_court = 0; E.dest_x = ci[k] + 1.5f; E.dest_z = cj[k] + 0.5f;
+                    frame(&rien6); if (BT.on) BT.on = 0;
+                    for (int s6 = 0; s6 < PATR_MAX; s6++) PATR[s6].on = 0;
+                    if ((int)floorf(E.sera.x) == ci[k] && (int)floorf(E.sera.z) == cj[k]) dedans = 1;
+                    if (E.sera.x >= ci[k] + 1.2f) passe = 1;
+                }
+                printf("  %s : case %d %d, dénivelé %.2f : %s (Sera en %.2f %.2f)%c", k ? "franchissable" : "trop raide", ci[k], cj[k], cd[k],
+                       passe ? "traversée" : dedans ? "entrée sans en sortir" : "pas entrée", E.sera.x, E.sera.z, 10);
+            }
+            continue;
+        }
         else if (sscanf(tok, "zonepieds:%d", &n) == 1) {   /* zonepieds:n : Sera court n images (tourne quand elle est bloquée) ; zones sous ses pieds (part des images) */
             int h[33] = { 0 }, bloque = 0; float cap = 0.5f, ox = E.sera.x, oz = E.sera.z;
             eng_input_t rien5 = { 0 };
@@ -1492,6 +1549,26 @@ int main(int argc, char **argv) {
             mise_camera(0, a, b, c, zv, 0.05f);
             if (hv > 0) MISE.cam_b[4] = hv;
             for (int k = 0; k < 4; k++) frame(&none);
+        }
+        else if (!strncmp(tok, "aval:", 5)) {
+            /* aval:ax:az:bx:bz[:largeur[:durée[:drapeau]]] : une avalanche (aval_lancer, internal.h) ; captures build/aval_k.bmp à 1, 2, 3 s
+               du front, juste avant l'arrivée, à l'arrivée + 0,1 s, + 1 s et + 2,5 s ; lignes AVAL (temps, drapeau, coulées visibles) */
+            float ax, az, bx, bz, aw = 6, ad = 4; int dr = -1;
+            if (sscanf(tok + 5, "%f:%f:%f:%f:%f:%f:%d", &ax, &az, &bx, &bz, &aw, &ad, &dr) >= 4) {
+                aval_lancer(ax, az, bx, bz, aw, ad, dr);
+                const float T[7] = { 1, 2, 3, ad - 0.15f, ad + 0.1f, ad + 1, ad + 2.5f };
+                int k = 0;
+                for (int f = 0; f < 900 && k < 7; f++) {
+                    frame(&none);
+                    if (AVAL.t >= T[k] || (!AVAL.on && k)) {
+                        char nb[64]; snprintf(nb, sizeof nb, "build/aval_%d.bmp", k); ecrire_bmp(nb);
+                        int nv = 0; for (int q = 0; q < E.w.ncoul; q++) nv += coulee_visible(q);
+                        printf("AVAL %d t %.2f front %.2f drapeau %d coulées %d/%d%c", k, AVAL.t, aval_avance(AVAL.t), dr >= 0 && dr < SC_MAX_FLAGS ? (E.flags[dr >> 3] >> (dr & 7)) & 1 : -1, nv, E.w.ncoul, 10);
+                        k++;
+                    }
+                }
+            }
+            continue;
         }
         else if (!strncmp(tok, "croiser:", 8)) { croiser(tok + 8); continue; }
         else if (!strcmp(tok, "voiture")) {
@@ -2169,6 +2246,137 @@ int main(int argc, char **argv) {
             printf("organisateur %s en %.1f %.1f\n", E.w.persos[E.npcs[k].perso].nom, E.npcs[k].x, E.npcs[k].z);
         }
         else if (sscanf(tok, "drapeau:%d", &n) == 1 && n >= 0 && n < SC_MAX_FLAGS) E.flags[n >> 3] |= (uint8_t)(1 << (n & 7));
+        else if (!strcmp(tok, "nuits")) {   /* île (12/11/2026) : le drapeau « nuits » levé (le soir s'annonce, les passants rentrent : ile.c) */
+            const int fl = E.w.ile_nuits; printf("drapeau nuits %d\n", fl);
+            if (fl < SC_MAX_FLAGS) E.flags[fl >> 3] |= (uint8_t)(1 << (fl & 7));
+        }
+        else if (sscanf(tok, "rodeurs:%d", &n) == 1) { ile_rodeurs_force = n; printf("nuits hantées %s (drapeau hantise %d)%c", n ? "forcées" : "selon le drapeau", E.w.ile_hantise, 10); }   /* île (13/11/2026) : les rôdeurs sans le drapeau « hantise » */
+        else if (sscanf(tok, "lame:%d", &n) == 1 && n >= 0 && n < E.w.ile_nlames) {   /* île : la lame n éveillée (son drapeau et celui des esprits) : son esprit rejoint l'équipe */
+            const uint16_t f1 = E.w.ile_lame[n].drapeau, f2 = E.w.ile_esprits;
+            if (f1 < SC_MAX_FLAGS) E.flags[f1 >> 3] |= (uint8_t)(1 << (f1 & 7));
+            if (f2 < SC_MAX_FLAGS) E.flags[f2 >> 3] |= (uint8_t)(1 << (f2 & 7));
+            printf("lame %d %s éveillée (drapeau %d, esprits %d)%c", n, E.w.ile_lame[n].nom, f1, f2, 10);
+        }
+        else if (!strcmp(tok, "villages")) {   /* île (13/11/2026) : les villages, leur centre, leur rayon, leurs lanternes */
+            for (int k = 0; k < E.w.ile_nvillages; k++) { const ile_village_t *v = &E.w.ile_village[k]; const int on = v->lanterne < SC_MAX_FLAGS && ((E.flags[v->lanterne >> 3] >> (v->lanterne & 7)) & 1);
+                printf("VILLAGE %d %s (%.1f, %.1f) r %.1f lanternes %d %s%c", k, v->nom, v->x, v->z, v->r, v->lanterne, on ? "allumées" : "éteintes", 10); }
+            printf("villages : %d%c", E.w.ile_nvillages, 10);
+        }
+        else if (sscanf(tok, "lanterne:%d", &n) == 1 && n >= 0 && n < E.w.ile_nvillages) {   /* les lanternes du village n allumées */
+            const uint16_t f = E.w.ile_village[n].lanterne; if (f < SC_MAX_FLAGS) E.flags[f >> 3] |= (uint8_t)(1 << (f & 7));
+            printf("lanternes de %s allumées (drapeau %d)%c", E.w.ile_village[n].nom, f, 10);
+        }
+        else if (!strcmp(tok, "enleve")) {   /* l'habitant enlevé : où il est, distance à l'héroïne */
+            float x, z;
+            if (ile_enleve(&x, &z)) {
+                int k = -1; for (int i = 0; i < E.npc_cnt[0]; i++) if (ile_enleve_est(&E.npc_tous[i])) k = i;
+                printf("ENLEVE exemplaire %d %s graine %d en (%.1f, %.1f) place (%.1f, %.1f) à %.1f crédits %d%c", k, k >= 0 ? E.w.persos[E.npc_tous[k].perso].nom : "?", k >= 0 ? E.npc_tous[k].graine : -1,
+                       k >= 0 ? E.npc_tous[k].x : 0, k >= 0 ? E.npc_tous[k].z : 0, x, z, hypotf(x - E.sera.x, z - E.sera.z), E.credits, 10);
+            } else printf("ENLEVE personne crédits %d%c", E.credits, 10);
+        }
+        else if (!strcmp(tok, "versenleve")) {   /* l'héroïne à côté de l'habitant enlevé, tournée vers lui */
+            float x, z;
+            if (ile_enleve(&x, &z)) { for (int i = 0; i < E.npc_cnt[0]; i++) if (ile_enleve_est(&E.npc_tous[i])) { x = E.npc_tous[i].x; z = E.npc_tous[i].z; }
+                sera_placer(x + 0.9f, z, 2.0f); E.sera.dir = atan2f(x - E.sera.x, z - E.sera.z); E.has_dest = 0; printf("près de l'habitant enlevé%c", 10); }
+        }
+        else if (!strcmp(tok, "visions")) {   /* île (13/11/2026) : les visions des lames (drapeau levé, lame endormie) et le centre de leur zone */
+            float vx[ILE_LAMES_MAX], vz[ILE_LAMES_MAX];
+            const int nv = ile_visions(vx, vz, ILE_LAMES_MAX);
+            for (int k = 0; k < E.w.ile_nlames; k++) { const ile_lame_t *l = &E.w.ile_lame[k]; if (l->vision < SC_MAX_FLAGS && ((E.flags[l->vision >> 3] >> (l->vision & 7)) & 1)) printf("VISION lame %d %s (drapeau %d) en %.1f %.1f%c", k, l->nom, l->vision, l->x, l->z, 10); }
+            for (int k = 0; k < nv; k++) printf("ZONE %.1f %.1f r %.0f%c", vx[k], vz[k], VISION_R, 10);
+            printf("visions : %d zone(s)%c", nv, 10);
+        }
+        else if (!strcmp(tok, "nuitcombat")) {   /* île (13/11/2026) : le combat de nuit : phase, bannière, PV de l'ennemi et de l'équipe, emprise */
+            printf("NUIT combat %d phase %d nuit %d aube %d heure %.3f ban « %s » « %s »", BT.on, BT.phase, BT.nuit, BT.aube, E.heure, BT.ban.on ? BT.ban.text : "", BT.ban.on ? BT.ban.sub : "");
+            if (BT.on && BT.nen) printf(" ennemi %s %d/%d (%d ennemi(s)%s%s)", E.w.persos[BT.en[0].perso].nom, BT.en[0].hp, BT.en[0].max, BT.nen, BT.nen > 1 ? " : " : "", BT.nen > 1 ? E.w.persos[BT.en[1].perso].nom : "");
+            for (int m = 0; m < NMEMB; m++) if (in_team(m)) printf(" | %s %d/%d%s", PARTY[m].name, PARTY[m].hp, PARTY[m].max, BT.emprise[m] ? " EMPRISE" : "");
+            printf("%c", 10);
+        }
+        else if (!strcmp(tok, "succubes")) {   /* île (13/11/2026) : les succubes nommées (section ILE), leurs rôdeurs, leurs charmes, les familières */
+            for (int s2 = 0; s2 < E.w.ile_nsucc; s2++) {
+                const ile_succ_t *sc = &E.w.ile_succ[s2];
+                int nc = 0; for (int c = 0; c < 5; c++) nc += sc->charme[c] < SC_MAX_FLAGS && ((E.flags[sc->charme[c] >> 3] >> (sc->charme[c] & 7)) & 1);
+                printf("SUCCUBE %d héroïne %s ennemie %s partenaire %s / %s drapeau %d charmes %d/5 (%d..%d) duo %04x charmée %d%c", s2, sc->perso < E.w.npersos ? E.w.persos[sc->perso].nom : "?", sc->ennemi < E.w.npersos ? E.w.persos[sc->ennemi].nom : "?", sc->perso2 < E.w.npersos ? E.w.persos[sc->perso2].nom : "-", sc->ennemi2 < E.w.npersos ? E.w.persos[sc->ennemi2].nom : "-", sc->drapeau, nc, sc->charme[0], sc->charme[4], sc->duo, ile_succube_charmee(s2), 10);
+            }
+            for (int k = 0; k < E.w.ile_nrodeurs; k++) if (E.w.ile_rodeur[k].sorte == 1) printf("RODEUR SUCCUBE %d succube %d place (%.1f, %.1f) drapeau %d%c", k, E.w.ile_rodeur[k].succube, E.w.ile_rodeur[k].x, E.w.ile_rodeur[k].z, E.w.ile_rodeur[k].drapeau, 10);
+            printf("succubes : %d, familières %x, édition 18+ %d%c", E.w.ile_nsucc, ile_familieres(), charme18_ile(), 10);
+            for (int m = 0; m < NMEMB; m++) if (in_team(m)) { printf("EQUIPE %s %d PV %d PM :", PARTY[m].name, PARTY[m].max, PARTY[m].maxmp); for (int t = 0; t < PARTY[m].ntech; t++) printf(" %s (%d PM)", PARTY[m].tech[t].name, PARTY[m].tech[t].mp); printf("%c", 10); }
+        }
+        else if (sscanf(tok, "succube:%d", &n) == 1 && n >= 0 && n < E.w.ile_nsucc) {   /* le drapeau d'apparition de la succube n levé */
+            const uint16_t f = E.w.ile_succ[n].drapeau; if (f < SC_MAX_FLAGS) E.flags[f >> 3] |= (uint8_t)(1 << (f & 7));
+            printf("succube %d : drapeau %d levé%c", n, f, 10);
+        }
+        else if (sscanf(tok, "charmes:%d:%d", &n, &m2) == 2 && n >= 0 && n < E.w.ile_nsucc) {   /* ses m2 premiers charmes levés (les autres baissés) */
+            for (int c = 0; c < 5; c++) { const uint16_t f = E.w.ile_succ[n].charme[c]; if (f < SC_MAX_FLAGS) { if (c < m2) E.flags[f >> 3] |= (uint8_t)(1 << (f & 7)); else E.flags[f >> 3] &= (uint8_t)~(1 << (f & 7)); } }
+            printf("succube %d : %d charme(s)%c", n, m2, 10);
+        }
+        else if (sscanf(tok, "offrande:%d", &n) == 1) printf("offrande %d : %s%c", n, ile_offrande_essai(n) ? "lancée" : "pas de rôdeur", 10);   /* la séquence de la succube n, là où est l'héroïne */
+        else if (!strcmp(tok, "offscenes")) {   /* île : les scènes d'offrande (page Scènes) de la section ILE */
+            printf("SCENES %d repli %d tampon %u%c", E.w.ile_nosc, E.w.ile_jou_repli, E.w.img_cap, 10);
+            for (int i = 0; i < E.w.ile_nocj; i++) { const uint8_t *e = E.w.ile_ocj + i * 6; const int j = e[2] | e[3] << 8;
+                printf("  cut-in : succube %d emplacement %d jouable %s image %d%c", e[0], e[1], j < E.w.npersos ? E.w.persos[j].nom : "?", e[4] | e[5] << 8, 10); }
+            for (int i = 0; i < E.w.ile_nosc; i++) { const uint8_t *e = E.w.ile_osc + i * 10; const int j = e[4] | e[5] << 8, sh = e[6] | e[7] << 8;
+                printf("  succube %d emplacement %d drapeaux %d jouable %s planche %d (%dx%d x %d) durée %.2f%c", e[0], e[1], e[2], j < E.w.npersos ? E.w.persos[j].nom : "toutes", sh,
+                    sh < E.w.nsheets ? E.w.sheets[sh].fw : 0, sh < E.w.nsheets ? E.w.sheets[sh].fh : 0, sh < E.w.nsheets ? E.w.sheets[sh].frames : 0, (e[8] | e[9] << 8) / 100.0, 10); }
+        }
+        else if (!strcmp(tok, "offretat")) {   /* la séquence en cours, l'acteur, l'heure, l'équipe */
+            float ox = 0, oz = 0, od = 0; int op = -1, osh = -1, ofr = 0;
+            const int va = ile_offrande_acteur(0, &ox, &oz, &od, &op, &osh, &ofr);
+            int oph, osl; float ot; ile_offrande_etat(&oph, &osl, &ot);
+            printf("OFFR phase %d case %d t %.2f ", oph, osl, ot);
+            printf("OFFR en cours %d acteur %d %s (%.2f, %.2f) planche %d image %d sera cachée %d npc %d heure %.3f choix %d", ile_offrande_en_cours(), va, va > 0 ? E.w.persos[op].nom : "-", ox, oz, osh, ofr, ile_offrande_cache_sera(), ile_offrande_npc(0), E.heure, hud_in_choice());
+            if (va > 0 && osh >= 0) { int lus = 0; for (int d = 0; d < 8; d++) lus += sheet_block(osh, d, 2) != NULL; printf(" | directions lues %d/8", lus); }   /* (montre : une grande planche par le tampon commun) */
+            { float x2, z2, d2; int p2, sh2, f2; if (ile_offrande_acteur(1, &x2, &z2, &d2, &p2, &sh2, &f2) > 0) printf(" | partenaire %s (%.2f, %.2f) à %.2f d'elle npc %d", E.w.persos[p2].nom, x2, z2, hypotf(x2 - ox, z2 - oz), ile_offrande_npc(1)); }
+            for (int m = 0; m < NMEMB; m++) if (in_team(m)) printf(" | %s %d/%d", PARTY[m].name, PARTY[m].hp, PARTY[m].max);
+            printf("%c", 10);
+        }
+        else if (!strcmp(tok, "rodtable")) {   /* île : les rôdeurs de la nuit (section ILE) : personnage, ennemi, lame et sa place, drapeau */
+            for (int k = 0; k < E.w.ile_nrodeurs; k++) {
+                const ile_rodeur_t *r = &E.w.ile_rodeur[k];
+                const ile_lame_t *l = r->lame < E.w.ile_nlames ? &E.w.ile_lame[r->lame] : NULL;
+                printf("RODEUR %d %s%s ennemi %d lame %d %s (%.1f, %.1f) drapeau lame %d, drapeau %d%c", k, r->perso < E.w.npersos ? E.w.persos[r->perso].nom : "?", r->perso < E.w.npersos && E.w.persos[r->perso].masque ? " (masqué)" : "", ile_rodeur_ek(k), r->lame, l ? l->nom : "-", l ? l->x : -1, l ? l->z : -1, l ? l->drapeau : -1, r->drapeau, 10);
+            }
+            printf("rôdeurs : %d, hantise %d%c", E.w.ile_nrodeurs, E.w.ile_hantise, 10);
+        }
+        else if (!strcmp(tok, "rodetat")) {   /* île : la nuit hantée, le rôdeur de la nuit, sa patrouille dehors, l'intrus d'une maison */
+            const int k = ile_rodeur_k(), in = ile_rodeur_intrus();
+            printf("ROD heure %.3f nuit %d k %d %s abri %d combat %d", E.heure, ile_rodeurs_nuit(), k, k >= 0 ? E.w.persos[E.w.ile_rodeur[k].perso].nom : "-", ile_abri_zone(E.sera.x, E.sera.z), BT.on);
+            for (int s2 = 0; s2 < PATR_MAX; s2++) if (PATR[s2].on && PATR[s2].rodeur) printf(" dehors (%.1f, %.1f) à %.1f état %d, %d membre(s)", PATR[s2].x[0], PATR[s2].z[0], hypotf(PATR[s2].x[0] - E.sera.x, PATR[s2].z[0] - E.sera.z), PATR[s2].etat, PATR[s2].n);
+            if (in >= 0) printf(" intrus (%.2f, %.2f) à %.2f%s", E.npcs[in].x - IO, E.npcs[in].z - IO, hypotf(E.npcs[in].x - E.sera.x, E.npcs[in].z - E.sera.z), E.npcs[in].walking ? " marche" : "");
+            if (BT.on) printf(" ennemi %s niveau %d", E.w.persos[BT.en[0].perso].nom, BT.lvl);
+            printf("%c", 10);
+        }
+        else if (!strcmp(tok, "tropgrands")) {   /* intérieurs que la place réservée (fen_cap, INTR_FEN_MAX du firmware) ne tient pas */
+            int nt = 0;
+            for (int k = 0; k < E.w.nbats; k++) if (E.w.bats[k].intr < E.w.intr_n && int_trop_grand(E.w.bats[k].intr)) { printf("TROP GRAND %d %s (%.0f, %.0f)%c", k, E.w.bats[k].nom, E.w.bats[k].cx, E.w.bats[k].cz, 10); nt++; }
+            printf("intérieurs trop grands : %d sur %d bâtiments, place %u octets%c", nt, E.w.nbats, (unsigned)E.w.fen_cap, 10);
+        }
+        else if (!strcmp(tok, "abris")) {   /* île (12/11/2026) : les abris (section ILE) : nom, sorte, couche, zone, bâtiments visités */
+            for (int k = 0; k < E.w.ile_nabris; k++) {
+                const ile_abri_t *a = &E.w.ile_abri[k];
+                printf("ABRI %d %s sorte %d couche %.1f %.1f zone %.1f %.1f r %.1f bâtiments", k, a->nom, a->sorte, a->x, a->z, a->cx, a->cz, a->r);
+                for (int j = 0; j < a->nbats; j++) printf(" %d:%s", a->bats[j], a->bats[j] < E.w.nbats ? E.w.bats[a->bats[j]].nom : "?");
+                printf("\n");
+            }
+            printf("abris : %d\n", E.w.ile_nabris);
+        }
+        else if (sscanf(tok, "abri:%d", &n) == 1 && n >= 0 && n < E.w.ile_nabris) {   /* l'héroïne à côté de la couche de l'abri n */
+            E.sera.x = E.w.ile_abri[n].x + 0.8f; E.sera.z = E.w.ile_abri[n].z; E.has_dest = 0;
+            printf("près de la couche de %s\n", E.w.ile_abri[n].nom);
+        }
+        else if (!strcmp(tok, "blesser")) {   /* toute la bande au tiers de ses PV, sans PM, la première compagne à terre */
+            for (int i = 0; i < NMEMB; i++) { PARTY[i].hp = PARTY[i].max / 3; PARTY[i].mp = 0; }
+            PARTY[1].hp = 0;
+        }
+        else if (!strcmp(tok, "dodo")) {   /* l'heure, la couche à portée, le sommeil, l'abri où l'on est, les PV des deux premiers */
+            printf("DODO heure %.2f h, couche %d (%s), avant %d, dort %d, abri ici %d, PV %d/%d et %d/%d, PM %d/%d\n", E.heure * 24, ile_dormir_k(), ile_dormir_nom(),
+                ile_dormir_avant(), ile_dort(), ile_abri_ici(E.sera.x, E.sera.z), PARTY[0].hp, PARTY[0].max, PARTY[1].hp, PARTY[1].max, PARTY[0].mp, PARTY[0].maxmp);
+        }
+        else if (!strcmp(tok, "soir")) {   /* île : heure, part de la nuit, passants à l'abri et passants dehors (ile_nuit_part, abri_maj) */
+            int ab = 0, pa = 0;
+            for (int k = 0; k < E.nnpc; k++) { const perso_t *pe = &E.w.persos[E.npcs[k].perso]; if (!(pe->flags & PERS_FLANE) || !PERS_GENRE(pe->flags)) continue; if (E.npcs[k].abri) ab++; else pa++; }
+            printf("SOIR heure %.2f h, nuit %.2f, passants à l'abri %d, dehors %d\n", E.heure * 24, ile_nuit_part(), ab, pa);
+        }
         else if (!strcmp(tok, "enceintes")) {   /* drapeau du passage de chaque enceinte levé (ENCE : Lucerne ouverte, police.c) */
             const uint8_t *q = E.w.ence;
             for (int k = 0; q && k < E.w.nence; k++) {
@@ -2856,7 +3064,7 @@ int main(int argc, char **argv) {
                         if (fabsf(der[0] - MISE.cam_b[0]) + fabsf(der[1] - MISE.cam_b[1]) + fabsf(der[2] - MISE.cam_b[2]) + fabsf(der[3] - MISE.cam_b[3]) > 0.01f) { memcpy(der, MISE.cam_b, sizeof der); att = 1; att_f = dlg_f = 0; }
                         if (att && MISE.cam_t >= MISE.cam_d) { att_f++; if (hud_in_dialog() || hud_in_choice()) dlg_f++; }
                         /* caméra posée, fondu fini et dialogue ouvert depuis 0,5 s (décalage de l'image) ; 3 s au plus */
-                        if (att && MISE.cam_t >= MISE.cam_d && ((MISE.fondu < 0.05f && dlg_f >= 15) || att_f >= 90)) {
+                        if (att && MISE.cam_t >= MISE.cam_d && ((MISE.fondu < 0.05f && (dlg_f >= 15 || (!hud_in_dialog() && !hud_in_choice() && att_f >= 24))) || att_f >= 90)) {
                             char nb3[96]; snprintf(nb3, sizeof nb3, "build/cams/%03d_%d.bmp", k, ncam);
                             extern int eng_essai_sans_ui; eng_essai_sans_ui = getenv("ECHOES_SANS_UI") != NULL; frame(&rien3); frame(&rien3);
                             ecrire_bmp(nb3); eng_essai_sans_ui = 0;
@@ -2865,7 +3073,8 @@ int main(int argc, char **argv) {
                             att = 0; ncam++;
                         }
                     }
-                    if (att) { frame(&rien3); continue; }
+                    if (att && !MISE.cam_on) att = 0;   /* plan muet repris avant sa capture (caméra rendue à Sera) */
+                    if (att) { frame(&rien3); if (getenv("SCENE_TRACE") && f4 % 100 == 0) { extern int script_essai_pc(void); printf("TRACE %d pc %d cam %d %.2f/%.2f att %d/%d dlg %d fondu %.2f%c", f4, script_essai_pc(), MISE.cam_on, MISE.cam_t, MISE.cam_d, att, att_f, hud_in_dialog(), MISE.fondu, 10); } continue; }
                     char tj3[256];
                     /* Chaque réplique, une fois la caméra posée : celui qui parle est-il à l'écran ? (ligne PARLE) */
                     if (hud_in_dialog() && (!MISE.cam_on || MISE.cam_t >= MISE.cam_d)) {
@@ -2892,6 +3101,7 @@ int main(int argc, char **argv) {
                     }
                     if ((hud_choix_texte(tj3, sizeof tj3) || hud_in_dialog()) && f4 % 20 == 0) k2.keys = ENG_KEY_OK;
                     frame(&k2);
+                    if (getenv("SCENE_TRACE") && f4 % 100 == 0) { extern int script_essai_pc(void); printf("TRACE %d pc %d cam %d %.2f/%.2f att %d dlg %d fondu %.2f marche %d aval %d %.2f%c", f4, script_essai_pc(), MISE.cam_on, MISE.cam_t, MISE.cam_d, att, hud_in_dialog(), MISE.fondu, MISE.sera_on, AVAL.on, AVAL.t, 10); }
                     if (!script_running() && !BT.on && !MISE.cam_on) break;
                 }
                 printf("EV %d fini : %d plans, %d images%c", k, ncam, f4, 10);
