@@ -9,21 +9,21 @@ most notes are in French.
 
 ## Play
 
-Standalone builds of the safe edition are in the [release of 11 November 2026](https://github.com/Nerobeus/echoes-of-ashes/releases/tag/2026-11-11).
+Standalone builds of the safe edition are in the [release of 14 November 2026](https://github.com/Nerobeus/echoes-of-ashes/releases/tag/2026-11-14).
 Nothing to install and no server: everything is inside the file.
 
-- **PC**: [`le-choeur-des-cendres-pc-2026-11-11.html`](https://github.com/Nerobeus/echoes-of-ashes/releases/download/2026-11-11/le-choeur-des-cendres-pc-2026-11-11.html)
-  (153 MB), a single web page to open in a recent Chrome, Edge, Firefox or Safari. Full screen and widescreen, with a
+- **PC**: [`le-choeur-des-cendres-pc-2026-11-14.html`](https://github.com/Nerobeus/echoes-of-ashes/releases/download/2026-11-14/le-choeur-des-cendres-pc-2026-11-14.html)
+  (154 MB), a single web page to open in a recent Chrome, Edge, Firefox or Safari. Full screen and widescreen, with a
   PC-only renderer: 3D resolution from 854 × 480 to 1920 × 1080 (automatic by default: it follows the window and the speed
   of the PC), twice the view distance, depth of field, a 32-bit depth buffer. Keyboard keys can be changed in the Keys
   window (two keys per action, kept in the browser); the mouse clicks like a finger. H opens the help.
-- **Android phone**: [`le-choeur-des-cendres-android-2026-11-11.apk`](https://github.com/Nerobeus/echoes-of-ashes/releases/download/2026-11-11/le-choeur-des-cendres-android-2026-11-11.apk)
-  (262 MB, Android 9 or later).
-- **Wear OS watch**: [`le-choeur-des-cendres-wearos-2026-11-11.apk`](https://github.com/Nerobeus/echoes-of-ashes/releases/download/2026-11-11/le-choeur-des-cendres-wearos-2026-11-11.apk)
-  (260 MB, Wear OS 3 or later).
-- **RetroFW 2.3 (LDK Game)**, experimental: [`le-choeur-des-cendres-retrofw-2026-11-11.ipk`](https://github.com/Nerobeus/echoes-of-ashes/releases/download/2026-11-11/le-choeur-des-cendres-retrofw-2026-11-11.ipk)
-  (146 MB), to open from GMenuNX's file browser; or [`le-choeur-des-cendres-retrofw-2026-11-11.zip`](https://github.com/Nerobeus/echoes-of-ashes/releases/download/2026-11-11/le-choeur-des-cendres-retrofw-2026-11-11.zip)
-  (136 MB), to unzip at the root of the console's card (`games/choeur_enfant/` and its menu entry). The game shows up
+- **Android phone**: [`le-choeur-des-cendres-android-2026-11-14.apk`](https://github.com/Nerobeus/echoes-of-ashes/releases/download/2026-11-14/le-choeur-des-cendres-android-2026-11-14.apk)
+  (264 MB, Android 9 or later).
+- **Wear OS watch**: [`le-choeur-des-cendres-wearos-2026-11-14.apk`](https://github.com/Nerobeus/echoes-of-ashes/releases/download/2026-11-14/le-choeur-des-cendres-wearos-2026-11-14.apk)
+  (261 MB, Wear OS 3 or later).
+- **RetroFW 2.3 (LDK Game)**, experimental: [`le-choeur-des-cendres-retrofw-2026-11-14.ipk`](https://github.com/Nerobeus/echoes-of-ashes/releases/download/2026-11-14/le-choeur-des-cendres-retrofw-2026-11-14.ipk)
+  (147 MB), to open from GMenuNX's file browser; or [`le-choeur-des-cendres-retrofw-2026-11-14.zip`](https://github.com/Nerobeus/echoes-of-ashes/releases/download/2026-11-14/le-choeur-des-cendres-retrofw-2026-11-14.zip)
+  (137 MB), to unzip at the root of the console's card (`games/choeur_enfant/` and its menu entry). The game shows up
   in the Games section, full screen at 320 × 240. D-pad to run (hold Y to walk), A to talk and confirm, B to go back, START for
   the menu, L and R to turn the camera; in a vehicle, R accelerates and L brakes. SELECT + START held for one second quits.
   The menu entry asks for 600 MHz. Only tested on an LDK Game; the other JZ4760 handhelds that run RetroFW 2.3 should run it
@@ -94,7 +94,7 @@ this repository; `engine/data` only holds its output.
 
 ## Getting the data
 
-The world files are stored with Git LFS (the world is 224 MB):
+The world files are stored with Git LFS (the world is 225 MB):
 
 ```
 git lfs install
